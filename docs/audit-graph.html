@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditoría en Vivo — Grafo</title>
+<style>
+  :root {
+    --bg: #0a0c10;
+    --surface: #12151c;
+    --border: #2a2f3e;
+    --text: #d4d8e3;
+    --text-dim: #6b7280;
+    --accent: #6c8cff;
+    --green: #4ade80;
+    --orange: #fb923c;
+    --red: #f87171;
+    --purple: #a78bfa;
+    --cyan: #22d3ee;
+    --pink: #f472b6;
+    --yellow: #facc15;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+  }
+  svg { display: block; width: 100%; height: 100vh; }
+
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 10px 20px; display: flex; align-items: center;
+    gap: 16px; z-index: 100; pointer-events: auto;
+  }
+  .topbar h1 { font-size: 0.9rem; color: var(--orange); white-space: nowrap; }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); animation: pulse 1.5s infinite;
+  }
+  .live-dot.off { background: var(--red); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .topbar .stats { display: flex; gap: 16px; margin-left: auto; font-size: 0.75rem; }
+  .topbar .stats .s-label { color: var(--text-dim); }
+  .topbar .stats .s-val { color: var(--accent); font-weight: 600; margin-left: 4px; }
+  .topbar a {
+    padding: 6px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-dim); text-decoration: none;
+    font-family: inherit; font-size: 0.72rem; transition: all 0.15s;
+  }
+  .topbar a:hover { color: var(--text); border-color: var(--accent); }
+
+  .sidebar {
+    position: fixed; top: 50px; right: 0; bottom: 0;
+    width: 340px; background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    z-index: 90; pointer-events: auto;
+    overflow: hidden;
+  }
+  .sidebar h3 {
+    font-size: 0.75rem; color: var(--orange); padding: 12px 16px;
+    border-bottom: 1px solid var(--border); text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .sidebar-content {
+    flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 0.75rem;
+  }
+  .event-item {
+    padding: 10px 0; border-bottom: 1px solid rgba(42,47,62,0.4);
+    transition: background 0.15s;
+  }
+  .event-item:hover { background: rgba(108,140,255,0.05); }
+  .event-item .ev-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .event-item .ev-type { font-weight: 600; }
+  .event-item .ev-time { font-size: 0.65rem; color: var(--text-dim); margin-left: auto; }
+  .event-item .ev-detail { color: var(--text-dim); font-size: 0.7rem; line-height: 1.4; }
+  .event-item .ev-detail .field-label { color: var(--text); font-weight: 500; }
+  .event-item .ev-detail .field-val { color: var(--accent); }
+  .event-item .ev-detail .err-msg { color: var(--red); font-weight: 500; }
+  .event-item .ev-detail .ok-msg { color: var(--green); font-weight: 500; }
+  .event-item .ev-detail .warn-msg { color: var(--yellow); font-weight: 500; }
+  .event-item .ev-tag {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 0.62rem; font-weight: 600; margin-right: 4px;
+  }
+  .tag-error { background: rgba(248,113,113,0.15); color: var(--red); }
+  .tag-api { background: rgba(251,146,60,0.15); color: var(--orange); }
+  .tag-quota { background: rgba(250,204,21,0.15); color: var(--yellow); }
+  .tag-permanent { background: rgba(248,113,113,0.2); color: #ff6b6b; }
+  .tag-success { background: rgba(74,222,128,0.15); color: var(--green); }
+
+  .help {
+    position: fixed; bottom: 16px; left: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; z-index: 100;
+    font-size: 0.7rem; color: var(--text-dim); pointer-events: none;
+  }
+  .help kbd { background: var(--border); padding: 1px 5px; border-radius: 3px; font-size: 0.68rem; }
+
+  .node-highlight { filter: brightness(1.3); }
+  .node-dimmed { opacity: 0.12; }
+  .link-dimmed { opacity: 0.05; }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Auditoría en Vivo — Grafo</h1>
+  <div class="live-dot" id="liveDot"></div>
+  <span style="font-size:0.75rem;color:var(--green)" id="liveLabel">Conectado</span>
+  <div class="stats">
+    <span><span class="s-label">Nodos:</span><span class="s-val" id="nodeCount">0</span></span>
+    <span><span class="s-label">Eventos:</span><span class="s-val" id="eventCount">0</span></span>
+    <span><span class="s-label">Tasa:</span><span class="s-val" id="rate">0/s</span></span>
+  </div>
+  <a href="/auditoria">← Lista</a>
+  <a href="/">Home</a>
+</div>
+
+<svg id="graph"></svg>
+
+<div class="sidebar">
+  <h3 id="sidebarTitle">Eventos Recientes</h3>
+  <div class="sidebar-content" id="eventList"></div>
+</div>
+
+<div class="help">
+  <kbd>Scroll</kbd> zoom &nbsp; <kbd>Arrastrar</kbd> mover &nbsp; <kbd>Clic nodo</kbd> filtrar &nbsp; <kbd>Clic fondo</kbd> restaurar
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const COLORS = {
+  session: '#22d3ee',
+  route: '#6c8cff',
+  agent: '#4ade80',
+  task: '#f472b6',
+  api: '#fb923c',
+  error: '#f87171',
+  user: '#a78bfa',
+  audio: '#facc15',
+  misc: '#6b7280'
+};
+
+const TYPE_MAP = {
+  meeting_session_created: 'session', meeting_session_closed: 'session',
+  meeting_session_summary: 'session', meeting_warmup_start: 'session',
+  meeting_warmup_complete: 'session', meeting_reset: 'session',
+  user_turn_enqueued: 'user', turn_error: 'error',
+  route_decision: 'route', no_agent_response: 'route',
+  ai_route_planned: 'route', ai_route_failed: 'error',
+  contextual_route_decision: 'route',
+  agent_turn_start: 'agent', agent_turn_complete: 'agent',
+  agent_silence: 'agent', agent_spawned: 'agent',
+  task_added: 'task', task_toggled: 'task', task_deleted: 'task',
+  task_created_by_agent: 'task', task_completed_by_agent: 'task',
+  api_rotation_start: 'api', api_rotation_resolved: 'api',
+  api_rotation_failed: 'error',
+  api_key_acquired: 'api', api_key_success: 'api',
+  api_key_failure: 'api', api_key_all_cooldown: 'api',
+  api_key_model_error: 'api', api_call_success: 'api',
+  api_call_error: 'error', api_call_empty_response: 'api',
+  client_ws_message: 'user', server_ws_message: 'misc',
+  client_audio_chunk_summary: 'audio', audio_turn_cancelled: 'audio',
+};
+
+const EVENT_LABEL = {
+  meeting_session_created: 'Sesión iniciada',
+  meeting_session_closed: 'Sesión cerrada',
+  meeting_session_summary: 'Resumen de sesión',
+  meeting_warmup_start: 'Warmup',
+  user_turn_enqueued: 'Turno usuario',
+  route_decision: 'Orquestación',
+  no_agent_response: 'Sin respuesta',
+  ai_route_planned: 'Ruta IA',
+  ai_route_failed: 'Ruta IA falló',
+  contextual_route_decision: 'Ruta contextual',
+  agent_turn_start: 'Agente habla',
+  agent_turn_complete: 'Agente responde',
+  agent_silence: 'Agente calla',
+  agent_spawned: 'Agente creado',
+  task_added: 'Tarea agregada',
+  task_toggled: 'Tarea toggle',
+  task_deleted: 'Tarea eliminada',
+  task_created_by_agent: 'Agente crea tarea',
+  task_completed_by_agent: 'Agente completa tarea',
+  api_rotation_start: 'Rotación API',
+  api_rotation_resolved: 'API resuelta',
+  api_rotation_failed: 'API falló',
+  api_key_acquired: 'Key adquirida',
+  api_key_success: 'Key exitosa',
+  api_key_failure: 'Key falló',
+  api_key_all_cooldown: 'Todas en cooldown',
+  api_key_model_error: 'Error modelo',
+  api_call_success: 'Llamada exitosa',
+  api_call_error: 'Llamada falló',
+  api_call_empty_response: 'Respuesta vacía',
+  client_ws_message: 'Mensaje cliente',
+  turn_error: 'Error de turno',
+  client_audio_chunk_summary: 'Audio chunk',
+  audio_turn_cancelled: 'Audio cancelado',
+  error: 'Error',
+};
+
+let graphNodes = [];
+let graphLinks = [];
+let allEvents = [];
+let eventRate = 0;
+let lastRateCount = 0;
+let lastRateTime = Date.now();
+let selectedNodeId = null;
+
+const svg = d3.select('#graph');
+const width = window.innerWidth;
+const height = window.innerHeight;
+svg.attr('viewBox', [0, 0, width, height]);
+
+const g = svg.append('g');
+const zoomBehavior = d3.zoom()
+  .scaleExtent([0.05, 4])
+  .on('zoom', (e) => g.attr('transform', e.transform));
+svg.call(zoomBehavior);
+
+const linkGroup = g.append('g');
+const nodeGroup = g.append('g');
+
+const categories = Object.keys(COLORS);
+for (const cat of categories) {
+  graphNodes.push({
+    id: cat,
+    label: cat.charAt(0).toUpperCase() + cat.slice(1),
+    category: cat,
+    color: COLORS[cat],
+    size: 25,
+    eventCount: 0,
+    type: 'category'
+  });
+}
+
+const simulation = d3.forceSimulation(graphNodes)
+  .force('link', d3.forceLink(graphLinks).id(d => d.id).distance(100).strength(0.3))
+  .force('charge', d3.forceManyBody().strength(-300).distanceMax(500))
+  .force('center', d3.forceCenter((width - 340) / 2, height / 2))
+  .force('collision', d3.forceCollide().radius(d => d.size + 10))
+  .on('tick', ticked);
+
+let linkElements = linkGroup.selectAll('line');
+
+function ticked() {
+  linkElements
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  nodeGroup.selectAll('.ev-node')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+}
+
+// --- Detailed event description ---
+function buildEventDetail(ev) {
+  const p = ev.payload || {};
+  const t = ev.type;
+  const lines = [];
+
+  switch (t) {
+    case 'api_call_error':
+      lines.push({ label: 'Scope', val: p.scope || '—' });
+      lines.push({ label: 'Modelo', val: p.model || '—' });
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ label: 'Intento', val: `#${p.attempt || '?'}` });
+      lines.push({ label: 'Tiempo', val: p.elapsedMs ? `${p.elapsedMs}ms` : '—' });
+      if (p.error) lines.push({ html: `<span class="err-msg">${esc(p.error)}</span>` });
+      break;
+
+    case 'api_key_failure':
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ label: 'Fallos acumulados', val: p.failures || '—' });
+      if (p.quota) lines.push({ html: `<span class="ev-tag tag-quota">CUOTA / 429</span>` });
+      if (p.permanent) lines.push({ html: `<span class="ev-tag tag-permanent">PERMANENTE</span>` });
+      lines.push({ label: 'Cooldown', val: p.cooldownSeconds ? `${p.cooldownSeconds}s` : '—' });
+      if (p.error) lines.push({ html: `<span class="err-msg">${esc(p.error)}</span>` });
+      break;
+
+    case 'api_key_all_cooldown':
+      lines.push({ html: `<span class="err-msg">Todas las API keys en cooldown — no hay keys disponibles</span>` });
+      if (p.keys && Array.isArray(p.keys)) {
+        for (const k of p.keys) {
+          lines.push({ label: k.keyId, val: `cooldown ${k.cooldownSeconds}s, ${k.failures} fallos` });
+        }
+      }
+      break;
+
+    case 'api_key_model_error':
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ html: `<span class="err-msg">Error de configuración del modelo</span>` });
+      if (p.error) lines.push({ html: `<span class="err-msg">${esc(p.error)}</span>` });
+      break;
+
+    case 'api_rotation_failed':
+      lines.push({ label: 'Scope', val: p.scope || '—' });
+      if (p.message) lines.push({ html: `<span class="err-msg">${esc(p.message)}</span>` });
+      break;
+
+    case 'api_call_success':
+      lines.push({ label: 'Scope', val: p.scope || '—' });
+      lines.push({ label: 'Modelo', val: p.model || '—' });
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ label: 'Tiempo', val: p.elapsedMs ? `${p.elapsedMs}ms` : '—' });
+      if (p.inputTokens || p.outputTokens) {
+        lines.push({ label: 'Tokens', val: `${p.inputTokens || 0} in / ${p.outputTokens || 0} out` });
+      }
+      lines.push({ html: `<span class="ok-msg">OK</span>` });
+      break;
+
+    case 'api_key_success':
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ label: 'Modelo', val: p.model || '—' });
+      if (p.elapsedMs) lines.push({ label: 'Tiempo', val: `${p.elapsedMs}ms` });
+      lines.push({ html: `<span class="ok-msg">Key funcionando</span>` });
+      break;
+
+    case 'api_key_acquired':
+      lines.push({ label: 'Key', val: p.keyId || '—' });
+      lines.push({ html: `<span class="ok-msg">Key adquirida del pool</span>` });
+      break;
+
+    case 'turn_error':
+      lines.push({ label: 'Turno', val: p.turnId || '—' });
+      if (p.message) lines.push({ html: `<span class="err-msg">${esc(p.message)}</span>` });
+      if (p.detail) lines.push({ html: `<span class="err-msg">${esc(p.detail)}</span>` });
+      break;
+
+    case 'ai_route_failed':
+      lines.push({ label: 'Turno', val: p.turnId || '—' });
+      if (p.message) lines.push({ html: `<span class="err-msg">${esc(p.message)}</span>` });
+      break;
+
+    case 'route_decision':
+    case 'ai_route_planned':
+    case 'contextual_route_decision':
+      if (p.text) lines.push({ label: 'Texto', val: `"${p.text.slice(0, 80)}${p.text.length > 80 ? '...' : ''}"` });
+      if (p.target) lines.push({ label: 'Destino', val: p.target });
+      if (p.reason) lines.push({ label: 'Razón', val: p.reason });
+      if (p.heuristic) lines.push({ label: 'Heurístico', val: p.heuristic });
+      if (p.greeting) lines.push({ html: `<span class="warn-msg">Saludo detectado</span>` });
+      break;
+
+    case 'agent_turn_start':
+    case 'agent_turn_complete':
+      lines.push({ label: 'Agente', val: p.agentId || '—' });
+      if (p.turnId) lines.push({ label: 'Turno', val: p.turnId });
+      if (p.text) lines.push({ label: 'Texto', val: `"${p.text.slice(0, 80)}${p.text.length > 80 ? '...' : ''}"` });
+      if (p.elapsedMs) lines.push({ label: 'Tiempo', val: `${p.elapsedMs}ms` });
+      if (p.inputTokens || p.outputTokens) {
+        lines.push({ label: 'Tokens', val: `${p.inputTokens || 0} in / ${p.outputTokens || 0} out` });
+      }
+      break;
+
+    case 'agent_silence':
+      lines.push({ label: 'Agente', val: p.agentId || '—' });
+      if (p.turnId) lines.push({ label: 'Turno', val: p.turnId });
+      if (p.reason) lines.push({ label: 'Razón', val: p.reason });
+      break;
+
+    case 'task_added':
+    case 'task_toggled':
+    case 'task_deleted':
+      if (p.title) lines.push({ label: 'Tarea', val: p.title });
+      if (p.done !== undefined) lines.push({ label: 'Estado', val: p.done ? 'Completada' : 'Pendiente' });
+      if (p.by) lines.push({ label: 'Por', val: p.by });
+      break;
+
+    case 'task_created_by_agent':
+    case 'task_completed_by_agent':
+      lines.push({ label: 'Agente', val: p.agentId || '—' });
+      if (p.title) lines.push({ label: 'Tarea', val: p.title });
+      break;
+
+    case 'meeting_session_created':
+    case 'meeting_session_closed':
+      if (p.agentIds) lines.push({ label: 'Agentes', val: p.agentIds.join(', ') });
+      if (p.reason) lines.push({ label: 'Razón', val: p.reason });
+      if (p.durationMs) lines.push({ label: 'Duración', val: `${Math.round(p.durationMs / 1000)}s` });
+      if (p.totalTurns) lines.push({ label: 'Turnos', val: p.totalTurns });
+      if (p.totalErrors) lines.push({ label: 'Errores', val: p.totalErrors });
+      break;
+
+    default:
+      const keys = Object.keys(p).filter(k => p[k] !== undefined && p[k] !== null);
+      for (const k of keys.slice(0, 5)) {
+        const v = typeof p[k] === 'object' ? JSON.stringify(p[k]) : String(p[k]);
+        lines.push({ label: k, val: v.slice(0, 100) });
+      }
+  }
+
+  return lines.map(l => {
+    if (l.html) return l.html;
+    return `<span class="field-label">${esc(l.label)}:</span> <span class="field-val">${esc(l.val)}</span>`;
+  }).join('<br>');
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// --- Node filtering ---
+function getConnectedIds(nodeId) {
+  const connected = new Set([nodeId]);
+  for (const l of graphLinks) {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    if (sid === nodeId) connected.add(tid);
+    if (tid === nodeId) connected.add(sid);
+  }
+  return connected;
+}
+
+function applyFilter(nodeId) {
+  selectedNodeId = nodeId;
+  const connected = nodeId ? getConnectedIds(nodeId) : null;
+
+  nodeGroup.selectAll('.ev-node')
+    .classed('node-dimmed', d => connected && !connected.has(d.id))
+    .classed('node-highlight', d => connected && connected.has(d.id));
+
+  linkElements
+    .classed('link-dimmed', d => {
+      if (!connected) return false;
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      return !connected.has(sid) || !connected.has(tid);
+    });
+}
+
+function clearFilter() {
+  selectedNodeId = null;
+  nodeGroup.selectAll('.ev-node').classed('node-dimmed', false).classed('node-highlight', false);
+  linkElements.classed('link-dimmed', false);
+  document.getElementById('sidebarTitle').textContent = 'Eventos Recientes';
+}
+
+// --- Add event ---
+function addEvent(ev) {
+  allEvents.push(ev);
+  if (allEvents.length > 1000) allEvents = allEvents.slice(-800);
+
+  const cat = TYPE_MAP[ev.type] || 'misc';
+  const catNode = graphNodes.find(n => n.id === cat);
+  if (catNode) catNode.eventCount++;
+
+  let typeNode = graphNodes.find(n => n.id === ev.type && n.type === 'event');
+  if (!typeNode) {
+    typeNode = {
+      id: ev.type,
+      label: EVENT_LABEL[ev.type] || ev.type,
+      category: cat,
+      color: COLORS[cat] || '#6b7280',
+      size: 8,
+      eventCount: 0,
+      type: 'event'
+    };
+    graphNodes.push(typeNode);
+    graphLinks.push({ source: cat, target: ev.type });
+    updateGraph();
+  }
+  typeNode.eventCount++;
+  typeNode.size = Math.min(20, 8 + typeNode.eventCount * 0.5);
+
+  const agentId = ev.payload?.agentId;
+  if (agentId) {
+    let agentNode = graphNodes.find(n => n.id === agentId && n.type === 'agent');
+    if (!agentNode) {
+      agentNode = {
+        id: agentId,
+        label: agentId,
+        category: cat,
+        color: '#4ecdc4',
+        size: 12,
+        eventCount: 0,
+        type: 'agent'
+      };
+      graphNodes.push(agentNode);
+      graphLinks.push({ source: ev.type, target: agentId });
+      updateGraph();
+    }
+    agentNode.eventCount++;
+    agentNode.size = Math.min(22, 12 + agentNode.eventCount * 0.3);
+
+    if (!graphLinks.some(l => {
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      return sid === agentId && tid === cat;
+    })) {
+      graphLinks.push({ source: agentId, target: cat });
+    }
+  }
+
+  if (allEvents.length > 1) {
+    const prev = allEvents[allEvents.length - 2];
+    const prevCat = TYPE_MAP[prev.type] || 'misc';
+    if (prevCat !== cat && !graphLinks.some(l => {
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      return sid === prevCat && tid === cat;
+    })) {
+      graphLinks.push({ source: prevCat, target: cat, flow: true });
+    }
+  }
+
+  const now = Date.now();
+  if (now - lastRateTime > 1000) {
+    eventRate = allEvents.length - lastRateCount;
+    lastRateCount = allEvents.length;
+    lastRateTime = now;
+    document.getElementById('rate').textContent = `${eventRate}/s`;
+  }
+
+  document.getElementById('nodeCount').textContent = graphNodes.length;
+  document.getElementById('eventCount').textContent = allEvents.length;
+
+  updateGraph();
+  updateSidebar(ev);
+
+  // If filter is active, reapply to new node
+  if (selectedNodeId) applyFilter(selectedNodeId);
+}
+
+function updateGraph() {
+  simulation.nodes(graphNodes);
+  simulation.force('link').links(graphLinks);
+
+  linkElements = linkGroup.selectAll('line')
+    .data(graphLinks, d => {
+      const sid = typeof d.source === 'object' ? d.source.id : d.source;
+      const tid = typeof d.target === 'object' ? d.target.id : d.target;
+      return `${sid}-${tid}`;
+    })
+    .join('line')
+    .attr('stroke', d => d.flow ? 'rgba(108,140,255,0.2)' : 'rgba(42,47,62,0.5)')
+    .attr('stroke-width', d => d.flow ? 1.5 : 1)
+    .attr('stroke-dasharray', d => d.flow ? '4,4' : 'none');
+
+  nodeGroup.selectAll('.ev-node').remove();
+
+  const nodeG = nodeGroup.selectAll('.ev-node')
+    .data(graphNodes, d => d.id)
+    .join('g')
+    .attr('class', 'ev-node')
+    .style('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
+    .on('click', (e, d) => {
+      e.stopPropagation();
+      if (selectedNodeId === d.id) {
+        clearFilter();
+        document.getElementById('eventList').innerHTML = '<div style="color:var(--text-dim);padding:20px;text-align:center">Hacé clic en un nodo para ver sus eventos</div>';
+      } else {
+        applyFilter(d.id);
+        showEventsFor(d);
+      }
+    })
+    .on('dblclick', (e, d) => {
+      e.stopPropagation();
+      const t = d3.zoomTransform(svg.node());
+      const x = (width - 340) / 2 - d.x * t.k;
+      const y = height / 2 - d.y * t.k;
+      svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity.translate(x, y).scale(t.k));
+    });
+
+  // Glow
+  nodeG.append('circle')
+    .attr('r', d => d.size + 5)
+    .attr('fill', 'none')
+    .attr('stroke', d => d.color)
+    .attr('stroke-width', 2)
+    .attr('stroke-opacity', 0.15);
+
+  // Main circle
+  nodeG.append('circle')
+    .attr('r', d => d.size)
+    .attr('fill', d => d.color)
+    .attr('fill-opacity', 0.8)
+    .attr('stroke', d => d.color)
+    .attr('stroke-width', 1.5)
+    .attr('stroke-opacity', 0.4);
+
+  // Count badge
+  nodeG.filter(d => d.eventCount > 0)
+    .append('text')
+    .text(d => d.eventCount)
+    .attr('text-anchor', 'middle')
+    .attr('dy', '0.35em')
+    .attr('font-size', d => d.size > 15 ? '10px' : '8px')
+    .attr('font-family', "'SF Mono', monospace")
+    .attr('font-weight', 'bold')
+    .attr('fill', '#fff')
+    .attr('pointer-events', 'none');
+
+  // Label
+  nodeG.append('text')
+    .text(d => d.label.length > 18 ? d.label.slice(0, 15) + '...' : d.label)
+    .attr('text-anchor', 'middle')
+    .attr('dy', d => d.size + 14)
+    .attr('font-size', '10px')
+    .attr('font-family', "'SF Mono', monospace")
+    .attr('fill', '#d4d8e3')
+    .attr('pointer-events', 'none')
+    .attr('opacity', 0.8);
+
+  simulation.alpha(0.4).restart();
+}
+
+function showEventsFor(node) {
+  const events = allEvents.filter(ev => {
+    if (node.type === 'category') return (TYPE_MAP[ev.type] || 'misc') === node.id;
+    if (node.type === 'agent') return ev.payload?.agentId === node.id;
+    return ev.type === node.id;
+  }).slice(-30);
+
+  const container = document.getElementById('eventList');
+  document.getElementById('sidebarTitle').textContent = node.label;
+
+  if (!events.length) {
+    container.innerHTML = '<div style="color:var(--text-dim);padding:20px;text-align:center">Sin eventos para este nodo</div>';
+    return;
+  }
+
+  container.innerHTML = events.reverse().map(ev => {
+    const cat = TYPE_MAP[ev.type] || 'misc';
+    const color = COLORS[cat] || '#6b7280';
+    const label = EVENT_LABEL[ev.type] || ev.type;
+    const time = new Date(ev.at).toLocaleTimeString('es-AR', { hour12: false });
+    const detail = buildEventDetail(ev);
+
+    // Tags for error events
+    let tags = '';
+    const p = ev.payload || {};
+    if (ev.type === 'api_call_error') tags += '<span class="ev-tag tag-error">ERROR</span>';
+    if (ev.type === 'api_key_failure') {
+      if (p.quota) tags += '<span class="ev-tag tag-quota">CUOTA</span>';
+      if (p.permanent) tags += '<span class="ev-tag tag-permanent">PERMANENTE</span>';
+      if (!p.quota && !p.permanent) tags += '<span class="ev-tag tag-error">FALLO</span>';
+    }
+    if (ev.type === 'api_key_all_cooldown') tags += '<span class="ev-tag tag-error">SIN KEYS</span>';
+    if (ev.type === 'api_call_success') tags += '<span class="ev-tag tag-success">OK</span>';
+    if (ev.type === 'api_key_success') tags += '<span class="ev-tag tag-success">OK</span>';
+    if (ev.type === 'turn_error') tags += '<span class="ev-tag tag-error">ERROR</span>';
+    if (ev.type === 'ai_route_failed') tags += '<span class="ev-tag tag-error">FALLO</span>';
+    if (ev.type === 'api_rotation_failed') tags += '<span class="ev-tag tag-error">FALLO</span>';
+
+    return `<div class="event-item">
+      <div class="ev-header">
+        <span class="ev-type" style="color:${color}">${label}</span>
+        ${tags}
+        <span class="ev-time">${time}</span>
+      </div>
+      <div class="ev-detail">${detail}</div>
+    </div>`;
+  }).join('');
+}
+
+function updateSidebar(ev) {
+  const cat = TYPE_MAP[ev.type] || 'misc';
+  const color = COLORS[cat] || '#6b7280';
+  const label = EVENT_LABEL[ev.type] || ev.type;
+  const time = new Date(ev.at).toLocaleTimeString('es-AR', { hour12: false });
+  const detail = buildEventDetail(ev);
+
+  let tags = '';
+  const p = ev.payload || {};
+  if (ev.type === 'api_call_error') tags += '<span class="ev-tag tag-error">ERROR</span>';
+  if (ev.type === 'api_key_failure') {
+    if (p.quota) tags += '<span class="ev-tag tag-quota">CUOTA</span>';
+    if (p.permanent) tags += '<span class="ev-tag tag-permanent">PERMANENTE</span>';
+  }
+  if (ev.type === 'api_call_success') tags += '<span class="ev-tag tag-success">OK</span>';
+  if (ev.type === 'turn_error') tags += '<span class="ev-tag tag-error">ERROR</span>';
+
+  const container = document.getElementById('eventList');
+  const div = document.createElement('div');
+  div.className = 'event-item';
+  div.innerHTML = `
+    <div class="ev-header">
+      <span class="ev-type" style="color:${color}">${label}</span>
+      ${tags}
+      <span class="ev-time">${time}</span>
+    </div>
+    <div class="ev-detail">${detail}</div>
+  `;
+  container.prepend(div);
+  while (container.children.length > 50) {
+    container.lastChild.remove();
+  }
+}
+
+// SSE
+let eventSource = null;
+function connect() {
+  eventSource = new EventSource('/api/telemetry/stream');
+  document.getElementById('liveDot').className = 'live-dot';
+  document.getElementById('liveLabel').textContent = 'Conectado';
+
+  eventSource.onmessage = (e) => {
+    try { addEvent(JSON.parse(e.data)); } catch {}
+  };
+  eventSource.onerror = () => {
+    document.getElementById('liveDot').className = 'live-dot off';
+    document.getElementById('liveLabel').textContent = 'Reconectando...';
+  };
+}
+
+async function loadHistory() {
+  try {
+    const res = await fetch('/api/telemetry?limit=100');
+    const data = await res.json();
+    for (const ev of (data.events || []).reverse()) {
+      addEvent(ev);
+    }
+  } catch {}
+}
+
+// Click background = clear filter
+svg.on('click', () => {
+  clearFilter();
+  document.getElementById('eventList').innerHTML = '<div style="color:var(--text-dim);padding:20px;text-align:center">Hacé clic en un nodo para ver sus eventos</div>';
+});
+
+window.addEventListener('resize', () => {
+  svg.attr('viewBox', [0, 0, window.innerWidth, window.innerHeight]);
+});
+
+loadHistory();
+connect();
+</script>
+</body>
+</html>
