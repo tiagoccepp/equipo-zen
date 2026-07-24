@@ -1,0 +1,202 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import express from 'express';
+
+import {
+  ALLOWED_ORIGINS,
+  MODEL,
+  TELEMETRY_MAX_EVENTS,
+  agentConfig,
+  collectApiKeys,
+  rootDir
+} from './config.js';
+import { analyzeTelemetry, telemetry } from './telemetry.js';
+
+export function createApp() {
+  const app = express();
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && ALLOWED_ORIGINS.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+    }
+    res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+  app.use(express.json({ limit: '512kb' }));
+
+  app.post('/api/telemetry', (req, res) => {
+    const event = req.body || {};
+    telemetry.add({
+      source: 'client',
+      type: event.type,
+      sessionId: event.sessionId,
+      turnId: event.turnId,
+      payload: event.payload
+    });
+    res.status(204).end();
+  });
+
+  app.get('/api/telemetry', (req, res) => {
+    res.json({
+      events: telemetry.list(req.query.limit),
+      maxEvents: TELEMETRY_MAX_EVENTS
+    });
+  });
+
+  app.get('/api/telemetry/analysis', (req, res) => {
+    const events = telemetry.list(req.query.limit || TELEMETRY_MAX_EVENTS);
+    res.json(analyzeTelemetry(events));
+  });
+
+  app.get('/api/telemetry/stream', (req, res) => {
+    telemetry.stream(req, res);
+  });
+
+  app.post('/api/telemetry/reset', (_req, res) => {
+    telemetry.reset();
+    telemetry.add({ type: 'telemetry_reset', payload: { reason: 'manual reset' } });
+    res.status(204).end();
+  });
+
+  app.use('/api/agents', (_req, res) => {
+    res.json({
+      agents: agentConfig.agents.map(({ id, name, title, color, domains, aliases }) => ({
+        id,
+        name,
+        title,
+        color,
+        domains,
+        aliases
+      })),
+      model: MODEL,
+      hasApiKeys: collectApiKeys().length > 0
+    });
+  });
+
+  app.get('/arquitectura', (_req, res) => {
+    res.sendFile(path.join(rootDir, 'docs', 'arquitectura.html'));
+  });
+
+  app.get('/auditoria', (_req, res) => {
+    res.sendFile(path.join(rootDir, 'docs', 'auditoria.html'));
+  });
+
+  app.get('/audit-graph', (_req, res) => {
+    res.sendFile(path.join(rootDir, 'docs', 'audit-graph.html'));
+  });
+
+  app.get('/vault', (_req, res) => {
+    res.sendFile(path.join(rootDir, 'docs', 'vault-graph.html'));
+  });
+
+  app.get('/api/vault/note', async (req, res) => {
+    try {
+      const relativePath = req.query.path;
+      if (!relativePath || typeof relativePath !== 'string') {
+        return res.status(400).json({ error: 'path required' });
+      }
+      const real = path.resolve(rootDir, relativePath);
+      const relative = path.relative(rootDir, real);
+      const escapesRoot = !relative || relative.startsWith('..') || path.isAbsolute(relative);
+      const hasHiddenSegment = relative.split(path.sep).some((segment) => segment.startsWith('.'));
+      if (escapesRoot || hasHiddenSegment || !real.endsWith('.md')) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const content = await fs.readFile(real, 'utf-8');
+      res.json({ path: relativePath, content });
+    } catch (err) {
+      res.status(404).json({ error: 'note not found' });
+    }
+  });
+
+  app.get('/api/vault/graph', async (_req, res) => {
+    try {
+      const vaultDir = rootDir;
+      const sections = [
+        '00 - Index', '01 - Setup', '02 - Architecture', '03 - Agents',
+        '04 - Audio', '05 - Telemetry', '06 - Code Reference',
+        '07 - Decision Log', '08 - Roadmap'
+      ];
+
+      const nodes = [];
+      const links = [];
+      const idMap = new Map();
+
+      for (const section of sections) {
+        const dir = path.join(vaultDir, section);
+        let files;
+        try { files = await fs.readdir(dir); } catch { continue; }
+        for (const file of files) {
+          if (!file.endsWith('.md')) continue;
+          const fullPath = path.join(dir, file);
+          const content = await fs.readFile(fullPath, 'utf-8');
+          const label = file.replace('.md', '');
+          const id = `${section}/${label}`;
+
+          idMap.set(label.toLowerCase(), id);
+          idMap.set(id.toLowerCase(), id);
+
+          const outgoing = [];
+          const linkRegex = /\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]/g;
+          let m;
+          while ((m = linkRegex.exec(content)) !== null) {
+            outgoing.push(m[1].trim());
+          }
+
+          const size = Math.max(6, Math.min(18, 6 + outgoing.length * 2));
+
+          nodes.push({
+            id,
+            label,
+            path: `${section}/${file}`,
+            category: section,
+            size,
+            outgoing
+          });
+        }
+      }
+
+      // Add Home.md root links
+      const homeNode = nodes.find(n => n.label === 'Home');
+      if (homeNode) {
+        homeNode.category = '00 - Index';
+        homeNode.size = 20;
+      }
+
+      // Build links
+      const linkSet = new Set();
+      for (const node of nodes) {
+        for (const target of node.outgoing) {
+          const targetId = idMap.get(target.toLowerCase());
+          if (targetId && targetId !== node.id) {
+            const key = `${node.id}→${targetId}`;
+            if (!linkSet.has(key)) {
+              linkSet.add(key);
+              links.push({ source: node.id, target: targetId });
+            }
+          }
+        }
+      }
+
+      res.json({ nodes, links });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.join(rootDir, 'dist')));
+    app.get('*splat', (_req, res) => {
+      res.sendFile(path.join(rootDir, 'dist', 'index.html'));
+    });
+  }
+
+  return app;
+}
