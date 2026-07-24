@@ -1042,3 +1042,134 @@ textarea.form-control {
   height: 16px;
 }
 
+
+/* ── Fase 4: regiones nuevas ─────────────────────────────────────────── */
+
+.scenario-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(52, 78, 65, 0.14);
+  border-radius: 12px;
+}
+
+.scenario-bar label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #5c6b5e;
+  font-weight: 600;
+}
+
+.scenario-bar input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.86rem;
+  color: #2c352d;
+  outline: none;
+}
+
+.agent-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.agent:hover .agent-actions,
+.agent:focus-within .agent-actions {
+  opacity: 1;
+}
+
+.agent-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(52, 78, 65, 0.08);
+  cursor: pointer;
+  padding: 0;
+}
+
+.agent-action-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: #46554a;
+}
+
+.agent-action-btn:hover {
+  background: rgba(52, 78, 65, 0.16);
+}
+
+.agent-action-btn.danger:hover {
+  background: rgba(183, 78, 57, 0.18);
+}
+
+.agent-action-btn.danger:hover svg {
+  fill: #b74e39;
+}
+
+.agent.is-disabled {
+  opacity: 0.55;
+  filter: saturate(0.4);
+}
+
+.meeting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(52, 78, 65, 0.12);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.meeting-row.is-current {
+  border-color: rgba(47, 111, 115, 0.5);
+  background: rgba(47, 111, 115, 0.07);
+}
+
+.meeting-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.meeting-row-info strong {
+  font-size: 0.9rem;
+  color: #2c352d;
+}
+
+.meeting-row-info span {
+  font-size: 0.74rem;
+  color: #6b7a6e;
+}
+
+.meeting-row-info small {
+  font-size: 0.74rem;
+  color: #8a967f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asr-locale select {
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid rgba(52, 78, 65, 0.2);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #fff;
+  color: #2c352d;
+}

@@ -21,7 +21,6 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^5.1.2",
     "typescript": "^5.9.3",
     "vite": "^7.2.7"
   }

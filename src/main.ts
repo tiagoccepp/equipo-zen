@@ -49,6 +49,27 @@ let renderQueued = false;
 
 const MIC_SETTINGS_STORAGE_KEY = 'reunion.micSettings.v1';
 const MEETING_ID_STORAGE_KEY = 'reunion.meetingId.v1';
+const ASR_LOCALE_STORAGE_KEY = 'reunion.asrLocale.v1';
+const ASR_LOCALES = ['es-ES', 'es-AR', 'es-MX', 'en-US'];
+
+function loadAsrLocale(): string {
+  try {
+    const stored = window.localStorage.getItem(ASR_LOCALE_STORAGE_KEY);
+    return stored && ASR_LOCALES.includes(stored) ? stored : 'es-ES';
+  } catch {
+    return 'es-ES';
+  }
+}
+
+function saveAsrLocale(locale: string) {
+  if (!ASR_LOCALES.includes(locale)) return;
+  try {
+    window.localStorage.setItem(ASR_LOCALE_STORAGE_KEY, locale);
+  } catch {
+    // Sin persistencia; el valor vive en la sesión.
+  }
+  trace('asr_locale_changed', { locale });
+}
 
 function loadStoredMeetingId(): string | undefined {
   try {
@@ -101,10 +122,7 @@ function trace(type: string, payload: Record<string, unknown> = {}, turnId?: str
 }
 
 function backendHttpBase() {
-  const host = window.location.port === '5173'
-    ? `${window.location.hostname}:8787`
-    : window.location.host;
-  return `${window.location.protocol}//${host}`;
+  return '';
 }
 
 class PcmAudioQueue {
@@ -314,7 +332,7 @@ class LiveMicrophoneStreamer {
         window.setTimeout(() => {
           if (state.recording && state.voiceStatus === 'Ruido descartado.') {
             state.voiceStatus = 'Audio Live conectado.';
-            render();
+            markDirty('voice');
           }
         }, 900);
         return;
@@ -348,7 +366,7 @@ class BrowserSpeechRecognizer {
 
     this.active = true;
     this.recognition = new SpeechRecognitionCtor();
-    this.recognition.lang = 'es-ES';
+    this.recognition.lang = loadAsrLocale();
     this.recognition.continuous = true;
     this.recognition.interimResults = true;
     this.recognition.maxAlternatives = 1;
@@ -427,6 +445,8 @@ class BrowserSpeechRecognizer {
   }
 }
 
+const initialMicSettings = loadMicSettings();
+
 const state = {
   sessionId: '',
   meetingId: '',
@@ -437,7 +457,6 @@ const state = {
   connected: false,
   liveMode: false,
   recording: false,
-  interimSpeech: '',
   voiceStatus: '',
   activeAudioTranscript: '',
   manualText: '',
@@ -449,12 +468,12 @@ const state = {
   microphone: null as LiveMicrophoneStreamer | null,
   browserSpeech: null as BrowserSpeechRecognizer | null,
   clientSpeechText: '',
-  micSettings: loadMicSettings(),
-  micMeter: { level: 0, startThreshold: micThresholds(loadMicSettings()).startThreshold, speaking: false } as MicMeter,
+  micSettings: initialMicSettings,
+  micMeter: { level: 0, startThreshold: micThresholds(initialMicSettings).startThreshold, speaking: false } as MicMeter,
   turnStartedAt: new Map<string, number>(),
   agentStartedAt: new Map<string, number>(),
   audio: new PcmAudioQueue(),
-  isSpawnOpen: false,
+  editingAgentId: null as string | null,
   selectedSpawnColor: '#2f6f73'
 };
 
@@ -464,34 +483,61 @@ if (!root) {
 }
 const app: HTMLDivElement = root;
 
-connect();
-render();
-trace('page_loaded', {
-  userAgent: navigator.userAgent,
-  viewport: { width: window.innerWidth, height: window.innerHeight }
-});
+// Reconexión con backoff exponencial + jitter. El socket previo se cierra
+// antes de abrir otro; al reconectar se re-arma el micrófono si estaba
+// activo y se reenvía hello (que reanuda la reunión persistida).
+let reconnectAttempts = 0;
+let reconnectTimer = 0;
+let connecting = false;
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  const base = Math.min(15000, 500 * Math.pow(1.8, reconnectAttempts));
+  const jitter = base * 0.3 * (Math.random() * 2 - 1);
+  const delay = Math.round(base + jitter);
+  reconnectAttempts += 1;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = 0;
+    connect();
+  }, delay);
+}
 
 function connect() {
+  if (connecting) return;
+  connecting = true;
+
+  if (state.socket) {
+    const old = state.socket;
+    state.socket = null;
+    old.onopen = old.onclose = old.onmessage = old.onerror = null;
+    try { old.close(); } catch { /* ya cerrado */ }
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsHost = window.location.port === '5173'
-    ? `${window.location.hostname}:8787`
-    : window.location.host;
-  const socket = new WebSocket(`${protocol}://${wsHost}/meeting`);
+  const socket = new WebSocket(`${protocol}://${window.location.host}/meeting`);
 
   socket.addEventListener('open', () => {
+    connecting = false;
+    reconnectAttempts = 0;
     state.connected = true;
     trace('socket_open');
     // hello inicializa la reunión: reanuda la guardada o crea una nueva.
     socket.send(JSON.stringify({ type: 'hello', meetingId: loadStoredMeetingId() }));
-    render();
+    if (state.recording) {
+      // El servidor es nuevo: re-preparar el transcriptor y el ASR local.
+      socket.send(JSON.stringify({ type: 'audio_prepare' }));
+      state.browserSpeech?.start();
+    }
+    markDirty('connection', 'voice');
   });
 
   socket.addEventListener('close', () => {
+    connecting = false;
     state.connected = false;
     state.speakingAgentId = '';
     trace('socket_close');
-    render();
-    window.setTimeout(connect, 1200);
+    markDirty('connection', 'agents', 'voice');
+    scheduleReconnect();
   });
 
   socket.addEventListener('message', async (event) => {
@@ -502,7 +548,6 @@ function connect() {
     }
     traceIncomingMessage(message);
     await handleServerMessage(message);
-    render();
   });
 
   state.socket = socket;
@@ -512,6 +557,7 @@ async function handleServerMessage(message: MeetingMessage) {
   switch (message.type) {
     case 'agents_updated':
       state.agents = message.agents;
+      markDirty('agents');
       break;
 
     case 'meeting_ready': {
@@ -537,23 +583,21 @@ async function handleServerMessage(message: MeetingMessage) {
           agentId: turn.agentId || undefined,
           text: turn.text
         }));
+        transcriptReset();
       }
       const statusText = message.resumed
         ? 'Reunión retomada: se restauró la conversación, los agentes y las tareas.'
         : message.liveMode
           ? 'Reunión nueva en modo Live. Los agentes responden con Gemini en el backend.'
           : 'Reunión nueva en modo simulación. Configura .env con tus claves Gemini para activar Live API.';
-      state.turns.push({
-        id: crypto.randomUUID(),
-        kind: 'system',
-        speaker: 'Sistema',
-        text: statusText
-      });
+      upsertAlert('meeting-status', 'Reunión', statusText, 'ok', 4000);
+      markDirty('agents', 'scenario', 'keys', 'voice', 'route');
       break;
     }
 
     case 'scenario_updated':
       state.scenario = message.scenario;
+      markDirty('scenario');
       break;
 
     case 'meeting_reset':
@@ -565,37 +609,53 @@ async function handleServerMessage(message: MeetingMessage) {
       state.agentStartedAt.clear();
       state.browserSpeech?.resetUtterance();
       state.audio.stop();
+      transcriptReset();
+      markDirty('route', 'voice');
       break;
 
-    case 'user_turn_received':
+    case 'user_turn_received': {
       state.turnStartedAt.set(message.turnId, performance.now());
-      state.turns.push({ id: message.turnId, kind: 'user', speaker: 'Tu', text: message.text });
+      const turn: TranscriptTurn = {
+        id: message.turnId,
+        kind: message.source === 'system' ? 'system' : 'user',
+        speaker: message.source === 'system' ? 'Sistema' : 'Tu',
+        text: message.text
+      };
+      state.turns.push(turn);
+      transcriptAppend(turn);
       state.voiceStatus = message.source === 'audio' ? 'Orquestando respuesta...' : state.voiceStatus;
+      markDirty('voice');
       break;
+    }
 
     case 'route_decision':
       state.route = message.route;
       if (message.route.targets.length === 0) {
         setVoiceStatus(state.recording ? 'Sin respuesta necesaria.' : '', 1200);
       }
+      markDirty('route');
       break;
 
     case 'no_agent_response':
       setVoiceStatus(state.recording ? 'Audio Live conectado.' : '', 0);
       break;
 
-    case 'agent_turn_start':
+    case 'agent_turn_start': {
       state.speakingAgentId = message.agentId;
       state.voiceStatus = '';
       state.agentStartedAt.set(`${message.turnId}-${message.agentId}`, performance.now());
-      state.turns.push({
+      const turn: TranscriptTurn = {
         id: `${message.turnId}-${message.agentId}`,
         kind: 'agent',
         speaker: agentName(message.agentId),
         agentId: message.agentId,
         text: ''
-      });
+      };
+      state.turns.push(turn);
+      transcriptAppend(turn);
+      markDirty('agents', 'voice');
       break;
+    }
 
     case 'agent_transcript_delta':
       appendAgentText(message.turnId, message.agentId, message.delta);
@@ -620,6 +680,7 @@ async function handleServerMessage(message: MeetingMessage) {
       } else {
         setAgentText(message.turnId, message.agentId, message.text);
       }
+      markDirty('agents', 'keys');
       break;
 
     case 'agent_silence':
@@ -633,10 +694,12 @@ async function handleServerMessage(message: MeetingMessage) {
     case 'audio_listening_stop':
       state.voiceStatus = '';
       state.activeAudioTranscript = '';
+      markDirty('voice');
       break;
 
     case 'user_audio_transcript_delta':
       state.activeAudioTranscript = message.text;
+      markDirty('voice');
       break;
 
     case 'user_audio_turn_final':
@@ -649,15 +712,18 @@ async function handleServerMessage(message: MeetingMessage) {
           : message.source === 'client'
             ? 'Audio reconocido.'
             : 'Audio Live transcripto.';
+      markDirty('voice');
       break;
 
     case 'audio_transcription_status':
       state.voiceStatus = message.message;
+      markDirty('voice');
       break;
 
     case 'audio_transcription_empty':
       state.voiceStatus = '';
       upsertAlert('audio-empty', 'Audio', message.message, 'error', 2600);
+      markDirty('voice');
       break;
 
     case 'api_rotation_start':
@@ -678,16 +744,20 @@ async function handleServerMessage(message: MeetingMessage) {
 
     case 'health':
       state.keyStatus = message.keys || [];
+      markDirty('keys');
       break;
 
-    case 'error':
-      state.turns.push({
+    case 'error': {
+      const turn: TranscriptTurn = {
         id: crypto.randomUUID(),
         kind: 'system',
         speaker: 'Error',
         text: `${message.message} ${message.detail || ''}`.trim()
-      });
+      };
+      state.turns.push(turn);
+      transcriptAppend(turn);
       break;
+    }
   }
 }
 
@@ -763,73 +833,231 @@ function traceIncomingMessage(message: MeetingMessage) {
   trace('server_message_received', { ...message });
 }
 
+// ── Render por regiones ─────────────────────────────────────────────────
+// El shell se monta UNA vez; cada región se repinta solo cuando su dato
+// cambió. El transcript es append-only con nodos vivos (los deltas de
+// streaming mutan un text node, nunca innerHTML). Los inputs (composer,
+// drawer, tareas) son estáticos: el foco y lo tipeado sobreviven a
+// cualquier mensaje del servidor.
+
+type Region =
+  | 'connection'
+  | 'alerts'
+  | 'agents'
+  | 'route'
+  | 'keys'
+  | 'voice'
+  | 'micTuning'
+  | 'micMeter'
+  | 'scenario';
+
+const dirtyRegions = new Set<Region>();
+
+function markDirty(...regions: Region[]) {
+  for (const region of regions) {
+    dirtyRegions.add(region);
+  }
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(flushRender);
+}
+
+// Compat con los caminos que antes re-renderizaban toda la app.
 function render() {
+  markDirty('connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario');
+}
+
+function flushRender() {
+  renderQueued = false;
+  const regions = [...dirtyRegions];
+  dirtyRegions.clear();
+  for (const region of regions) {
+    REGION_RENDERERS[region]();
+  }
+}
+
+function byId<T extends HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) {
+    throw new Error(`Falta el nodo #${id} del shell.`);
+  }
+  return el as T;
+}
+
+const REGION_RENDERERS: Record<Region, () => void> = {
+  connection() {
+    const el = byId<HTMLDivElement>('connectionStatus');
+    el.className = `status ${state.connected ? 'is-on' : ''}`;
+    el.innerHTML = `<span></span>${state.connected ? 'Conectado' : 'Reconectando'}`;
+  },
+  alerts() {
+    byId('alerts').innerHTML = renderAlerts();
+  },
+  agents() {
+    byId('agents').innerHTML = state.agents.map(renderAgent).join('');
+  },
+  route() {
+    byId('routePanel').innerHTML = renderRoute();
+  },
+  keys() {
+    byId('keysPanel').innerHTML = renderKeys();
+  },
+  voice() {
+    const mic = byId<HTMLButtonElement>('micButton');
+    mic.className = `icon-button ${state.recording ? 'danger' : ''}`;
+    mic.title = state.recording ? 'Detener voz' : 'Iniciar voz';
+    mic.setAttribute('aria-label', mic.title);
+    mic.innerHTML = state.recording ? pauseIcon() : micIcon();
+    byId('speechTitle').textContent = state.recording ? 'Conversacion activa' : 'Audio Live';
+    byId('speechStatus').textContent = state.activeAudioTranscript || state.voiceStatus || speechSupportText();
+    byId<HTMLButtonElement>('sendButton').disabled = !state.connected;
+  },
+  micTuning() {
+    byId('micTuning').innerHTML = renderAudioTuning();
+  },
+  micMeter() {
+    const meter = document.querySelector<HTMLElement>('#micTuning .meter');
+    if (!meter) return;
+    const thresholds = micThresholds(state.micSettings);
+    meter.style.setProperty('--level', `${Math.round(Math.min(1, state.micMeter.level / 0.16) * 100)}%`);
+    meter.style.setProperty('--gate', `${Math.round(Math.min(1, thresholds.startThreshold / 0.16) * 100)}%`);
+    const headLabel = document.querySelector<HTMLElement>('#micTuning .audio-tuning-head span');
+    if (headLabel) {
+      headLabel.textContent = state.micMeter.speaking ? 'voz activa' : 'en espera';
+    }
+  },
+  scenario() {
+    byId('scenarioName').textContent = state.scenario?.name || 'Reunión en vivo';
+    const input = byId<HTMLInputElement>('scenarioInput');
+    if (document.activeElement !== input) {
+      input.value = state.scenario?.text || '';
+    }
+  }
+};
+
+// ── Transcript append-only ──────────────────────────────────────────────
+
+const transcriptNodes = new Map<string, { article: HTMLElement; text: HTMLParagraphElement }>();
+
+function isNearBottom(el: HTMLElement) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+}
+
+function transcriptAppend(turn: TranscriptTurn) {
+  const container = byId<HTMLDivElement>('transcript');
+  const stick = isNearBottom(container);
+  const article = document.createElement('article');
+  article.className = `turn ${turn.kind}`;
+  const color = turn.agentId ? state.agents.find((agent) => agent.id === turn.agentId)?.color : undefined;
+  if (color) {
+    article.style.setProperty('--agent-color', color);
+  }
+  const speaker = document.createElement('div');
+  speaker.className = 'speaker';
+  speaker.textContent = turn.speaker;
+  const text = document.createElement('p');
+  text.textContent = turn.text || '...';
+  article.append(speaker, text);
+  container.append(article);
+  transcriptNodes.set(turn.id, { article, text });
+  if (stick) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function transcriptSetText(id: string, value: string) {
+  const node = transcriptNodes.get(id);
+  if (!node) return;
+  const container = byId<HTMLDivElement>('transcript');
+  const stick = isNearBottom(container);
+  node.text.textContent = value || '...';
+  if (stick) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function transcriptRemove(id: string) {
+  transcriptNodes.get(id)?.article.remove();
+  transcriptNodes.delete(id);
+}
+
+// Reconstruye el DOM del transcript desde state.turns (reset / resume).
+function transcriptReset() {
+  transcriptNodes.clear();
+  byId<HTMLDivElement>('transcript').innerHTML = '';
+  for (const turn of state.turns) {
+    transcriptAppend(turn);
+  }
+}
+
+// ── Shell estático + delegación de eventos ──────────────────────────────
+
+function mountShell() {
   app.innerHTML = `
     <main class="shell">
       <section class="workspace">
         <header class="topbar">
           <div>
             <div class="eyebrow">Mesa de trabajo</div>
-            <h1>Reunión en vivo</h1>
+            <h1 id="scenarioName">Reunión en vivo</h1>
           </div>
           <div style="display: flex; align-items: center; gap: 14px;">
-            <button class="btn-sumar" id="btnSumarColaborador" type="button">
+            <button class="text-button" data-action="open-meetings" type="button">Reuniones</button>
+            <button class="btn-sumar" data-action="open-spawn" type="button">
               <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
               <span>Sumar al Equipo</span>
             </button>
-            <div class="status ${state.connected ? 'is-on' : ''}">
-              <span></span>${state.connected ? 'Conectado' : 'Reconectando'}
-            </div>
+            <div class="status" id="connectionStatus"><span></span>Reconectando</div>
           </div>
         </header>
 
-        ${renderAlerts()}
+        <form id="scenarioForm" class="scenario-bar">
+          <label for="scenarioInput">Contexto</label>
+          <input type="text" id="scenarioInput" placeholder="Objetivo o contexto de esta reunión..." />
+          <button class="text-button" type="submit">Guardar</button>
+        </form>
 
-        <section class="agents" aria-label="Colaboradores en la mesa">
-          ${state.agents.map(renderAgent).join('')}
-        </section>
+        <div id="alerts"></div>
+
+        <section class="agents" id="agents" aria-label="Colaboradores en la mesa"></section>
 
         <section class="meeting">
-          <div class="transcript" id="transcript" aria-live="polite">
-            ${state.turns.map(renderTurn).join('')}
-          </div>
+          <div class="transcript" id="transcript" aria-live="polite"></div>
           <aside class="protocol">
             <h2>Orquestacion</h2>
-            ${renderRoute()}
-            ${renderKeys()}
+            <div id="routePanel"></div>
+            <div id="keysPanel"></div>
           </aside>
         </section>
 
         <section class="composer">
           <div class="speech">
-            <button class="icon-button ${state.recording ? 'danger' : ''}" id="micButton" title="${state.recording ? 'Detener voz' : 'Iniciar voz'}" aria-label="${state.recording ? 'Detener voz' : 'Iniciar voz'}">
-              ${state.recording ? pauseIcon() : micIcon()}
-            </button>
+            <button class="icon-button" id="micButton" data-action="toggle-mic" type="button" title="Iniciar voz" aria-label="Iniciar voz">${micIcon()}</button>
             <div class="speech-copy">
-              <strong>${state.recording ? 'Conversacion activa' : 'Audio Live'}</strong>
-              <span>${state.activeAudioTranscript || state.voiceStatus || speechSupportText()}</span>
+              <strong id="speechTitle">Audio Live</strong>
+              <span id="speechStatus">${escapeHtml(speechSupportText())}</span>
             </div>
           </div>
           <form id="turnForm" class="turn-form">
-            <textarea id="turnInput" rows="2" placeholder="Di o escribe: revisemos una arquitectura con un modelo de optimizacion...">${escapeHtml(state.manualText)}</textarea>
-            <button class="send-button" type="submit" ${state.connected ? '' : 'disabled'}>
+            <textarea id="turnInput" rows="2" placeholder="Di o escribe: revisemos una arquitectura con un modelo de optimizacion..."></textarea>
+            <button class="send-button" id="sendButton" type="submit" disabled>
               ${sendIcon()}<span>Enviar</span>
             </button>
           </form>
-          ${renderAudioTuning()}
+          <div id="micTuning"></div>
           <div class="controls">
-            <button class="text-button" id="resetButton" type="button">Reiniciar reunion</button>
-            <button class="text-button" id="healthButton" type="button">Estado de claves</button>
+            <button class="text-button" data-action="reset" type="button">Reiniciar reunion</button>
+            <button class="text-button" data-action="health" type="button">Estado de claves</button>
           </div>
         </section>
       </section>
     </main>
 
-    <div class="dialog-overlay ${state.isSpawnOpen ? 'is-open' : ''}"></div>
-    <div class="dialog-content">
+    <div class="dialog-overlay" id="spawnOverlay" data-action="close-spawn"></div>
+    <div class="dialog-content" id="spawnDialog">
       <div class="dialog-header">
-        <h2>Sumar al Equipo</h2>
-        <button class="dialog-close-btn" aria-label="Cerrar">
+        <h2 id="spawnDialogTitle">Sumar al Equipo</h2>
+        <button class="dialog-close-btn" data-action="close-spawn" type="button" aria-label="Cerrar">
           <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </div>
@@ -839,29 +1067,26 @@ function render() {
             <label for="spawnName">Nombre</label>
             <input type="text" id="spawnName" class="form-control" placeholder="Ej. Carlos" required />
           </div>
-          
           <div class="form-group">
             <label for="spawnTitle">Rol / Especialidad</label>
             <input type="text" id="spawnTitle" class="form-control" placeholder="Ej. Especialista en Seguridad" required />
           </div>
-          
           <div class="form-group">
             <label>Color de Firma</label>
-            <div class="color-picker-grid">
-              ${[
-                '#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#344e41', '#5c5470'
-              ].map(color => `
-                <button type="button" class="color-option ${state.selectedSpawnColor === color ? 'is-selected' : ''}" 
-                  style="background: ${color};" data-color="${color}"></button>
+            <div class="color-picker-grid" id="spawnColors">
+              ${['#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#344e41', '#5c5470'].map((color) => `
+                <button type="button" class="color-option" data-action="select-color" style="background: ${color};" data-color="${color}"></button>
               `).join('')}
             </div>
           </div>
-          
           <div class="form-group">
             <label for="spawnDomains">Áreas de Dominio (separadas por coma)</label>
-            <input type="text" id="spawnDomains" class="form-control" placeholder="Ej. seguridad, encriptacion, auditoria" required />
+            <input type="text" id="spawnDomains" class="form-control" placeholder="Ej. seguridad, encriptacion, auditoria" />
           </div>
-          
+          <div class="form-group">
+            <label for="spawnAliases">Alias para el ruteo (separados por coma)</label>
+            <input type="text" id="spawnAliases" class="form-control" placeholder="Ej. carlos, seguridad, seba" />
+          </div>
           <div class="form-group">
             <label for="spawnVoice">Voz en Vivo</label>
             <select id="spawnVoice" class="form-control">
@@ -872,208 +1097,327 @@ function render() {
               <option value="Kore">Hembra Suave (Kore)</option>
             </select>
           </div>
-          
           <div class="form-group">
             <label for="spawnStyle">Estilo de Habla</label>
             <textarea id="spawnStyle" class="form-control" placeholder="Ej. Preciso, formal y enfocado en la mitigación de riesgos."></textarea>
           </div>
-
           <div class="form-group">
+            <label for="spawnBoundaries">Límites (uno por línea)</label>
+            <textarea id="spawnBoundaries" class="form-control" placeholder="Ej. No decide precios sin validar con el equipo"></textarea>
+          </div>
+          <div class="form-group" id="spawnTasksGroup">
             <label for="spawnTasks">Tareas Iniciales (una por línea)</label>
             <textarea id="spawnTasks" class="form-control" placeholder="Ej. Validar cifrado en endpoints&#10;Revisar accesos de base de datos"></textarea>
           </div>
         </div>
         <div class="dialog-footer">
-          <button type="button" class="btn-secondary" id="btnCancelarSpawn">Cancelar</button>
-          <button type="submit" class="btn-primary">Sumar al Equipo</button>
+          <button type="button" class="btn-secondary" data-action="close-spawn">Cancelar</button>
+          <button type="submit" class="btn-primary" id="spawnSubmitLabel">Sumar al Equipo</button>
         </div>
       </form>
     </div>
+
+    <div class="dialog-overlay" id="meetingsOverlay" data-action="close-meetings"></div>
+    <div class="dialog-content" id="meetingsDialog">
+      <div class="dialog-header">
+        <h2>Reuniones</h2>
+        <button class="dialog-close-btn" data-action="close-meetings" type="button" aria-label="Cerrar">
+          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+      <div class="dialog-body" id="meetingsList">
+        <p class="muted">Cargando reuniones...</p>
+      </div>
+    </div>
   `;
 
-  app.querySelector<HTMLFormElement>('#turnForm')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    submitTurn();
-  });
-
-  app.querySelector<HTMLTextAreaElement>('#turnInput')?.addEventListener('input', (event) => {
-    state.manualText = (event.target as HTMLTextAreaElement).value;
+  const turnInput = byId<HTMLTextAreaElement>('turnInput');
+  turnInput.addEventListener('input', () => {
+    state.manualText = turnInput.value;
     window.clearTimeout(inputTraceTimer);
     inputTraceTimer = window.setTimeout(() => {
-      trace('manual_input_changed', {
-        length: state.manualText.length,
-        text: state.manualText
-      });
+      trace('manual_input_changed', { length: state.manualText.length, text: state.manualText });
     }, 450);
   });
-
-  app.querySelector<HTMLButtonElement>('#micButton')?.addEventListener('click', toggleLiveAudio);
-  app.querySelector<HTMLButtonElement>('#resetButton')?.addEventListener('click', () => {
-    trace('reset_clicked');
-    send({ type: 'reset' });
-  });
-  app.querySelector<HTMLButtonElement>('#healthButton')?.addEventListener('click', () => {
-    trace('health_clicked');
-    send({ type: 'health' });
-  });
-  app.querySelectorAll<HTMLInputElement>('[data-mic-setting]').forEach((input) => {
-    input.addEventListener('input', () => {
-      updateMicSetting(input.dataset.micSetting || '', Number(input.value));
-    });
-  });
-  app.querySelectorAll<HTMLButtonElement>('[data-mic-preset]').forEach((button) => {
-    button.addEventListener('click', () => {
-      applyMicPreset(button.dataset.micPreset || 'normal');
-    });
-  });
-
-  // Eventos de Gestión de Tareas y Spawn
-  app.querySelector('#btnSumarColaborador')?.addEventListener('click', () => {
-    state.isSpawnOpen = true;
-    app.querySelector('.dialog-overlay')?.classList.add('is-open');
-  });
-
-  app.querySelectorAll('.dialog-close-btn, #btnCancelarSpawn, .dialog-overlay').forEach(el => {
-    el.addEventListener('click', () => {
-      state.isSpawnOpen = false;
-      app.querySelector('.dialog-overlay')?.classList.remove('is-open');
-    });
-  });
-
-  app.querySelectorAll('.color-option').forEach(btn => {
-    btn.addEventListener('click', () => {
-      app.querySelectorAll('.color-option').forEach(b => b.classList.remove('is-selected'));
-      btn.classList.add('is-selected');
-      state.selectedSpawnColor = (btn as HTMLButtonElement).dataset.color || '#2f6f73';
-    });
-  });
-
-  app.querySelector('#spawnForm')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const form = event.target as HTMLFormElement;
-    const name = (form.querySelector('#spawnName') as HTMLInputElement).value.trim();
-    const title = (form.querySelector('#spawnTitle') as HTMLInputElement).value.trim();
-    const domainsStr = (form.querySelector('#spawnDomains') as HTMLInputElement).value.trim();
-    const voice = (form.querySelector('#spawnVoice') as HTMLSelectElement).value;
-    const style = (form.querySelector('#spawnStyle') as HTMLTextAreaElement).value.trim();
-    const tasksStr = (form.querySelector('#spawnTasks') as HTMLTextAreaElement).value.trim();
-
-    if (!name || !title) return;
-
-    const initialTasks = tasksStr ? tasksStr.split('\n').map(t => t.trim()).filter(Boolean) : [];
-    const domains = domainsStr ? domainsStr.split(',').map(d => d.trim()).filter(Boolean) : [];
-
-    const agentPayload = {
-      name,
-      title,
-      color: state.selectedSpawnColor,
-      aliases: [name.toLowerCase()],
-      domains,
-      boundaries: [],
-      style,
-      voice,
-      initialTasks
-    };
-
-    send({
-      type: 'spawn_agent',
-      agent: agentPayload
-    });
-
-    state.isSpawnOpen = false;
-    app.querySelector('.dialog-overlay')?.classList.remove('is-open');
-    form.reset();
-  });
-
-  app.querySelectorAll('.task-checkbox').forEach(input => {
-    input.addEventListener('change', (event) => {
-      const checkbox = event.target as HTMLInputElement;
-      const agentId = checkbox.dataset.agentId;
-      const taskId = checkbox.dataset.taskId;
-      if (agentId && taskId) {
-        send({
-          type: 'toggle_task',
-          agentId,
-          taskId,
-          completed: checkbox.checked
-        });
-      }
-    });
-  });
-
-  app.querySelectorAll('.task-delete-btn').forEach(btn => {
-    btn.addEventListener('click', (event) => {
-      let target = event.target as HTMLElement;
-      while (target && !target.dataset.taskId) {
-        target = target.parentElement as HTMLElement;
-      }
-      if (target) {
-        const agentId = target.dataset.agentId;
-        const taskId = target.dataset.taskId;
-        if (agentId && taskId) {
-          send({
-            type: 'delete_task',
-            agentId,
-            taskId
-          });
-        }
-      }
-    });
-  });
-
-  app.querySelectorAll('.task-add-form').forEach(form => {
-    form.addEventListener('submit', (event) => {
+  turnInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const formEl = event.target as HTMLFormElement;
-      const agentId = formEl.dataset.agentId;
-      const input = formEl.querySelector('.task-add-input') as HTMLInputElement;
-      const text = input.value.trim();
-      if (agentId && text) {
-        send({
-          type: 'add_task',
-          agentId,
-          text
-        });
-        input.value = '';
-      }
-    });
+      submitTurn();
+    }
   });
 
-  const transcript = app.querySelector<HTMLDivElement>('#transcript');
-  if (transcript) {
-    transcript.scrollTop = transcript.scrollHeight;
+  // Delegación: un listener por tipo de evento sobre contenedores estables.
+  document.addEventListener('click', handleDelegatedClick);
+  document.addEventListener('submit', handleDelegatedSubmit);
+  document.addEventListener('change', handleDelegatedChange);
+  document.addEventListener('input', handleDelegatedInput);
+}
+
+function handleDelegatedClick(event: Event) {
+  const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+
+  switch (action) {
+    case 'toggle-mic':
+      void toggleLiveAudio();
+      break;
+    case 'reset':
+      trace('reset_clicked');
+      send({ type: 'reset' });
+      break;
+    case 'health':
+      trace('health_clicked');
+      send({ type: 'health' });
+      break;
+    case 'open-spawn':
+      openAgentDialog(null);
+      break;
+    case 'close-spawn':
+      closeAgentDialog();
+      break;
+    case 'select-color': {
+      document.querySelectorAll('#spawnColors .color-option').forEach((el) => el.classList.remove('is-selected'));
+      target.classList.add('is-selected');
+      state.selectedSpawnColor = target.dataset.color || '#2f6f73';
+      break;
+    }
+    case 'edit-agent':
+      openAgentDialog(target.dataset.agentId || null);
+      break;
+    case 'archive-agent':
+      if (target.dataset.agentId && window.confirm('¿Archivar este agente? Sale de la mesa (su historial se conserva).')) {
+        send({ type: 'archive_agent', agentId: target.dataset.agentId });
+      }
+      break;
+    case 'toggle-agent-enabled': {
+      const agent = state.agents.find((item) => item.id === target.dataset.agentId);
+      if (agent) {
+        send({ type: 'set_agent_enabled', agentId: agent.id, enabled: agent.enabled === false });
+      }
+      break;
+    }
+    case 'delete-task': {
+      const agentId = target.dataset.agentId;
+      const taskId = target.dataset.taskId;
+      if (agentId && taskId) {
+        send({ type: 'delete_task', agentId, taskId });
+      }
+      break;
+    }
+    case 'open-meetings':
+      void openMeetingsDrawer();
+      break;
+    case 'close-meetings':
+      byId('meetingsOverlay').classList.remove('is-open');
+      break;
+    case 'resume-meeting': {
+      const meetingId = target.dataset.meetingId;
+      if (meetingId) {
+        saveStoredMeetingId(meetingId);
+        byId('meetingsOverlay').classList.remove('is-open');
+        state.turns = [];
+        transcriptReset();
+        state.socket?.close();
+      }
+      break;
+    }
   }
 }
 
-function scheduleRender() {
-  if (renderQueued) return;
-  renderQueued = true;
-  requestAnimationFrame(() => {
-    renderQueued = false;
-    render();
+function handleDelegatedSubmit(event: Event) {
+  const form = event.target as HTMLFormElement;
+
+  if (form.id === 'turnForm') {
+    event.preventDefault();
+    submitTurn();
+    return;
+  }
+
+  if (form.id === 'scenarioForm') {
+    event.preventDefault();
+    const text = byId<HTMLInputElement>('scenarioInput').value.trim();
+    send({ type: 'set_scenario', text });
+    return;
+  }
+
+  if (form.id === 'spawnForm') {
+    event.preventDefault();
+    submitAgentDialog();
+    return;
+  }
+
+  if (form.classList.contains('task-add-form')) {
+    event.preventDefault();
+    const agentId = form.dataset.agentId;
+    const input = form.querySelector<HTMLInputElement>('.task-add-input');
+    const text = input?.value.trim();
+    if (agentId && text) {
+      send({ type: 'add_task', agentId, text });
+      if (input) input.value = '';
+    }
+  }
+}
+
+function handleDelegatedChange(event: Event) {
+  const checkbox = event.target as HTMLInputElement;
+  if (checkbox.classList?.contains('task-checkbox')) {
+    const agentId = checkbox.dataset.agentId;
+    const taskId = checkbox.dataset.taskId;
+    if (agentId && taskId) {
+      send({ type: 'toggle_task', agentId, taskId, completed: checkbox.checked });
+    }
+    return;
+  }
+  if (checkbox.id === 'asrLocale') {
+    saveAsrLocale((checkbox as unknown as HTMLSelectElement).value);
+  }
+}
+
+function handleDelegatedInput(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.dataset?.micSetting) {
+    updateMicSetting(input.dataset.micSetting, Number(input.value));
+  }
+}
+
+// ── Drawer de agente (crear/editar) ─────────────────────────────────────
+
+function openAgentDialog(agentId: string | null) {
+  state.editingAgentId = agentId;
+  const agent = agentId ? state.agents.find((item) => item.id === agentId) : null;
+
+  byId('spawnDialogTitle').textContent = agent ? `Editar a ${agent.name}` : 'Sumar al Equipo';
+  byId('spawnSubmitLabel').textContent = agent ? 'Guardar cambios' : 'Sumar al Equipo';
+  byId<HTMLInputElement>('spawnName').value = agent?.name || '';
+  byId<HTMLInputElement>('spawnTitle').value = agent?.title || '';
+  byId<HTMLInputElement>('spawnDomains').value = agent ? agent.domains.join(', ') : '';
+  byId<HTMLInputElement>('spawnAliases').value = agent ? agent.aliases.join(', ') : '';
+  byId<HTMLSelectElement>('spawnVoice').value = agent?.voice || 'Aoede';
+  byId<HTMLTextAreaElement>('spawnStyle').value = agent?.style || '';
+  byId<HTMLTextAreaElement>('spawnBoundaries').value = agent ? agent.boundaries.join('\n') : '';
+  byId<HTMLTextAreaElement>('spawnTasks').value = '';
+  byId('spawnTasksGroup').style.display = agent ? 'none' : '';
+
+  state.selectedSpawnColor = agent?.color || '#2f6f73';
+  document.querySelectorAll<HTMLElement>('#spawnColors .color-option').forEach((el) => {
+    el.classList.toggle('is-selected', el.dataset.color === state.selectedSpawnColor);
   });
+
+  byId('spawnOverlay').classList.add('is-open');
+}
+
+function closeAgentDialog() {
+  state.editingAgentId = null;
+  byId('spawnOverlay').classList.remove('is-open');
+  byId<HTMLFormElement>('spawnForm').reset();
+}
+
+function submitAgentDialog() {
+  const name = byId<HTMLInputElement>('spawnName').value.trim();
+  const title = byId<HTMLInputElement>('spawnTitle').value.trim();
+  const domains = byId<HTMLInputElement>('spawnDomains').value.split(',').map((s) => s.trim()).filter(Boolean);
+  const aliases = byId<HTMLInputElement>('spawnAliases').value.split(',').map((s) => s.trim()).filter(Boolean);
+  const voice = byId<HTMLSelectElement>('spawnVoice').value;
+  const style = byId<HTMLTextAreaElement>('spawnStyle').value.trim();
+  const boundaries = byId<HTMLTextAreaElement>('spawnBoundaries').value.split('\n').map((s) => s.trim()).filter(Boolean);
+
+  if (!name || !title) return;
+
+  if (state.editingAgentId) {
+    send({
+      type: 'update_agent',
+      agentId: state.editingAgentId,
+      patch: { name, title, color: state.selectedSpawnColor, voice, style, domains, aliases, boundaries }
+    });
+  } else {
+    const tasksStr = byId<HTMLTextAreaElement>('spawnTasks').value.trim();
+    const initialTasks = tasksStr ? tasksStr.split('\n').map((t) => t.trim()).filter(Boolean) : [];
+    send({
+      type: 'spawn_agent',
+      agent: {
+        name,
+        title,
+        color: state.selectedSpawnColor,
+        aliases: aliases.length ? aliases : [name.toLowerCase()],
+        domains,
+        boundaries,
+        style,
+        voice,
+        initialTasks
+      }
+    });
+  }
+
+  closeAgentDialog();
+}
+
+// ── Drawer de reuniones ─────────────────────────────────────────────────
+
+async function openMeetingsDrawer() {
+  byId('meetingsOverlay').classList.add('is-open');
+  const list = byId('meetingsList');
+  list.innerHTML = '<p class="muted">Cargando reuniones...</p>';
+  try {
+    const response = await fetch(`${backendHttpBase()}/api/meetings`);
+    const data = await response.json() as { meetings: Array<{ id: string; title: string | null; scenario_name: string | null; status: string; last_active_at: string; turn_count: number; summary: string | null }> };
+    if (!data.meetings.length) {
+      list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas.</p>';
+      return;
+    }
+    list.innerHTML = data.meetings.map((meeting) => `
+      <div class="meeting-row ${meeting.id === state.meetingId ? 'is-current' : ''}">
+        <div class="meeting-row-info">
+          <strong>${escapeHtml(meeting.title || meeting.scenario_name || 'Reunión sin título')}</strong>
+          <span>${new Date(meeting.last_active_at).toLocaleString()} · ${meeting.turn_count} turnos · ${meeting.status === 'active' ? 'activa' : 'cerrada'}</span>
+          ${meeting.summary ? `<small>${escapeHtml(meeting.summary.slice(0, 140))}</small>` : ''}
+        </div>
+        ${meeting.id === state.meetingId
+          ? '<span class="muted">actual</span>'
+          : `<button class="text-button" data-action="resume-meeting" data-meeting-id="${meeting.id}" type="button">Retomar</button>`}
+      </div>
+    `).join('');
+  } catch {
+    list.innerHTML = '<p class="muted">No pude cargar las reuniones.</p>';
+  }
 }
 
 function renderAgent(agent: Agent) {
   const speaking = state.speakingAgentId === agent.id;
+  const disabled = agent.enabled === false;
   const tasks = agent.tasks || [];
   const total = tasks.length;
   const completed = tasks.filter(t => t.completed).length;
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return `
-    <article class="agent ${speaking ? 'is-speaking' : ''}" style="--agent-color: ${agent.color}">
+    <article class="agent ${speaking ? 'is-speaking' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
       <div class="agent-main">
         <div class="agent-avatar">${escapeHtml(agent.name.slice(0, 1))}</div>
         <div class="agent-body">
           <div class="agent-head">
             <h2>${escapeHtml(agent.name)}</h2>
-            <span>${speaking ? 'Hablando' : escapeHtml(agent.title)}</span>
+            <span>${disabled ? 'En pausa' : speaking ? 'Hablando' : escapeHtml(agent.title)}</span>
           </div>
           <p>${escapeHtml(agent.domains.slice(0, 5).join(' · '))}</p>
         </div>
+        <div class="agent-actions">
+          <button class="agent-action-btn" type="button" data-action="edit-agent" data-agent-id="${agent.id}" title="Editar agente">
+            <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+          </button>
+          <button class="agent-action-btn" type="button" data-action="toggle-agent-enabled" data-agent-id="${agent.id}" title="${disabled ? 'Reactivar en esta reunión' : 'Pausar en esta reunión'}">
+            ${disabled
+              ? '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'
+              : '<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'}
+          </button>
+          ${agent.origin === 'custom'
+            ? `<button class="agent-action-btn danger" type="button" data-action="archive-agent" data-agent-id="${agent.id}" title="Archivar agente">
+                <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              </button>`
+            : ''}
+        </div>
       </div>
-      
+
       <div class="agent-tasks-container">
         <div class="tasks-progress-wrapper">
           <span class="tasks-progress-label">Tareas: ${completed}/${total}</span>
@@ -1152,6 +1496,12 @@ function renderAudioTuning() {
         ${renderRangeControl('Cierre', 'endSilenceMs', settings.endSilenceMs, 360, 1400, 40, `${settings.endSilenceMs} ms`)}
         ${renderRangeControl('Mínimo voz', 'minSpeechMs', settings.minSpeechMs, 240, 1200, 40, `${settings.minSpeechMs} ms`)}
       </div>
+      <label class="range-control asr-locale">
+        <span><strong>Idioma ASR</strong><small>reconocimiento local</small></span>
+        <select id="asrLocale">
+          ${ASR_LOCALES.map((locale) => `<option value="${locale}" ${loadAsrLocale() === locale ? 'selected' : ''}>${locale}</option>`).join('')}
+        </select>
+      </label>
     </section>
   `;
 }
@@ -1222,7 +1572,7 @@ function submitTurn() {
   }
   trace('manual_turn_submitted', { text, length: text.length });
   state.manualText = '';
-  state.interimSpeech = '';
+  byId<HTMLTextAreaElement>('turnInput').value = '';
   send({ type: 'user_turn', text });
 }
 
@@ -1246,7 +1596,7 @@ function updateMicSetting(setting: string, value: number) {
     settings: state.micSettings,
     thresholds: micThresholds(state.micSettings)
   });
-  render();
+  markDirty('micTuning', 'micMeter');
 }
 
 function applyMicPreset(preset: string) {
@@ -1262,7 +1612,7 @@ function applyMicPreset(preset: string) {
     settings: state.micSettings,
     thresholds: micThresholds(state.micSettings)
   });
-  render();
+  markDirty('micTuning', 'micMeter');
 }
 
 function send(payload: unknown) {
@@ -1319,13 +1669,14 @@ function upsertAlert(id: string, scope: string, message: string, tone: StatusAle
   } else {
     state.alerts.push({ id, scope, message, tone });
   }
+  markDirty('alerts');
 
   if (timeout) {
     const alert = state.alerts.find((item) => item.id === id);
     if (alert) {
       alert.timeout = window.setTimeout(() => {
         state.alerts = state.alerts.filter((item) => item.id !== id);
-        render();
+        markDirty('alerts');
       }, timeout);
     }
   }
@@ -1387,7 +1738,7 @@ async function toggleLiveAudio() {
       state.micMeter = meter;
       window.clearTimeout(micMeterRenderTimer);
       micMeterRenderTimer = window.setTimeout(() => {
-        scheduleRender();
+        markDirty('micMeter');
       }, 80);
     });
     await state.microphone.start();
@@ -1409,6 +1760,7 @@ function appendAgentText(turnId: string, agentId: string, delta: string) {
   const turn = state.turns.find((item) => item.id === id);
   if (turn) {
     turn.text = `${turn.text}${delta}`;
+    transcriptSetText(id, turn.text);
   }
 }
 
@@ -1417,12 +1769,14 @@ function setAgentText(turnId: string, agentId: string, text: string) {
   const turn = state.turns.find((item) => item.id === id);
   if (turn) {
     turn.text = text;
+    transcriptSetText(id, text);
   }
 }
 
 function removeAgentTurn(turnId: string, agentId: string) {
   const id = `${turnId}-${agentId}`;
   state.turns = state.turns.filter((turn) => turn.id !== id);
+  transcriptRemove(id);
 }
 
 function agentName(agentId: string) {
@@ -1445,7 +1799,7 @@ function setVoiceStatus(message: string, timeoutMs = 0) {
   if (timeoutMs > 0) {
     voiceStatusTimer = window.setTimeout(() => {
       state.voiceStatus = state.recording ? 'Audio Live conectado.' : '';
-      render();
+      markDirty('voice');
     }, timeoutMs);
   }
 }
@@ -1632,3 +1986,13 @@ function pauseIcon() {
 function sendIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.7 20.3 22 12 3.7 3.7 3 10.2l10 1.8-10 1.8.7 6.5Z"/></svg>`;
 }
+
+// ── Bootstrap (al final: las regiones usan const no-hoisted) ────────────
+
+mountShell();
+render();
+connect();
+trace('page_loaded', {
+  userAgent: navigator.userAgent,
+  viewport: { width: window.innerWidth, height: window.innerHeight }
+});
