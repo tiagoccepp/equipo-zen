@@ -55,10 +55,20 @@ const TELEMETRY_MAX_EVENTS = 800;
 const TELEMETRY_TEXT_LIMIT = 4000;
 
 const app = express();
+const ALLOWED_ORIGINS = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+  }
+  res.setHeader('Vary', 'Origin');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
@@ -194,10 +204,16 @@ app.get('/vault', (_req, res) => {
 app.get('/api/vault/note', async (req, res) => {
   try {
     const relativePath = req.query.path;
-    if (!relativePath) return res.status(400).json({ error: 'path required' });
-    const fullPath = path.join(rootDir, relativePath);
-    const real = path.resolve(fullPath);
-    if (!real.startsWith(rootDir)) return res.status(403).json({ error: 'forbidden' });
+    if (!relativePath || typeof relativePath !== 'string') {
+      return res.status(400).json({ error: 'path required' });
+    }
+    const real = path.resolve(rootDir, relativePath);
+    const relative = path.relative(rootDir, real);
+    const escapesRoot = !relative || relative.startsWith('..') || path.isAbsolute(relative);
+    const hasHiddenSegment = relative.split(path.sep).some((segment) => segment.startsWith('.'));
+    if (escapesRoot || hasHiddenSegment || !real.endsWith('.md')) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
     const content = await fs.readFile(real, 'utf-8');
     res.json({ path: relativePath, content });
   } catch (err) {
@@ -2627,8 +2643,9 @@ wss.on('connection', (socket) => {
   socket.on('close', () => meeting.close());
 });
 
-server.listen(PORT, () => {
-  console.log(`Backend listo en http://127.0.0.1:${PORT}`);
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
+  console.log(`Backend listo en http://${HOST}:${PORT}`);
   if (!keyRing.hasKeys()) {
     console.log('Sin claves Gemini: la app usara respuestas simuladas hasta que configures .env.');
   }
