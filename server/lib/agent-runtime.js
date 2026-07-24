@@ -20,16 +20,12 @@ export class LiveAgentRuntime {
     this.meetingSession = meetingSession;
   }
 
+  // Devuelve { rawText, text, usedMock }: rawText conserva los tags
+  // [TAREA_*] aunque la respuesta hablada sea SILENCIO, para que la sesión
+  // siempre pueda parsear tareas antes de decidir el silencio.
   async respond(turn, emit) {
     if (!this.keyRing.hasKeys()) {
-      emit({
-        type: 'api_rotation_failed',
-        scope: this.name,
-        agentId: this.id,
-        message: 'No hay claves Gemini configuradas.'
-      });
-      emit({ type: 'agent_silence', reason: `${this.name} no pudo generar una respuesta real.` });
-      return emptyAgentResponse();
+      return this.respondWithMock(turn, emit);
     }
 
     let rawText = '';
@@ -46,18 +42,32 @@ export class LiveAgentRuntime {
       return emptyAgentResponse();
     }
 
-    if (!rawText || isSilenceResponse(stripTaskTags(rawText))) {
+    const spokenText = stripTaskTags(rawText);
+    if (!rawText || isSilenceResponse(spokenText)) {
       emit({ type: 'agent_silence', reason: `${this.name} declino responder por protocolo.` });
-      return emptyAgentResponse();
+      return { ...emptyAgentResponse(), rawText };
     }
 
-    const spokenText = stripTaskTags(rawText);
     if (spokenText) {
       emit({ type: 'agent_transcript_delta', delta: spokenText });
       void this.generateAudio(spokenText, emit);
     }
 
-    return { text: rawText, audioChunks: [], usedMock: false };
+    return { rawText, text: rawText, audioChunks: [], usedMock: false };
+  }
+
+  // Modo simulación sin claves: respuestas enlatadas por persona para poder
+  // probar toda la reunión (routing, turnos, tareas) sin consumir API.
+  respondWithMock(turn, emit) {
+    const domain = this.agent.domains?.[0] || 'mi área';
+    const text = turn.route?.greeting
+      ? `¡Buenas! Por acá ${this.name}, listo para arrancar. (modo simulación)`
+      : turn.isContextualFollowup
+        ? `Sumo desde ${domain}: lo veo bien encaminado, después lo afinamos. (modo simulación)`
+        : `Te sigo. Desde ${domain} lo veo viable; pasame el detalle y lo bajamos a tierra. (modo simulación)`;
+
+    emit({ type: 'agent_transcript_delta', delta: text });
+    return { rawText: text, text, audioChunks: [], usedMock: true };
   }
 
   async generateText(turn, emit) {
@@ -188,7 +198,7 @@ export class LiveAgentRuntime {
 }
 
 export function emptyAgentResponse() {
-  return { text: '', audioChunks: [], usedMock: false };
+  return { rawText: '', text: '', audioChunks: [], usedMock: false };
 }
 
 export function buildSystemInstruction(agent, session) {

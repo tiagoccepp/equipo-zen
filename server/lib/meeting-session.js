@@ -16,6 +16,9 @@ import { AgentRouter } from './router.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { LiveAudioTranscriberRuntime } from './transcriber.js';
+import { TurnQueue } from './turn-queue.js';
+
+const MAX_SESSION_AGENTS = 8;
 
 export class MeetingSession {
   constructor(socket, keyRingInstance) {
@@ -42,7 +45,7 @@ export class MeetingSession {
         new LiveAgentRuntime(agent, this.keyRing, this.memory, this)
       ])
     );
-    this.turnQueue = Promise.resolve();
+    this.turnQueue = new TurnQueue({ timeoutMs: 60000, maxPending: 10 });
     this.warmupStarted = false;
     telemetry.add({
       type: 'meeting_session_created',
@@ -123,7 +126,7 @@ export class MeetingSession {
     }
 
     if (message.type === 'audio_end') {
-      this.transcriber.endAudio({ transcriptHint: message.transcriptHint });
+      this.transcriber.endAudio({ closeStream: true, transcriptHint: message.transcriptHint });
       return;
     }
 
@@ -160,6 +163,14 @@ export class MeetingSession {
       const { name, title, color, aliases, domains, boundaries, style, voice, initialTasks } = message.agent || {};
       if (!name || !title) {
         this.send({ type: 'error', message: 'Faltan campos obligatorios para crear el agente.' });
+        return;
+      }
+      if (this.sessionAgents.length >= MAX_SESSION_AGENTS) {
+        this.send({ type: 'error', message: `La mesa está completa (máximo ${MAX_SESSION_AGENTS} agentes).` });
+        return;
+      }
+      if (this.sessionAgents.some((agent) => agent.name.toLowerCase() === name.toLowerCase())) {
+        this.send({ type: 'error', message: `Ya hay un agente llamado ${name} en la mesa.` });
         return;
       }
 
@@ -199,7 +210,7 @@ export class MeetingSession {
 
       this.broadcastAgentsUpdated();
 
-      const systemMsgId = crypto.randomUUID();
+      const systemMsgId = nanoid(8);
       this.memory.add('system', 'Orquestador', `Se ha unido ${name} (${title}) a la mesa de trabajo.`);
       this.send({
         type: 'user_turn_received',
@@ -381,12 +392,9 @@ export class MeetingSession {
 
   enqueueUserTurn(text, source) {
     const turnId = nanoid(8);
-    this.memory.add('user', 'Tu', text);
-    this.send({ type: 'user_turn_received', turnId, text, source });
-    this.logTelemetry('user_turn_enqueued', { turnId, source, text }, turnId);
-    this.turnQueue = this.turnQueue
-      .then(() => this.processUserTurn(turnId, text))
-      .catch((error) => {
+    const accepted = this.turnQueue.push(
+      () => this.processUserTurn(turnId, text),
+      (error) => {
         this.send({
           type: 'error',
           turnId,
@@ -398,7 +406,20 @@ export class MeetingSession {
           message: 'La orquestacion fallo en este turno.',
           detail: getErrorText(error)
         }, turnId);
+      }
+    );
+    if (!accepted) {
+      this.send({
+        type: 'error',
+        turnId,
+        message: 'Hay demasiados turnos en cola; esperá a que termine la ronda actual.'
       });
+      this.logTelemetry('turn_rejected_queue_full', { turnId, source }, turnId);
+      return;
+    }
+    this.memory.add('user', 'Tu', text);
+    this.send({ type: 'user_turn_received', turnId, text, source });
+    this.logTelemetry('user_turn_enqueued', { turnId, source, text }, turnId);
   }
 
   async routeUserTurn(turnId, text) {
@@ -577,8 +598,13 @@ export class MeetingSession {
       }, (event) => {
         this.send({ ...event, turnId, agentId: agent.id });
       });
+      // Las tareas se parsean SIEMPRE desde rawText: un "SILENCIO
+      // [TAREA_CREAR: x]" crea la tarea aunque el agente se calle.
+      if (response.rawText) {
+        const cleanedText = this.processAgentTaskCommands(agent.id, response.rawText);
+        response.text = response.text ? cleanedText : '';
+      }
       if (response.text) {
-        response.text = this.processAgentTaskCommands(agent.id, response.text);
         this.memory.add('agent', agent.name, response.text, agent.id);
         route.responses = [
           ...(route.responses || []),
@@ -653,8 +679,11 @@ export class MeetingSession {
         this.send({ ...event, turnId, agentId: agent.id });
       });
 
+      if (response.rawText) {
+        const cleanedText = this.processAgentTaskCommands(agent.id, response.rawText);
+        response.text = response.text ? cleanedText : '';
+      }
       if (response.text) {
-        response.text = this.processAgentTaskCommands(agent.id, response.text);
         this.memory.add('agent', agent.name, response.text, agent.id);
         route.responses = [
           ...(route.responses || []),

@@ -29,6 +29,9 @@ export class LiveAudioTranscriberRuntime {
 
   async prepareListening() {
     this.callbacks.emit({ type: 'audio_listening_start' });
+    if (!this.keyRing.hasKeys()) {
+      return;
+    }
     await this.ensureSession();
   }
 
@@ -39,6 +42,9 @@ export class LiveAudioTranscriberRuntime {
     this.fallbackInProgress = false;
     this.turnFinalized = false;
     this.callbacks.emit({ type: 'audio_listening_start' });
+    if (!this.keyRing.hasKeys()) {
+      return;
+    }
     await this.ensureSession();
   }
 
@@ -48,6 +54,11 @@ export class LiveAudioTranscriberRuntime {
     }
 
     this.captureAudioChunk(data);
+    // Sin claves no hay sesión Live: el turno se finaliza con el
+    // transcriptHint del reconocimiento del navegador (modo simulación).
+    if (!this.keyRing.hasKeys()) {
+      return;
+    }
     await this.ensureSession();
     try {
       this.session.sendRealtimeInput({
@@ -292,6 +303,15 @@ export class LiveAudioTranscriberRuntime {
 
   async finalizeWithBufferedAudio() {
     if (this.turnFinalized || this.fallbackInProgress || this.audioBytes < 1600) {
+      return;
+    }
+    if (!this.keyRing.hasKeys()) {
+      this.audioChunks = [];
+      this.audioBytes = 0;
+      this.callbacks.emit({
+        type: 'audio_transcription_empty',
+        message: 'Sin claves Gemini solo funciona el reconocimiento del navegador; probá de nuevo o escribí el turno.'
+      });
       return;
     }
     this.fallbackInProgress = true;

@@ -1,3 +1,6 @@
+// Limpia artefactos del modelo (fences, prefijo de nombre) SIN decidir
+// silencio: los tags [TAREA_*] se conservan para que el parser de tareas
+// corra incluso cuando la respuesta hablada es SILENCIO.
 export function cleanAgentText(value, agentName = '') {
   let text = String(value || '').trim();
   text = text.replace(/^```(?:json|text|markdown)?/i, '').replace(/```$/i, '').trim();
@@ -5,7 +8,7 @@ export function cleanAgentText(value, agentName = '') {
     text = text.replace(new RegExp(`^${escapeRegExp(agentName)}\\s*:\\s*`, 'i'), '').trim();
   }
   text = text.replace(/^(julio|tomasa)\s*:\s*/i, '').trim();
-  return isSilenceResponse(stripTaskTags(text)) ? '' : text;
+  return text;
 }
 
 export function stripTaskTags(value) {
@@ -40,13 +43,32 @@ export function isSilenceResponse(value) {
   return normalize(value) === 'silencio';
 }
 
+// El texto normalizado solo contiene letras, dígitos, espacios y '?', así
+// que los límites de palabra son espacio, '?', inicio y fin. Con esto
+// "sistema" ya no matchea dentro de "sistemática".
+export function includesTerm(text, term) {
+  const normalizedTerm = normalize(term);
+  if (!normalizedTerm) {
+    return false;
+  }
+  const pattern = new RegExp(`(?:^|[\\s?])${escapeRegExp(normalizedTerm)}(?=[\\s?]|$)`);
+  return pattern.test(text);
+}
+
 export function getMentionIndex(text, aliases) {
   let best = -1;
   for (const alias of aliases) {
     const normalizedAlias = normalize(alias);
-    const index = text.indexOf(normalizedAlias);
-    if (index >= 0 && (best === -1 || index < best)) {
-      best = index;
+    if (!normalizedAlias) {
+      continue;
+    }
+    const pattern = new RegExp(`(?:^|[\\s?])(${escapeRegExp(normalizedAlias)})(?=[\\s?]|$)`);
+    const match = pattern.exec(text);
+    if (match) {
+      const index = match.index + (match[0].length - match[1].length);
+      if (best === -1 || index < best) {
+        best = index;
+      }
     }
   }
   return best;

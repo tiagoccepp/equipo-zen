@@ -1,4 +1,21 @@
-import { escapeRegExp, getMentionIndex, isGreetingTurn, normalize } from './text.js';
+import { escapeRegExp, getMentionIndex, includesTerm, isGreetingTurn, normalize } from './text.js';
+
+// Frases que cierran el tema a cualquier longitud del enunciado.
+const CLOSING_PHRASES = /\b(ya entendi|queda claro|quedo claro|cambiemos de tema|pasemos a otra cosa|no sigas|dejemoslo ahi|tema cerrado)\b/;
+// Palabras sueltas que solo cierran si el enunciado es corto (≤ 3 palabras):
+// "¿qué API usamos para el dashboard?" no es un cierre.
+const CLOSING_SHORT_WORDS = /\b(ok|okay|listo|perfecto|entendido|sigamos|para|alto|gracias|dale)\b/;
+
+export function isClosingSignal(normalized) {
+  if (normalized.includes('?')) {
+    return false;
+  }
+  if (CLOSING_PHRASES.test(normalized)) {
+    return true;
+  }
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  return wordCount > 0 && wordCount <= 3 && CLOSING_SHORT_WORDS.test(normalized);
+}
 
 export class AgentRouter {
   constructor(agents) {
@@ -7,7 +24,7 @@ export class AgentRouter {
 
   route(text, memory) {
     const normalized = normalize(text);
-    const closingSignal = /\b(ok|okay|listo|perfecto|entendido|ya entendi|queda claro|sigamos|cambiemos de tema|pasemos a otra cosa|no sigas|para|alto|gracias)\b/.test(normalized);
+    const closingSignal = isClosingSignal(normalized);
     const lastAgent = memory?.lastAgentTurn?.();
     if (closingSignal && lastAgent?.agentId) {
       const agent = this.agents.find((item) => item.id === lastAgent.agentId);
@@ -68,7 +85,7 @@ export class AgentRouter {
         groupAddressed: true,
         responses: [],
         targets: selectedAgents.map(({ agent, mentionIndex }) => {
-          const domainMatches = agent.domains.filter((domain) => normalized.includes(normalize(domain)));
+          const domainMatches = agent.domains.filter((domain) => includesTerm(normalized, domain));
           return {
             agentId: agent.id,
             name: agent.name,
@@ -89,7 +106,7 @@ export class AgentRouter {
     for (const agent of this.agents) {
       const mentionIndex = getMentionIndex(normalized, agent.aliases);
       const mentionScore = mentionIndex >= 0 ? 8 : 0;
-      const domainMatches = agent.domains.filter((domain) => normalized.includes(normalize(domain)));
+      const domainMatches = agent.domains.filter((domain) => includesTerm(normalized, domain));
       const lexicalScore = domainMatches.length * 2;
       const questionBoost = /[?]|que opin|como|cuando|por que|recomiend|deberiamos|conviene/.test(normalized) ? 1 : 0;
       const contextBoost = collaborationSignal && lexicalScore > 0 ? 1 : 0;
@@ -146,7 +163,7 @@ export class AgentRouter {
       if (!handoffSignal) {
         continue;
       }
-      const domainMatches = agent.domains.filter((domain) => context.includes(normalize(domain)));
+      const domainMatches = agent.domains.filter((domain) => includesTerm(context, domain));
       const score = domainMatches.length * 2 + 4;
       if (score >= 5) {
         candidates.push({
