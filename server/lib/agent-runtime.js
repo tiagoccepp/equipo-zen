@@ -153,7 +153,7 @@ export class LiveAgentRuntime {
           maxOutputTokens: 200,
           temperature: 0.8,
           thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-          systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.() || {})
+          systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {})
         },
         contents: [{ role: 'user', parts: [{ text: this.buildTurnPrompt(turn) }] }]
       }, handleDelta);

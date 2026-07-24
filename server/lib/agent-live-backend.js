@@ -28,6 +28,13 @@ export class AgentLiveBackend {
     this.turnEpoch = 0;
     this.activeTurn = null; // colector del turno en curso
     this.contextBacklog = [];
+    this.needsRefresh = false;
+  }
+
+  // El system prompt queda fijado al abrir la sesión: cuando cambia el
+  // perfil o hay memoria nueva, se reconecta con seed en el próximo turno.
+  scheduleRefresh() {
+    this.needsRefresh = true;
   }
 
   isUsable() {
@@ -35,6 +42,16 @@ export class AgentLiveBackend {
   }
 
   async ensureSession(emit) {
+    if (this.session && this.needsRefresh) {
+      this.needsRefresh = false;
+      try {
+        this.session.close();
+      } catch {
+        // best effort
+      }
+      this.session = null;
+      this.resumptionHandle = null;
+    }
     if (this.session) {
       return;
     }
@@ -65,7 +82,7 @@ export class AgentLiveBackend {
       },
       systemInstruction: buildSystemInstruction(
         this.agent,
-        this.meetingSession?.promptContext?.() || {},
+        this.meetingSession?.promptContext?.(this.agent.id) || {},
         { mode: 'live' }
       ),
       outputAudioTranscription: {},

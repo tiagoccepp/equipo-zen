@@ -10,6 +10,8 @@ import {
   rootDir
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
+import { renderLearningsSection } from './learning.js';
+import { applySuggestion } from './reflection.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
 
 export function createApp({ store }) {
@@ -88,9 +90,106 @@ export function createApp({ store }) {
       : null;
     const instruction = buildSystemInstruction(agent, {
       agents: store.listAgents(),
-      scenario
+      scenario,
+      learningsSection: renderLearningsSection(store, agent.id)
     });
     res.json({ agentId: agent.id, meetingId: meeting?.id || null, systemInstruction: instruction });
+  });
+
+  // ── Aprendizajes: transparencia y control total del usuario ──────────
+
+  app.get('/api/agents/:id/learnings', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    res.json({
+      agentId: agent.id,
+      learningEnabled: agent.learningEnabled,
+      learnings: store.learningsForPanel(agent.id)
+    });
+  });
+
+  app.patch('/api/learnings/:id', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.content === 'string' && body.content.trim()) {
+      patch.content = body.content.trim().slice(0, 300);
+    }
+    if (body.status === 'active' || body.status === 'archived' || body.status === 'user_deleted') {
+      patch.status = body.status;
+    }
+    const updated = store.updateLearning(Number(req.params.id), patch, 'user');
+    if (!updated) {
+      return res.status(404).json({ error: 'aprendizaje no encontrado' });
+    }
+    res.json({ ok: true });
+  });
+
+  app.post('/api/agents/:id/forget', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    store.forgetAllLearnings(agent.id, 'user');
+    res.json({ ok: true });
+  });
+
+  app.post('/api/agents/:id/learning-enabled', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    store.updateAgent(agent.id, { learningEnabled: Boolean(req.body?.enabled) }, 'user', 'toggle de aprendizaje');
+    res.json({ ok: true });
+  });
+
+  app.get('/api/suggestions', (req, res) => {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+    res.json({ suggestions: store.listSuggestions(status) });
+  });
+
+  app.post('/api/suggestions/:id/apply', (req, res) => {
+    const suggestion = store.getSuggestion(Number(req.params.id));
+    if (!suggestion || suggestion.status !== 'pending') {
+      return res.status(404).json({ error: 'sugerencia no encontrada o ya resuelta' });
+    }
+    const ok = applySuggestion(store, suggestion);
+    store.resolveSuggestion(suggestion.id, ok ? 'applied' : 'rejected');
+    res.json({ ok });
+  });
+
+  app.post('/api/suggestions/:id/reject', (req, res) => {
+    const suggestion = store.getSuggestion(Number(req.params.id));
+    if (!suggestion || suggestion.status !== 'pending') {
+      return res.status(404).json({ error: 'sugerencia no encontrada o ya resuelta' });
+    }
+    store.resolveSuggestion(suggestion.id, 'rejected');
+    res.json({ ok: true });
+  });
+
+  app.post('/api/agents/:id/rollback', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    const versions = store.listAgentVersions(agent.id, 50);
+    const target = versions.find((version) => version.version === Number(req.body?.toVersion));
+    if (!target?.profile) {
+      return res.status(404).json({ error: 'versión no encontrada' });
+    }
+    const profile = target.profile;
+    store.updateAgent(agent.id, {
+      name: profile.name,
+      title: profile.title,
+      voice: profile.voice,
+      color: profile.color,
+      style: profile.style,
+      aliases: profile.aliases,
+      domains: profile.domains,
+      boundaries: profile.boundaries
+    }, 'user', `rollback a v${profile.version}`);
+    res.json({ ok: true, restoredVersion: profile.version });
   });
 
   app.get('/api/agents/:id/versions', (req, res) => {

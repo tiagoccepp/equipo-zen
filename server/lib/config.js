@@ -90,3 +90,13 @@ export function collectApiKeys() {
 export function uniqueModelList(models) {
   return [...new Set((models || []).map((model) => String(model || '').trim()).filter(Boolean))];
 }
+
+// Auto-aprendizaje: kill-switches ('0' desactiva) y modelo del observador.
+export const LEARNING_ENABLED = process.env.LEARNING_ENABLED !== '0';
+export const REFLECTION_ENABLED = process.env.REFLECTION_ENABLED !== '0';
+export const ROUTER_TUNING_ENABLED = process.env.ROUTER_TUNING_ENABLED !== '0';
+export const ROUTER_AUTO_APPLY_VOCAB = process.env.ROUTER_AUTO_APPLY_VOCAB !== '0';
+export const LEARNING_MODELS = uniqueModelList([
+  process.env.GEMINI_LEARNING_MODEL || 'gemini-3.1-flash-lite',
+  'gemini-2.5-flash'
+]);

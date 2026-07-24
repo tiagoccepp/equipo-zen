@@ -14,7 +14,9 @@ import {
 import { AgentLiveBackend } from './agent-live-backend.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
 import { extractTextFromResponse, generateContentWithRotation, parseJsonFromModel } from './gemini.js';
+import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
+import { ReflectionRunner } from './reflection.js';
 import { AgentRouter } from './router.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
@@ -36,6 +38,16 @@ const PERSISTED_TELEMETRY_TYPES = new Set([
 // Una sola sesión WS viva por reunión (single-writer): una segunda pestaña
 // que intente retomar la misma reunión recibe una reunión nueva.
 const activeSessionsByMeeting = new Map();
+
+// Reflexión post-reunión: singleton por proceso (los timers de debounce
+// deben sobrevivir a la sesión WS y cancelarse si la reunión resume).
+let reflectionRunner = null;
+function getReflectionRunner(store, keyRing) {
+  if (!reflectionRunner) {
+    reflectionRunner = new ReflectionRunner(store, keyRing);
+  }
+  return reflectionRunner;
+}
 
 export class MeetingSession {
   constructor(socket, keyRingInstance, store) {
@@ -65,6 +77,8 @@ export class MeetingSession {
         this.logTelemetry('turn_cancelled', { turnId, reason }, turnId);
       }
     });
+    this.learningObserver = new LearningObserver(store, keyRingInstance);
+    this.reflection = getReflectionRunner(store, keyRingInstance);
     this.warmupStarted = false;
   }
 
@@ -91,6 +105,7 @@ export class MeetingSession {
 
     this.meeting = meeting;
     activeSessionsByMeeting.set(meeting.id, this);
+    this.reflection.cancelForMeeting(meeting.id);
     this.memory = new MeetingMemory({ store: this.store, meetingId: meeting.id });
 
     let restoredTurns = [];
@@ -162,7 +177,9 @@ export class MeetingSession {
     if (!this.meeting) {
       return;
     }
-    this.store.closeMeeting(this.meeting.id);
+    const closingMeetingId = this.meeting.id;
+    this.store.closeMeeting(closingMeetingId);
+    this.reflection.runNow(closingMeetingId);
     if (activeSessionsByMeeting.get(this.meeting.id) === this) {
       activeSessionsByMeeting.delete(this.meeting.id);
     }
@@ -175,12 +192,13 @@ export class MeetingSession {
     }
   }
 
-  promptContext() {
+  promptContext(agentId = null) {
     return {
       agents: this.sessionAgents,
       scenario: this.meeting
         ? { name: this.meeting.scenario_name, text: this.meeting.scenario_text }
-        : null
+        : null,
+      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
     };
   }
 
@@ -419,6 +437,7 @@ export class MeetingSession {
       const runtime = this.agents.get(agent.id);
       if (runtime) {
         runtime.name = updated.name;
+        runtime.liveBackend?.scheduleRefresh();
       }
       this.logTelemetry('agent_updated', { agentId: agent.id, fields: Object.keys(message.patch) });
       this.broadcastAgentsUpdated();
@@ -911,6 +930,22 @@ export class MeetingSession {
     }
 
     this.feedContextToIdleLiveSessions(text, route);
+
+    this.learningObserver.observeCycle(
+      this.meeting.id,
+      this.memory,
+      this.sessionAgents,
+      text,
+      (affectedAgentIds) => {
+        // El system prompt de una sesión Live queda fijado al abrir: al
+        // aprender algo nuevo se marca para reconectar con seed fresco.
+        for (const [agentId, runtime] of this.agents) {
+          if (runtime.liveBackend && (affectedAgentIds.includes(agentId) || affectedAgentIds.includes(null))) {
+            runtime.liveBackend.scheduleRefresh();
+          }
+        }
+      }
+    );
   }
 
   // Mantiene "context-warm" las sesiones Live de los agentes que NO
@@ -1038,6 +1073,9 @@ export class MeetingSession {
     };
     this.turnQueue.interrupt('superseded');
     this.gate.flush();
+    if (this.meeting && summary.userTurns >= 3) {
+      this.reflection.scheduleForMeeting(this.meeting.id);
+    }
     this.logTelemetry('meeting_session_summary', summary);
     this.logTelemetry('meeting_session_closed', {});
     if (this.meeting) {

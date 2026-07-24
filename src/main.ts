@@ -1275,6 +1275,19 @@ function mountShell() {
         <p class="muted">Cargando reuniones...</p>
       </div>
     </div>
+
+    <div class="dialog-overlay" id="memoryOverlay" data-action="close-memory"></div>
+    <div class="dialog-content" id="memoryDialog">
+      <div class="dialog-header">
+        <h2 id="memoryDialogTitle">Memoria</h2>
+        <button class="dialog-close-btn" data-action="close-memory" type="button" aria-label="Cerrar">
+          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+      <div class="dialog-body" id="memoryBody">
+        <p class="muted">Cargando memoria...</p>
+      </div>
+    </div>
   `;
 
   const turnInput = byId<HTMLTextAreaElement>('turnInput');
@@ -1356,6 +1369,53 @@ function handleDelegatedClick(event: Event) {
       break;
     case 'close-meetings':
       byId('meetingsOverlay').classList.remove('is-open');
+      break;
+    case 'open-memory':
+      if (target.dataset.agentId) {
+        void openMemoryDrawer(target.dataset.agentId);
+      }
+      break;
+    case 'close-memory':
+      byId('memoryOverlay').classList.remove('is-open');
+      break;
+    case 'memory-edit': {
+      const learningId = target.dataset.learningId;
+      const current = target.dataset.content || '';
+      const next = window.prompt('Editar aprendizaje:', current);
+      if (learningId && next && next.trim() && next !== current) {
+        void memoryAction(`/api/learnings/${learningId}`, 'PATCH', { content: next.trim() }, target.dataset.agentId || '');
+      }
+      break;
+    }
+    case 'memory-delete':
+      if (target.dataset.learningId) {
+        void memoryAction(`/api/learnings/${target.dataset.learningId}`, 'PATCH', { status: 'user_deleted' }, target.dataset.agentId || '');
+      }
+      break;
+    case 'memory-forget-all':
+      if (target.dataset.agentId && window.confirm('¿Olvidar TODO lo aprendido por este agente? (queda registrado en el changelog)')) {
+        void memoryAction(`/api/agents/${target.dataset.agentId}/forget`, 'POST', {}, target.dataset.agentId);
+      }
+      break;
+    case 'memory-toggle-learning':
+      if (target.dataset.agentId) {
+        void memoryAction(
+          `/api/agents/${target.dataset.agentId}/learning-enabled`,
+          'POST',
+          { enabled: target.dataset.enabled !== 'true' },
+          target.dataset.agentId
+        );
+      }
+      break;
+    case 'suggestion-apply':
+      if (target.dataset.suggestionId) {
+        void memoryAction(`/api/suggestions/${target.dataset.suggestionId}/apply`, 'POST', {}, target.dataset.agentId || '');
+      }
+      break;
+    case 'suggestion-reject':
+      if (target.dataset.suggestionId) {
+        void memoryAction(`/api/suggestions/${target.dataset.suggestionId}/reject`, 'POST', {}, target.dataset.agentId || '');
+      }
       break;
     case 'resume-meeting': {
       const meetingId = target.dataset.meetingId;
@@ -1500,6 +1560,96 @@ function submitAgentDialog() {
 
 // ── Drawer de reuniones ─────────────────────────────────────────────────
 
+// ── Drawer de memoria (aprendizajes + sugerencias) ──────────────────────
+
+const LEARNING_TYPE_LABELS: Record<string, string> = {
+  user_preference: 'preferencia',
+  correction: 'corrección',
+  fact: 'dato',
+  skill_note: 'nota'
+};
+
+async function memoryAction(path: string, method: string, body: Record<string, unknown>, agentId: string) {
+  try {
+    await fetch(`${backendHttpBase()}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch {
+    // El drawer se refresca igual y muestra el estado real.
+  }
+  if (agentId) {
+    await openMemoryDrawer(agentId);
+  }
+}
+
+async function openMemoryDrawer(agentId: string) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  byId('memoryDialogTitle').textContent = agent ? `Memoria de ${agent.name}` : 'Memoria';
+  byId('memoryOverlay').classList.add('is-open');
+  const body = byId('memoryBody');
+  body.innerHTML = '<p class="muted">Cargando memoria...</p>';
+
+  try {
+    const [learningsRes, suggestionsRes] = await Promise.all([
+      fetch(`${backendHttpBase()}/api/agents/${agentId}/learnings`).then((r) => r.json()),
+      fetch(`${backendHttpBase()}/api/suggestions?status=pending`).then((r) => r.json())
+    ]);
+    const learnings = (learningsRes.learnings || []) as Array<{
+      id: number; type: string; content: string; status: string;
+      timesReinforced: number; lastReinforcedAt: string; agentId: string | null;
+    }>;
+    const active = learnings.filter((item) => item.status === 'active');
+    const suggestions = ((suggestionsRes.suggestions || []) as Array<{
+      id: number; agentId: string; kind: string; value: string;
+    }>).filter((item) => item.agentId === agentId);
+    const learningEnabled = Boolean(learningsRes.learningEnabled);
+
+    body.innerHTML = `
+      <div class="memory-toolbar">
+        <button class="text-button" type="button" data-action="memory-toggle-learning" data-agent-id="${agentId}" data-enabled="${learningEnabled}">
+          ${learningEnabled ? 'Aprendizaje: activado' : 'Aprendizaje: pausado'}
+        </button>
+        <button class="text-button danger" type="button" data-action="memory-forget-all" data-agent-id="${agentId}">Olvidar todo</button>
+      </div>
+      ${suggestions.length ? `
+        <h3 class="memory-section-title">Sugerencias pendientes</h3>
+        ${suggestions.map((suggestion) => `
+          <div class="memory-row is-suggestion">
+            <div class="memory-row-info">
+              <span class="memory-badge">${escapeHtml(suggestion.kind.replace('_', ' '))}</span>
+              <p>${escapeHtml(suggestion.value)}</p>
+            </div>
+            <div class="memory-row-actions">
+              <button class="text-button" type="button" data-action="suggestion-apply" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Aplicar</button>
+              <button class="text-button danger" type="button" data-action="suggestion-reject" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Rechazar</button>
+            </div>
+          </div>
+        `).join('')}
+      ` : ''}
+      <h3 class="memory-section-title">Aprendizajes (${active.length})</h3>
+      ${active.length === 0
+        ? '<p class="muted">Todavía no aprendió nada. Corregilo o contale una preferencia durante la reunión y va a aparecer acá.</p>'
+        : active.map((learning) => `
+          <div class="memory-row">
+            <div class="memory-row-info">
+              <span class="memory-badge ${learning.type}">${LEARNING_TYPE_LABELS[learning.type] || learning.type}${learning.agentId === null ? ' · global' : ''}</span>
+              <p>${escapeHtml(learning.content)}</p>
+              <small>reforzado ×${learning.timesReinforced} · ${new Date(learning.lastReinforcedAt).toLocaleDateString()}</small>
+            </div>
+            <div class="memory-row-actions">
+              <button class="text-button" type="button" data-action="memory-edit" data-learning-id="${learning.id}" data-agent-id="${agentId}" data-content="${escapeHtml(learning.content)}">Editar</button>
+              <button class="text-button danger" type="button" data-action="memory-delete" data-learning-id="${learning.id}" data-agent-id="${agentId}">Borrar</button>
+            </div>
+          </div>
+        `).join('')}
+    `;
+  } catch {
+    body.innerHTML = '<p class="muted">No pude cargar la memoria del agente.</p>';
+  }
+}
+
 async function openMeetingsDrawer() {
   byId('meetingsOverlay').classList.add('is-open');
   const list = byId('meetingsList');
@@ -1548,6 +1698,9 @@ function renderAgent(agent: Agent) {
           <p>${escapeHtml(agent.domains.slice(0, 5).join(' · '))}</p>
         </div>
         <div class="agent-actions">
+          <button class="agent-action-btn" type="button" data-action="open-memory" data-agent-id="${agent.id}" title="Memoria del agente">
+            <svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zm-3 16h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-1z"/></svg>
+          </button>
           <button class="agent-action-btn" type="button" data-action="edit-agent" data-agent-id="${agent.id}" title="Editar agente">
             <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
           </button>

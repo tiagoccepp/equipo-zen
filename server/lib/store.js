@@ -404,6 +404,49 @@ export class Store {
     this.logChange(actor, 'learning', agentId, 'forget_all', {});
   }
 
+  // ── Sugerencias del tuner ──────────────────────────────────────────────
+
+  insertSuggestion(agentId, kind, value, evidence = {}) {
+    const result = this.db.prepare(`
+      INSERT INTO router_suggestions (agent_id, kind, value, evidence_json, status, created_at)
+      VALUES (?, ?, ?, ?, 'pending', ?)
+    `).run(agentId, kind, value, JSON.stringify(evidence), now());
+    return result.lastInsertRowid;
+  }
+
+  listSuggestions(status = 'pending') {
+    return this.db.prepare('SELECT * FROM router_suggestions WHERE status = ? ORDER BY id DESC LIMIT 50')
+      .all(status)
+      .map((row) => ({
+        id: row.id,
+        agentId: row.agent_id,
+        kind: row.kind,
+        value: row.value,
+        evidence: parseJsonColumn(row.evidence_json, {}),
+        status: row.status,
+        createdAt: row.created_at
+      }));
+  }
+
+  getSuggestion(id) {
+    const row = this.db.prepare('SELECT * FROM router_suggestions WHERE id = ?').get(id);
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      kind: row.kind,
+      value: row.value,
+      evidence: parseJsonColumn(row.evidence_json, {}),
+      status: row.status
+    };
+  }
+
+  resolveSuggestion(id, status) {
+    this.db.prepare('UPDATE router_suggestions SET status = ?, resolved_at = ? WHERE id = ?').run(status, now(), id);
+  }
+
   #rowToLearning = (row) => ({
     id: row.id,
     agentId: row.agent_id,

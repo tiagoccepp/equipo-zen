@@ -1173,3 +1173,77 @@ textarea.form-control {
   background: #fff;
   color: #2c352d;
 }
+
+/* ── Fase 6: memoria del agente ──────────────────────────────────────── */
+
+.memory-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.memory-section-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #5c6b5e;
+  margin: 14px 0 8px;
+}
+
+.memory-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(52, 78, 65, 0.12);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.memory-row.is-suggestion {
+  border-color: rgba(47, 111, 115, 0.4);
+  background: rgba(47, 111, 115, 0.06);
+}
+
+.memory-row-info {
+  min-width: 0;
+}
+
+.memory-row-info p {
+  margin: 4px 0 2px;
+  font-size: 0.86rem;
+  color: #2c352d;
+}
+
+.memory-row-info small {
+  font-size: 0.72rem;
+  color: #8a967f;
+}
+
+.memory-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.memory-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(52, 78, 65, 0.1);
+  color: #46554a;
+}
+
+.memory-badge.correction { background: rgba(183, 78, 57, 0.14); color: #8a3a2b; }
+.memory-badge.user_preference { background: rgba(47, 111, 115, 0.14); color: #2f6f73; }
+
+.text-button.danger {
+  color: #b74e39;
+}
