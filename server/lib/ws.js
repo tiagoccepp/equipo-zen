@@ -1,11 +1,14 @@
 import { WebSocketServer } from 'ws';
 
+import { parseClientMessage } from '../../shared/protocol.ts';
 import { MODEL } from './config.js';
 import { MeetingSession } from './meeting-session.js';
 import { getErrorText } from './text.js';
 
+const MAX_WS_PAYLOAD_BYTES = 1024 * 1024;
+
 export function attachMeetingServer(server, keyRing) {
-  const wss = new WebSocketServer({ server, path: '/meeting' });
+  const wss = new WebSocketServer({ server, path: '/meeting', maxPayload: MAX_WS_PAYLOAD_BYTES });
 
   wss.on('connection', (socket) => {
     const meeting = new MeetingSession(socket, keyRing);
@@ -18,9 +21,17 @@ export function attachMeetingServer(server, keyRing) {
     });
 
     socket.on('message', async (raw) => {
+      const parsed = parseClientMessage(String(raw));
+      if (!parsed.ok) {
+        meeting.send({
+          type: 'error',
+          message: 'No pude procesar ese mensaje.',
+          detail: parsed.error
+        });
+        return;
+      }
       try {
-        const message = JSON.parse(String(raw));
-        await meeting.handleClientMessage(message);
+        await meeting.handleClientMessage(parsed.message);
       } catch (error) {
         meeting.send({
           type: 'error',

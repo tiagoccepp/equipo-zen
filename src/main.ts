@@ -1,70 +1,13 @@
 import './styles.css';
 
-type Task = {
-  id: string;
-  text: string;
-  completed: boolean;
-  createdAt: string;
-};
-
-type Agent = {
-  id: string;
-  name: string;
-  title: string;
-  color: string;
-  domains: string[];
-  aliases: string[];
-  boundaries?: string[];
-  style?: string;
-  voice?: string;
-  tasks?: Task[];
-};
-
-type MeetingMessage =
-  | { type: 'meeting_ready'; id: string; agents: Agent[]; model: string; liveMode: boolean }
-  | { type: 'meeting_reset' }
-  | { type: 'agents_updated'; agents: Agent[] }
-  | { type: 'user_turn_received'; turnId: string; text: string; source?: 'text' | 'audio' }
-  | { type: 'route_decision'; turnId: string; route: RouteDecision }
-  | { type: 'no_agent_response'; turnId: string; note: string }
-  | { type: 'agent_turn_start'; turnId: string; agentId: string }
-  | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string }
-  | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType: string }
-  | { type: 'agent_turn_complete'; turnId: string; agentId: string; text: string; usedMock: boolean; keyStatus: KeyStatus[] }
-  | { type: 'agent_warning'; turnId: string; agentId: string; message: string; detail: string }
-  | { type: 'agent_session_open'; agentId: string; keyId: string }
-  | { type: 'agent_silence'; agentId: string; reason: string }
-  | { type: 'audio_listening_start' }
-  | { type: 'audio_listening_stop' }
-  | { type: 'user_audio_transcript_delta'; delta: string; text: string }
-  | { type: 'user_audio_turn_final'; text: string; source?: 'live' | 'fallback' | 'client' }
-  | { type: 'audio_transcription_status'; message: string }
-  | { type: 'audio_transcription_empty'; message: string }
-  | { type: 'api_rotation_start'; scope: string; agentId?: string; message: string }
-  | { type: 'api_rotation_resolved'; scope: string; agentId?: string; keyId: string }
-  | { type: 'api_rotation_failed'; scope: string; agentId?: string; message: string }
-  | { type: 'health'; keys: KeyStatus[] }
-  | { type: 'error'; message: string; detail?: string };
-
-type RouteDecision = {
-  closing?: boolean;
-  targets: Array<{
-    agentId: string;
-    name: string;
-    score: number;
-    directMention: boolean;
-    matchedDomains: string[];
-  }>;
-  reason: string;
-};
-
-type KeyStatus = {
-  id: string;
-  available: boolean;
-  cooldownSeconds: number;
-  failures: number;
-  lastError: string | null;
-};
+import { parseServerMessage } from '../shared/protocol.ts';
+import type {
+  AgentTask as Task,
+  KeyStatus,
+  PublicAgent as Agent,
+  RouteDecision,
+  ServerMessage as MeetingMessage
+} from '../shared/protocol.ts';
 
 type TranscriptTurn = {
   id: string;
@@ -203,11 +146,19 @@ class LiveMicrophoneStreamer {
   private lastMeterAt = 0;
   private preBuffer: Array<{ data: string; durationMs: number }> = [];
 
+  private sendMessage: (payload: unknown) => void;
+  private onState: (label: string) => void;
+  private onMeter: (meter: MicMeter) => void;
+
   constructor(
-    private sendMessage: (payload: unknown) => void,
-    private onState: (label: string) => void,
-    private onMeter: (meter: MicMeter) => void
-  ) {}
+    sendMessage: (payload: unknown) => void,
+    onState: (label: string) => void,
+    onMeter: (meter: MicMeter) => void
+  ) {
+    this.sendMessage = sendMessage;
+    this.onState = onState;
+    this.onMeter = onMeter;
+  }
 
   async start() {
     if (this.context) {
@@ -365,7 +316,11 @@ class BrowserSpeechRecognizer {
   private maxSeenIndex = -1;
   private restartTimer = 0;
 
-  constructor(private onTranscript: (text: string) => void) {}
+  private onTranscript: (text: string) => void;
+
+  constructor(onTranscript: (text: string) => void) {
+    this.onTranscript = onTranscript;
+  }
 
   start() {
     const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -518,7 +473,11 @@ function connect() {
   });
 
   socket.addEventListener('message', async (event) => {
-    const message = JSON.parse(event.data) as MeetingMessage;
+    const message = parseServerMessage(event.data);
+    if (!message) {
+      trace('server_message_invalid', { raw: String(event.data).slice(0, 200) });
+      return;
+    }
     traceIncomingMessage(message);
     await handleServerMessage(message);
     render();
@@ -599,7 +558,7 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'agent_audio_chunk':
-      await state.audio.enqueueBase64Pcm(message.data, parseRate(message.mimeType));
+      await state.audio.enqueueBase64Pcm(message.data, parseRate(message.mimeType || ''));
       break;
 
     case 'agent_turn_complete':
@@ -617,13 +576,6 @@ async function handleServerMessage(message: MeetingMessage) {
       } else {
         setAgentText(message.turnId, message.agentId, message.text);
       }
-      break;
-
-    case 'agent_warning':
-      upsertAlert(`agent-${message.agentId}`, 'Sistema', `${message.message} ${message.detail || ''}`.trim(), 'error');
-      break;
-
-    case 'agent_session_open':
       break;
 
     case 'agent_silence':

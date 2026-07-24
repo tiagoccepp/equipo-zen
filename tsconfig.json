@@ -13,7 +13,9 @@
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "shared"]
 }
