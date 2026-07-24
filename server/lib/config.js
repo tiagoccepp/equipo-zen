@@ -38,7 +38,6 @@ export const TTS_MODELS = uniqueModelList([
   'gemini-3.1-flash-tts-preview'
 ]);
 export const RESPONSE_TIMEOUT_MS = 18000;
-export const AGENT_OUTPUT_IDLE_MS = 1400;
 export const AGENT_TEXT_TIMEOUT_MS = Number(process.env.GEMINI_AGENT_TEXT_TIMEOUT_MS || 8500);
 export const ROUTER_TIMEOUT_MS = Number(process.env.GEMINI_ROUTER_TIMEOUT_MS || 4500);
 export const TTS_TIMEOUT_MS = Number(process.env.GEMINI_TTS_TIMEOUT_MS || 12000);

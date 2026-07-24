@@ -742,7 +742,6 @@ export class MeetingSession {
       domains: agent.domains,
       boundaries: agent.boundaries || []
     }));
-    const heuristicTargets = heuristicRoute.targets.map((target) => target.agentId);
     const prompt = [
       'You are the routing controller of a virtual meeting system.',
       'Your only job is to decide which agents should respond to the user\'s message.',

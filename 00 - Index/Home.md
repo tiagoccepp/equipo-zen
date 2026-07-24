@@ -9,6 +9,9 @@ updated: 2026-06-12
 
 > Sistema de reunión en tiempo real con dos agentes de IA (Julio y Tomasa) que conversan por voz y texto simulando una distribuidora.
 
+> [!warning] Documentación desactualizada (2026-07-24)
+> El sistema tuvo un overhaul completo: split modular del servidor, persistencia SQLite con reuniones reanudables, sesiones **Gemini Live por agente** con voz nativa y barge-in, CRUD de agentes con versionado, y **auto-aprendizaje** (observador + reflexión + panel de memoria). Las notas de este vault describen la arquitectura ANTERIOR. La referencia vigente es el `README.md` del repo, `shared/protocol.ts` y el código en `server/lib/`.
+
 ## Navegación Rápida
 
 ### [[01 - Setup/Quick Start|Setup]]
