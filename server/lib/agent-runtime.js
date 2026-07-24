@@ -7,9 +7,22 @@ import {
   TTS_TIMEOUT_MS,
   agentConfig
 } from './config.js';
-import { extractAudioParts, extractTextFromResponse, generateContentWithRotation } from './gemini.js';
-import { cleanAgentText, getShortError, isSilenceResponse, stripTaskTags } from './text.js';
+import {
+  extractAudioParts,
+  extractTextFromResponse,
+  generateContentWithRotation,
+  streamTextWithRotation
+} from './gemini.js';
+import { cleanAgentText, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
 
+// Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
+// antes de emitir deltas (evita mostrar y despronunciar un silencio).
+const SILENCE_PROBE_LENGTH = 12;
+
+// Fachada por agente. El backend se elige por turno: live (sesión Gemini
+// Live persistente, módulo aparte) → stream (generateContentStream + TTS
+// por oraciones) → mock (sin claves). El barge-in y el orden de audio son
+// responsabilidad del SpeakerGate, común a todos los backends.
 export class LiveAgentRuntime {
   constructor(agent, keyRingInstance, memory, meetingSession) {
     this.id = agent.id;
@@ -18,19 +31,132 @@ export class LiveAgentRuntime {
     this.keyRing = keyRingInstance;
     this.memory = memory;
     this.meetingSession = meetingSession;
+    this.liveBackend = null; // lo inyecta meeting-session cuando hay Live disponible
   }
 
-  // Devuelve { rawText, text, usedMock }: rawText conserva los tags
-  // [TAREA_*] aunque la respuesta hablada sea SILENCIO, para que la sesión
-  // siempre pueda parsear tareas antes de decidir el silencio.
-  async respond(turn, emit) {
+  // context: { signal, gate, turnId }
+  async respond(turn, emit, context = {}) {
     if (!this.keyRing.hasKeys()) {
-      return this.respondWithMock(turn, emit);
+      return this.respondWithMock(turn, emit, context);
     }
 
-    let rawText = '';
+    if (this.liveBackend?.isUsable()) {
+      try {
+        return await this.liveBackend.respond(turn, emit, context);
+      } catch (error) {
+        emit({
+          type: 'live_session_status',
+          agentId: this.id,
+          status: 'fallback'
+        });
+        emit({
+          type: 'api_rotation_start',
+          scope: `${this.name} live`,
+          message: `Sesión Live cayó (${getShortError(error)}); usando streaming.`
+        });
+      }
+    }
+
+    return this.respondWithStream(turn, emit, context);
+  }
+
+  // ── Backend stream: texto por chunks + TTS por oraciones ──────────────
+
+  async respondWithStream(turn, emit, { signal, gate, turnId } = {}) {
+    emit({ type: 'agent_state', agentId: this.id, state: 'thinking' });
+
+    let probeBuffer = '';
+    let probeDone = false;
+    let silenced = false;
+    let sentenceBuffer = '';
+    let seq = 0;
+    let gateToken = null;
+    let audioRunner = Promise.resolve();
+
+    const ensureGateToken = async () => {
+      if (!gateToken && gate) {
+        gateToken = await gate.acquire(turnId, this.id, { signal });
+      }
+      return gateToken;
+    };
+
+    const speakSentence = async (sentence) => {
+      const spoken = stripTaskTags(sentence).trim();
+      if (!spoken || signal?.aborted) {
+        return;
+      }
+      const parts = await this.generateAudioParts(spoken, emit, signal);
+      if (signal?.aborted || parts.length === 0) {
+        return;
+      }
+      const token = await ensureGateToken();
+      for (const part of parts) {
+        if (signal?.aborted) {
+          return;
+        }
+        gate.sendChunk(token, part.data, part.mimeType);
+      }
+    };
+
+    const enqueueSentence = (sentence) => {
+      if (silenced) return;
+      audioRunner = audioRunner
+        .then(() => speakSentence(sentence))
+        .catch(() => {
+          // Errores de TTS/gate no interrumpen el texto.
+        });
+    };
+
+    const handleDelta = (delta) => {
+      if (silenced) return;
+
+      if (!probeDone) {
+        probeBuffer += delta;
+        const normalized = normalize(stripTaskTags(probeBuffer));
+        if (normalized.length < SILENCE_PROBE_LENGTH && 'silencio'.startsWith(normalized.slice(0, 8))) {
+          return; // todavía puede ser SILENCIO: no emitir
+        }
+        if (isSilenceResponse(stripTaskTags(probeBuffer))) {
+          silenced = true;
+          return;
+        }
+        probeDone = true;
+        delta = probeBuffer;
+        probeBuffer = '';
+      }
+
+      seq += 1;
+      emit({ type: 'agent_transcript_delta', delta, seq });
+
+      sentenceBuffer += delta;
+      // Corta en fin de oración con un mínimo de largo (evita TTS por "Ok.").
+      let match;
+      while ((match = sentenceBuffer.match(/[^.!?…]*[.!?…]+[\s"')\]]*/))) {
+        const sentence = match[0];
+        if (sentence.trim().length < 8 && sentenceBuffer.length < 60) {
+          break;
+        }
+        enqueueSentence(sentence);
+        sentenceBuffer = sentenceBuffer.slice(sentence.length);
+      }
+    };
+
+    let result;
     try {
-      rawText = cleanAgentText(await this.generateText(turn, emit), this.name);
+      result = await streamTextWithRotation(this.keyRing, {
+        models: AGENT_TEXT_MODELS,
+        scope: `${this.name} texto`,
+        timeoutMs: AGENT_TEXT_TIMEOUT_MS,
+        emit,
+        signal,
+        config: {
+          maxOutputTokens: 200,
+          temperature: 0.8,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.() || {})
+        },
+        contents: [{ role: 'user', parts: [{ text: this.buildTurnPrompt(turn) }] }]
+      }, handleDelta);
     } catch (error) {
       emit({
         type: 'api_rotation_failed',
@@ -39,26 +165,45 @@ export class LiveAgentRuntime {
         message: getShortError(error)
       });
       emit({ type: 'agent_silence', reason: `${this.name} no pudo generar una respuesta real.` });
-      return emptyAgentResponse();
+      emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+      return { ...emptyAgentResponse(), backend: 'stream' };
     }
 
+    const rawText = cleanAgentText(result.text, this.name);
     const spokenText = stripTaskTags(rawText);
-    if (!rawText || isSilenceResponse(spokenText)) {
+
+    if (!rawText || silenced || isSilenceResponse(spokenText)) {
       emit({ type: 'agent_silence', reason: `${this.name} declino responder por protocolo.` });
-      return { ...emptyAgentResponse(), rawText };
+      emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+      return { ...emptyAgentResponse(), rawText, backend: 'stream' };
     }
 
-    if (spokenText) {
-      emit({ type: 'agent_transcript_delta', delta: spokenText });
-      void this.generateAudio(spokenText, emit);
+    // Última oración pendiente + cierre del gate cuando termine el audio.
+    if (sentenceBuffer.trim()) {
+      enqueueSentence(sentenceBuffer);
+      sentenceBuffer = '';
     }
+    void audioRunner.finally(() => {
+      if (gateToken) {
+        gate.finish(gateToken, signal?.aborted ? 'interrupted' : 'complete');
+      } else {
+        emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+      }
+    });
 
-    return { rawText, text: rawText, audioChunks: [], usedMock: false };
+    return {
+      rawText,
+      text: rawText,
+      audioChunks: [],
+      usedMock: false,
+      backend: 'stream',
+      interrupted: Boolean(result.aborted)
+    };
   }
 
-  // Modo simulación sin claves: respuestas enlatadas por persona para poder
-  // probar toda la reunión (routing, turnos, tareas) sin consumir API.
-  respondWithMock(turn, emit) {
+  // ── Backend mock: deltas con timing realista, sin claves ──────────────
+
+  async respondWithMock(turn, emit, { signal } = {}) {
     const domain = this.agent.domains?.[0] || 'mi área';
     const text = turn.route?.greeting
       ? `¡Buenas! Por acá ${this.name}, listo para arrancar. (modo simulación)`
@@ -66,26 +211,19 @@ export class LiveAgentRuntime {
         ? `Sumo desde ${domain}: lo veo bien encaminado, después lo afinamos. (modo simulación)`
         : `Te sigo. Desde ${domain} lo veo viable; pasame el detalle y lo bajamos a tierra. (modo simulación)`;
 
-    emit({ type: 'agent_transcript_delta', delta: text });
-    return { rawText: text, text, audioChunks: [], usedMock: true };
-  }
-
-  async generateText(turn, emit) {
-    const { response } = await generateContentWithRotation(this.keyRing, {
-      models: AGENT_TEXT_MODELS,
-      scope: `${this.name} texto`,
-      timeoutMs: AGENT_TEXT_TIMEOUT_MS,
-      emit,
-      config: {
-        maxOutputTokens: 200,
-        temperature: 0.8,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.() || {})
-      },
-      contents: [{ role: 'user', parts: [{ text: this.buildTurnPrompt(turn) }] }]
-    });
-
-    return response.text || extractTextFromResponse(response);
+    emit({ type: 'agent_state', agentId: this.id, state: 'thinking' });
+    const words = text.split(' ');
+    let seq = 0;
+    for (let index = 0; index < words.length; index += 1) {
+      if (signal?.aborted) {
+        break;
+      }
+      seq += 1;
+      emit({ type: 'agent_transcript_delta', delta: (index > 0 ? ' ' : '') + words[index], seq });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+    return { rawText: text, text, audioChunks: [], usedMock: true, backend: 'mock', interrupted: Boolean(signal?.aborted) };
   }
 
   buildTurnPrompt(turn) {
@@ -139,8 +277,10 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  async generateAudio(text, emit) {
-    if (!text?.trim()) {
+  // TTS de una oración: devuelve las partes de audio (no emite chunks; el
+  // gate decide cuándo salen).
+  async generateAudioParts(text, emit, signal) {
+    if (!text?.trim() || signal?.aborted) {
       return [];
     }
 
@@ -153,6 +293,7 @@ export class LiveAgentRuntime {
         emit,
         config: {
           responseModalities: [Modality.AUDIO],
+          abortSignal: signal,
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
@@ -164,36 +305,27 @@ export class LiveAgentRuntime {
         contents: [{ role: 'user', parts: [{ text }] }]
       });
 
-      const audioParts = extractAudioParts(response);
-      for (const part of audioParts) {
+      return extractAudioParts(response);
+    } catch (error) {
+      if (!signal?.aborted) {
         emit({
-          type: 'agent_audio_chunk',
-          data: part.data,
-          mimeType: part.mimeType || 'audio/pcm;rate=24000'
+          type: 'api_rotation_failed',
+          scope: `${this.name} TTS`,
+          agentId: this.id,
+          message: getShortError(error)
         });
       }
-      return audioParts;
-    } catch (error) {
-      emit({
-        type: 'api_rotation_failed',
-        scope: `${this.name} TTS`,
-        agentId: this.id,
-        message: getShortError(error)
-      });
       return [];
     }
   }
 
-  async ensureSession() {
-    return;
-  }
-
   reset() {
-    this.close();
+    this.liveBackend?.reset();
   }
 
   close() {
-    // Text generation and TTS use short generateContent calls, so there is no agent session to close.
+    this.liveBackend?.close();
+    this.liveBackend = null;
   }
 }
 
@@ -204,7 +336,11 @@ export function emptyAgentResponse() {
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
 //            learningsSection?: string } — desacoplado de MeetingSession
 // para que el preview HTTP y las sesiones Live puedan armar el mismo prompt.
-export function buildSystemInstruction(agent, context = {}) {
+// options.mode: 'text' (default) usa SILENCIO + tags [TAREA_*];
+//               'live' los quita (la voz los diría) — el router decide el
+//               silencio y las tareas van por tool calling.
+export function buildSystemInstruction(agent, context = {}, options = {}) {
+  const mode = options.mode || 'text';
   const agentsList = context.agents && context.agents.length > 0 ? context.agents : agentConfig.agents;
   const participants = agentsList.map((item) => item.name).join(', ');
   const scenario = context.scenario || null;
@@ -280,20 +416,35 @@ export function buildSystemInstruction(agent, context = {}) {
     '- Alguien ya dijo exactamente lo que ibas a decir.',
     '- Solo ibas a repetir o afirmar lo que otro dijo.',
     '',
-    'Si no tenés nada que aportar: respondé únicamente con la palabra SILENCIO. Nada más.',
-    '',
-    '---',
-    '',
-    'GESTIÓN DE TAREAS:',
-    '',
-    'Conocés tus tareas y las recordás si te preguntan.',
-    'Si en la conversación se define una nueva tarea para vos:',
-    '→ Al final de tu respuesta agregá: [TAREA_CREAR: descripción breve]',
-    '',
-    'Si completás una tarea o se confirma que está hecha:',
-    '→ Al final de tu respuesta agregá: [TAREA_COMPLETAR: #número]',
-    '',
-    'Podés agregar varios tags en el mismo turno si corresponde.',
+    ...(mode === 'live'
+      ? [
+          'El orquestador solo te da la palabra cuando corresponde: si te llega un turno, respondé.',
+          '',
+          '---',
+          '',
+          'GESTIÓN DE TAREAS:',
+          '',
+          'Conocés tus tareas y las recordás si te preguntan.',
+          'Si en la conversación se define una tarea nueva, usá la función crear_tarea.',
+          'Si completás una tarea, usá la función completar_tarea.',
+          'Nunca digas etiquetas tipo [TAREA_CREAR] en voz alta: para eso están las funciones.'
+        ]
+      : [
+          'Si no tenés nada que aportar: respondé únicamente con la palabra SILENCIO. Nada más.',
+          '',
+          '---',
+          '',
+          'GESTIÓN DE TAREAS:',
+          '',
+          'Conocés tus tareas y las recordás si te preguntan.',
+          'Si en la conversación se define una nueva tarea para vos:',
+          '→ Al final de tu respuesta agregá: [TAREA_CREAR: descripción breve]',
+          '',
+          'Si completás una tarea o se confirma que está hecha:',
+          '→ Al final de tu respuesta agregá: [TAREA_COMPLETAR: #número]',
+          '',
+          'Podés agregar varios tags en el mismo turno si corresponde.'
+        ]),
     '',
     '---',
     '',

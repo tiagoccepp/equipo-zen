@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { DB_PATH, HOST, PORT, agentConfig, collectApiKeys } from './lib/config.js';
 import { createApp } from './lib/http.js';
 import { ApiKeyRing } from './lib/key-ring.js';
+import { validateConfiguredModels } from './lib/model-registry.js';
 import { Store } from './lib/store.js';
 import { telemetry } from './lib/telemetry.js';
 import { attachMeetingServer } from './lib/ws.js';
@@ -26,4 +27,9 @@ server.listen(PORT, HOST, () => {
   if (!keyRing.hasKeys()) {
     console.log('Sin claves Gemini: la app usara respuestas simuladas hasta que configures .env.');
   }
+  void validateConfiguredModels(keyRing).then((result) => {
+    if (result?.missing?.length === 0) {
+      console.log('Todos los modelos configurados existen en la API.');
+    }
+  });
 });

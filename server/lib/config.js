@@ -12,29 +12,28 @@ export const rootDir = path.resolve(__dirname, '..', '..');
 
 export const PORT = Number(process.env.PORT || 8787);
 export const HOST = process.env.HOST || '127.0.0.1';
-export const MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.0-flash-preview';
-export const TRANSCRIBE_MODEL = process.env.GEMINI_TRANSCRIBE_MODEL || 'gemini-2.0-flash-preview';
+// Defaults verificados contra models.list (jul 2026); el registry avisa al
+// arrancar si algún ID configurado dejó de existir.
+export const MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-3.1-flash-live-preview';
+export const TRANSCRIBE_MODEL = process.env.GEMINI_TRANSCRIBE_MODEL || 'gemini-2.5-flash';
 export const AGENT_TEXT_MODEL = process.env.GEMINI_AGENT_TEXT_MODEL || process.env.GEMINI_FAST_TEXT_MODEL || 'gemini-2.5-flash';
 export const ROUTER_MODEL = process.env.GEMINI_ROUTER_MODEL || 'gemini-2.5-flash';
-export const TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-2.0-flash-preview-tts';
+export const TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts';
 export const AGENT_TEXT_MODELS = uniqueModelList([
   AGENT_TEXT_MODEL,
   'gemini-2.5-flash',
   'gemini-3.1-flash-lite',
-  'gemini-3.5-flash',
-  'gemini-3-flash'
+  'gemini-3.5-flash'
 ]);
 export const ROUTER_MODELS = uniqueModelList([
   ROUTER_MODEL,
   AGENT_TEXT_MODEL,
   'gemini-2.5-flash',
   'gemini-3.1-flash-lite',
-  'gemini-3.5-flash',
-  'gemini-3-flash'
+  'gemini-3.5-flash'
 ]);
 export const TTS_MODELS = uniqueModelList([
   TTS_MODEL,
-  'gemini-2.0-flash-preview-tts',
   'gemini-2.5-flash-preview-tts',
   'gemini-3.1-flash-tts-preview'
 ]);
@@ -51,6 +50,13 @@ export const MAX_INLINE_TRANSCRIBE_BYTES = 8 * 1024 * 1024;
 export const TELEMETRY_MAX_EVENTS = 800;
 export const TELEMETRY_TEXT_LIMIT = 4000;
 export const DB_PATH = process.env.DB_PATH || path.join(rootDir, 'server', 'data', 'meetings.db');
+
+// Tiempo real: backend de agentes ('auto' prueba live→stream→mock).
+export const AGENT_BACKEND = (process.env.AGENT_BACKEND || 'auto').toLowerCase();
+export const AGENT_LIVE_MODEL = process.env.GEMINI_AGENT_LIVE_MODEL || MODEL;
+export const LIVE_MAX_SESSIONS_PER_KEY = Number(process.env.LIVE_MAX_SESSIONS_PER_KEY || 2);
+export const LIVE_IDLE_CLOSE_MS = Number(process.env.LIVE_IDLE_CLOSE_MS || 5 * 60 * 1000);
+export const SPEECH_LANGUAGE_CODE = process.env.SPEECH_LANGUAGE_CODE || 'es-ES';
 
 export const ALLOWED_ORIGINS = new Set(
   (process.env.CORS_ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')

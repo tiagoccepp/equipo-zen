@@ -125,9 +125,16 @@ function backendHttpBase() {
   return '';
 }
 
+// Cola de reproducción PCM con contexto PERSISTENTE (nunca se cierra entre
+// turnos), GainNode maestro para el ducking del barge-in, tracking de
+// sources vivos para poder cortarlos en seco y callback onDrained para
+// avisar playback_complete al servidor.
 class PcmAudioQueue {
   private context: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private nextStart = 0;
+  private activeSources = new Set<AudioBufferSourceNode>();
+  onDrained: (() => void) | null = null;
 
   async enqueueBase64Pcm(base64: string, sampleRate: number) {
     const context = this.ensureContext();
@@ -145,26 +152,59 @@ class PcmAudioQueue {
 
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.masterGain as GainNode);
+    this.activeSources.add(source);
+    source.onended = () => {
+      this.activeSources.delete(source);
+      if (this.activeSources.size === 0) {
+        this.onDrained?.();
+      }
+    };
     const startAt = Math.max(context.currentTime + 0.02, this.nextStart);
     source.start(startAt);
     this.nextStart = startAt + buffer.duration;
   }
 
+  get isPlaying() {
+    return this.activeSources.size > 0;
+  }
+
+  // Corta TODO el audio pendiente sin cerrar el contexto (barge-in).
+  flush() {
+    for (const source of this.activeSources) {
+      source.onended = null;
+      try { source.stop(); } catch { /* ya detenido */ }
+    }
+    this.activeSources.clear();
+    if (this.context) {
+      this.nextStart = this.context.currentTime;
+    }
+  }
+
+  duck() {
+    if (this.masterGain && this.context) {
+      this.masterGain.gain.setTargetAtTime(0.2, this.context.currentTime, 0.03);
+    }
+  }
+
+  restoreGain() {
+    if (this.masterGain && this.context) {
+      this.masterGain.gain.setTargetAtTime(1, this.context.currentTime, 0.05);
+    }
+  }
+
   stop() {
-    this.context?.close();
-    this.context = null;
-    this.nextStart = 0;
+    this.flush();
+    void this.context?.suspend();
   }
 
   private ensureContext() {
     if (this.context && this.context.state !== 'closed') {
       return this.context;
     }
-    if (this.context) {
-      void this.context.close();
-    }
     this.context = new AudioContext({ sampleRate: 24000 });
+    this.masterGain = this.context.createGain();
+    this.masterGain.connect(this.context.destination);
     this.nextStart = this.context.currentTime;
     return this.context;
   }
@@ -181,6 +221,7 @@ class LiveMicrophoneStreamer {
   private speechMs = 0;
   private lastMeterAt = 0;
   private preBuffer: Array<{ data: string; durationMs: number }> = [];
+  private bargeMs = 0;
 
   private sendMessage: (payload: unknown) => void;
   private onState: (label: string) => void;
@@ -273,9 +314,37 @@ class LiveMicrophoneStreamer {
       this.onMeter({ level: chunk.rms, startThreshold, speaking: this.speaking });
     }
 
-    if (!this.speaking && state.speakingAgentId) {
-      this.preBuffer = [];
-      return;
+    // Barge-in: mientras un agente habla, el micro sigue vivo. Al detectar
+    // voz se baja el volumen del agente (duck, latencia cero) y si la voz
+    // se sostiene ≥250 ms por encima de 1.4× el umbral, se interrumpe.
+    if (!this.speaking && (state.audio.isPlaying || state.audioSegment)) {
+      if (chunk.rms >= startThreshold) {
+        state.audio.duck();
+        if (chunk.rms >= startThreshold * 1.4) {
+          this.bargeMs += chunk.durationMs;
+        }
+        if (this.bargeMs < 250) {
+          this.preBuffer.push(payload);
+          this.preBuffer = this.preBuffer.slice(-4);
+          return;
+        }
+        // Confirmado: cortar al agente y dejar que el flujo normal de
+        // inicio de habla procese este mismo chunk.
+        this.bargeMs = 0;
+        this.sendMessage({
+          type: 'interrupt',
+          reason: 'barge_in',
+          turnId: state.audioSegment?.turnId,
+          agentId: state.audioSegment?.agentId
+        });
+        state.audio.flush();
+        state.audio.restoreGain();
+        trace('barge_in_confirmed', { agentId: state.audioSegment?.agentId || null });
+      } else if (this.bargeMs > 0) {
+        // Falso positivo: restaurar volumen y seguir escuchando al agente.
+        this.bargeMs = 0;
+        state.audio.restoreGain();
+      }
     }
 
     if (!this.speaking) {
@@ -473,6 +542,7 @@ const state = {
   turnStartedAt: new Map<string, number>(),
   agentStartedAt: new Map<string, number>(),
   audio: new PcmAudioQueue(),
+  audioSegment: null as { turnId: string; agentId: string; endReceived: boolean } | null,
   editingAgentId: null as string | null,
   selectedSpawnColor: '#2f6f73'
 };
@@ -665,8 +735,84 @@ async function handleServerMessage(message: MeetingMessage) {
       await state.audio.enqueueBase64Pcm(message.data, parseRate(message.mimeType || ''));
       break;
 
-    case 'agent_turn_complete':
+    case 'agent_audio_start':
+      state.audioSegment = { turnId: message.turnId, agentId: message.agentId, endReceived: false };
+      state.speakingAgentId = message.agentId;
+      state.audio.onDrained = () => {
+        const segment = state.audioSegment;
+        if (segment?.endReceived) {
+          send({ type: 'playback_complete', turnId: segment.turnId, agentId: segment.agentId });
+          state.audioSegment = null;
+          if (state.speakingAgentId === segment.agentId) {
+            state.speakingAgentId = '';
+          }
+          markDirty('agents');
+        }
+      };
+      markDirty('agents');
+      break;
+
+    case 'agent_audio_end':
+      if (state.audioSegment?.turnId === message.turnId && state.audioSegment?.agentId === message.agentId) {
+        state.audioSegment.endReceived = true;
+        if (!state.audio.isPlaying) {
+          send({ type: 'playback_complete', turnId: message.turnId, agentId: message.agentId });
+          state.audioSegment = null;
+          if (state.speakingAgentId === message.agentId) {
+            state.speakingAgentId = '';
+          }
+          markDirty('agents');
+        }
+      }
+      break;
+
+    case 'agent_interrupted': {
+      state.audio.flush();
+      state.audio.restoreGain();
+      if (message.turnId && message.agentId) {
+        const id = `${message.turnId}-${message.agentId}`;
+        const turn = state.turns.find((item) => item.id === id);
+        if (turn && turn.text) {
+          turn.text += ' …(interrumpido)';
+          transcriptSetText(id, turn.text);
+        }
+      }
+      state.audioSegment = null;
       state.speakingAgentId = '';
+      markDirty('agents', 'voice');
+      break;
+    }
+
+    case 'turn_cancelled':
+      state.turns = state.turns.filter((turn) => {
+        const stale = turn.kind === 'agent' && turn.id.startsWith(`${message.turnId}-`) && !turn.text;
+        if (stale) {
+          transcriptRemove(turn.id);
+        }
+        return !stale;
+      });
+      break;
+
+    case 'agent_state':
+      if (message.state === 'speaking' || message.state === 'thinking') {
+        state.speakingAgentId = message.agentId;
+      } else if (state.speakingAgentId === message.agentId && !state.audioSegment) {
+        state.speakingAgentId = '';
+      }
+      markDirty('agents');
+      break;
+
+    case 'live_session_status':
+      trace('live_session_status', { agentId: message.agentId, status: message.status });
+      if (message.status === 'fallback') {
+        upsertAlert(`live-${message.agentId}`, agentName(message.agentId), 'Sesión Live no disponible; usando streaming con TTS.', 'working', 3200);
+      }
+      break;
+
+    case 'agent_turn_complete':
+      if (!state.audioSegment || state.audioSegment.agentId !== message.agentId) {
+        state.speakingAgentId = '';
+      }
       state.keyStatus = message.keyStatus || [];
       trace('agent_visible_complete', {
         agentId: message.agentId,

@@ -2,6 +2,7 @@ import { ThinkingLevel } from '@google/genai';
 import { nanoid } from 'nanoid';
 
 import {
+  AGENT_BACKEND,
   AUDIO_MIME_TYPE,
   MAX_CONTEXTUAL_FOLLOWUPS,
   MODEL,
@@ -10,6 +11,7 @@ import {
   TELEMETRY_MAX_EVENTS,
   agentConfig
 } from './config.js';
+import { AgentLiveBackend } from './agent-live-backend.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
 import { extractTextFromResponse, generateContentWithRotation, parseJsonFromModel } from './gemini.js';
 import { MeetingMemory } from './memory.js';
@@ -17,7 +19,7 @@ import { AgentRouter } from './router.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { LiveAudioTranscriberRuntime } from './transcriber.js';
-import { TurnQueue } from './turn-queue.js';
+import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
 
@@ -54,8 +56,24 @@ export class MeetingSession {
       emit: (event) => this.send(event),
       onTranscript: (text) => this.enqueueAudioTranscript(text)
     });
-    this.turnQueue = new TurnQueue({ timeoutMs: 60000, maxPending: 10 });
+    this.gate = new SpeakerGate({ emit: (event) => this.send(event) });
+    this.turnQueue = new CancellableTurnQueue({
+      timeoutMs: 60000,
+      maxPending: 10,
+      onCancelled: (turnId, reason) => {
+        this.send({ type: 'turn_cancelled', turnId, reason: reason === 'barge_in' ? 'barge_in' : 'superseded' });
+        this.logTelemetry('turn_cancelled', { turnId, reason }, turnId);
+      }
+    });
     this.warmupStarted = false;
+  }
+
+  createAgentRuntime(agent) {
+    const runtime = new LiveAgentRuntime(agent, this.keyRing, this.memory, this);
+    if (AGENT_BACKEND === 'auto' || AGENT_BACKEND === 'live') {
+      runtime.liveBackend = new AgentLiveBackend(agent, this.keyRing, this.memory, this);
+    }
+    return runtime;
   }
 
   initMeeting(requestedMeetingId = null) {
@@ -107,10 +125,7 @@ export class MeetingSession {
     }));
     this.router = new AgentRouter(this.sessionAgents);
     this.agents = new Map(
-      this.sessionAgents.map((agent) => [
-        agent.id,
-        new LiveAgentRuntime(agent, this.keyRing, this.memory, this)
-      ])
+      this.sessionAgents.map((agent) => [agent.id, this.createAgentRuntime(agent)])
     );
 
     telemetry.add({
@@ -125,6 +140,9 @@ export class MeetingSession {
     });
     setTimeout(() => this.warmupLiveSessions(), 250);
 
+    const mode = !this.keyRing.hasKeys() || AGENT_BACKEND === 'mock'
+      ? 'mock'
+      : (AGENT_BACKEND === 'auto' || AGENT_BACKEND === 'live') ? 'live' : 'stream';
     this.send({
       type: 'meeting_ready',
       id: this.id,
@@ -134,7 +152,9 @@ export class MeetingSession {
       scenario: { name: meeting.scenario_name, text: meeting.scenario_text },
       turns: restoredTurns,
       model: MODEL,
-      liveMode: this.keyRing.hasKeys()
+      liveMode: this.keyRing.hasKeys(),
+      mode,
+      agentBackends: Object.fromEntries(this.sessionAgents.map((agent) => [agent.id, mode]))
     });
   }
 
@@ -195,6 +215,29 @@ export class MeetingSession {
 
     if (!this.meeting) {
       this.send({ type: 'error', message: 'La reunión todavía no está inicializada; recargá la página.' });
+      return;
+    }
+
+    if (message.type === 'interrupt') {
+      // Barge-in: abortar el turno en curso, cortar el audio y avisar.
+      const speakingAgentId = this.gate.owner?.agentId || message.agentId || null;
+      const speakingTurnId = this.gate.owner?.turnId || message.turnId || null;
+      this.turnQueue.interrupt(message.reason === 'barge_in' ? 'barge_in' : 'superseded');
+      this.gate.flush();
+      this.send({ type: 'agent_interrupted', turnId: speakingTurnId || undefined, agentId: speakingAgentId || undefined });
+      this.logTelemetry('user_interrupt', {
+        reason: message.reason,
+        agentId: speakingAgentId,
+        playedMs: message.playedMs ?? null
+      }, speakingTurnId);
+      if (speakingAgentId) {
+        this.memory.add('system', 'Orquestador', `El usuario interrumpió a ${this.sessionAgents.find(a => a.id === speakingAgentId)?.name || speakingAgentId} antes de que termine.`);
+      }
+      return;
+    }
+
+    if (message.type === 'playback_complete') {
+      this.gate.onPlaybackComplete(message.turnId, message.agentId);
       return;
     }
 
@@ -327,7 +370,7 @@ export class MeetingSession {
       const newAgent = { ...stored, enabled: true, tasks };
 
       this.sessionAgents.push(newAgent);
-      this.agents.set(id, new LiveAgentRuntime(newAgent, this.keyRing, this.memory, this));
+      this.agents.set(id, this.createAgentRuntime(newAgent));
       this.logTelemetry('agent_spawned', { agentId: id, name, title, domains: newAgent.domains, taskCount: tasks.length });
 
       this.broadcastAgentsUpdated();
@@ -607,7 +650,8 @@ export class MeetingSession {
   enqueueUserTurn(text, source) {
     const turnId = nanoid(8);
     const accepted = this.turnQueue.push(
-      () => this.processUserTurn(turnId, text),
+      turnId,
+      (signal) => this.processUserTurn(turnId, text, signal),
       (error) => {
         this.send({
           type: 'error',
@@ -771,8 +815,11 @@ export class MeetingSession {
     };
   }
 
-  async processUserTurn(turnId, text) {
+  async processUserTurn(turnId, text, signal) {
     const route = await this.routeUserTurn(turnId, text);
+    if (signal?.aborted) {
+      return;
+    }
     this.send({ type: 'route_decision', turnId, route });
     this.logTelemetry('route_decision', {
       turnId,
@@ -791,6 +838,9 @@ export class MeetingSession {
     }
 
     for (const target of route.targets) {
+      if (signal?.aborted) {
+        return;
+      }
       const agent = this.agents.get(target.agentId);
       if (!agent) {
         continue;
@@ -811,7 +861,7 @@ export class MeetingSession {
         priorResponses: route.responses || []
       }, (event) => {
         this.send({ ...event, turnId, agentId: agent.id });
-      });
+      }, { signal, gate: this.gate, turnId });
       // Las tareas se parsean SIEMPRE desde rawText: un "SILENCIO
       // [TAREA_CREAR: x]" crea la tarea aunque el agente se calle.
       if (response.rawText) {
@@ -819,7 +869,10 @@ export class MeetingSession {
         response.text = response.text ? cleanedText : '';
       }
       if (response.text) {
-        this.memory.add('agent', agent.name, response.text, agent.id, turnId);
+        const memoryText = response.interrupted
+          ? `${response.text} …(interrumpido por el usuario)`
+          : response.text;
+        this.memory.add('agent', agent.name, memoryText, agent.id, turnId);
         route.responses = [
           ...(route.responses || []),
           {
@@ -835,6 +888,8 @@ export class MeetingSession {
         agentId: agent.id,
         text: response.text,
         usedMock: response.usedMock,
+        backend: response.backend,
+        interrupted: Boolean(response.interrupted),
         keyStatus: this.keyRing.snapshot()
       });
       this.logTelemetry('agent_turn_complete', {
@@ -843,18 +898,46 @@ export class MeetingSession {
         agentName: agent.name,
         text: response.text,
         usedMock: response.usedMock,
+        backend: response.backend,
         spoke: Boolean(response.text?.trim())
       }, turnId);
+      if (response.interrupted) {
+        return;
+      }
     }
 
-    if (!route.closing) {
-      await this.processContextualFollowups(turnId, text, route);
+    if (!route.closing && !signal?.aborted) {
+      await this.processContextualFollowups(turnId, text, route, signal);
+    }
+
+    this.feedContextToIdleLiveSessions(text, route);
+  }
+
+  // Mantiene "context-warm" las sesiones Live de los agentes que NO
+  // hablaron este turno (sendClientContent con turnComplete:false).
+  feedContextToIdleLiveSessions(userText, route) {
+    const spoke = new Set((route.responses || []).map((response) => response.agentId));
+    const lines = [
+      `Usuario: ${userText}`,
+      ...(route.responses || []).map((response) => `${response.name}: ${response.text}`)
+    ];
+    for (const [agentId, runtime] of this.agents) {
+      const backend = runtime.liveBackend;
+      if (!backend) {
+        continue;
+      }
+      const missing = spoke.has(agentId)
+        ? lines.filter((line) => !line.startsWith(`${runtime.name}:`) && !line.startsWith('Usuario:'))
+        : lines;
+      if (missing.length > 0) {
+        backend.feedContext(missing.join('\n'));
+      }
     }
   }
 
-  async processContextualFollowups(turnId, originalText, route) {
+  async processContextualFollowups(turnId, originalText, route, signal) {
     let followups = 0;
-    while (followups < MAX_CONTEXTUAL_FOLLOWUPS) {
+    while (followups < MAX_CONTEXTUAL_FOLLOWUPS && !signal?.aborted) {
       const nextTarget = this.router.nextContextualTarget(originalText, route, this.memory);
       if (!nextTarget) {
         break;
@@ -891,7 +974,7 @@ export class MeetingSession {
         isContextualFollowup: true
       }, (event) => {
         this.send({ ...event, turnId, agentId: agent.id });
-      });
+      }, { signal, gate: this.gate, turnId });
 
       if (response.rawText) {
         const cleanedText = this.processAgentTaskCommands(agent.id, response.rawText);
@@ -953,6 +1036,8 @@ export class MeetingSession {
       errors: allEvents.filter(e => e.type === 'api_rotation_failed' || e.type === 'turn_error').length,
       agentCount: this.sessionAgents.length
     };
+    this.turnQueue.interrupt('superseded');
+    this.gate.flush();
     this.logTelemetry('meeting_session_summary', summary);
     this.logTelemetry('meeting_session_closed', {});
     if (this.meeting) {

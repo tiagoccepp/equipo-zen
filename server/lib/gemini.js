@@ -103,6 +103,107 @@ export async function generateContentWithRotation(keyRingInstance, options) {
   throw lastError || new Error(`No hay claves disponibles para ${options.scope}.`);
 }
 
+// Variante streaming: rota clave/modelo SOLO si todavía no se emitió ningún
+// chunk; después del primer delta, un fallo a mitad de stream finaliza con
+// el texto parcial (no se re-genera para no duplicar lo ya mostrado).
+// onDelta(texto) se llama por chunk; devuelve el texto completo.
+export async function streamTextWithRotation(keyRingInstance, options, onDelta) {
+  const models = uniqueModelList(options.models || [options.model]);
+  if (!keyRingInstance.hasKeys()) {
+    throw new Error(`No hay claves Gemini configuradas para ${options.scope}.`);
+  }
+
+  let lastError = null;
+
+  for (const model of models) {
+    const attempts = Math.max(1, Math.min(keyRingInstance.size(), options.maxKeyAttempts || keyRingInstance.size()));
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const key = keyRingInstance.acquire();
+      if (!key) {
+        break;
+      }
+
+      const startTime = Date.now();
+      let emitted = '';
+      try {
+        const ai = new GoogleGenAI({ apiKey: key.value });
+        const stream = await withTimeout(
+          ai.models.generateContentStream({
+            model,
+            config: { ...options.config, abortSignal: options.signal },
+            contents: options.contents
+          }),
+          options.timeoutMs || RESPONSE_TIMEOUT_MS,
+          `Timeout en ${options.scope}`
+        );
+
+        for await (const chunk of stream) {
+          if (options.signal?.aborted) {
+            break;
+          }
+          const delta = chunk.text || '';
+          if (delta) {
+            emitted += delta;
+            onDelta?.(delta, emitted);
+          }
+        }
+
+        if (!emitted.trim()) {
+          lastError = new Error(`Modelo ${model} devolvió stream vacío.`);
+          keyRingInstance.reportFailure(key, lastError);
+          continue;
+        }
+
+        keyRingInstance.reportSuccess(key);
+        keyRingInstance.logKey('api_call_success', {
+          scope: options.scope,
+          model,
+          keyId: key.id,
+          attempt: attempt + 1,
+          elapsedMs: Date.now() - startTime,
+          streamed: true
+        });
+        return { text: emitted, key, model };
+      } catch (error) {
+        lastError = error;
+        if (options.signal?.aborted) {
+          return { text: emitted, key, model, aborted: true };
+        }
+        if (emitted) {
+          // Fallo a mitad de stream: quedarse con lo emitido.
+          keyRingInstance.reportFailure(key, error);
+          return { text: emitted, key, model, partial: true };
+        }
+        keyRingInstance.reportFailure(key, error);
+        keyRingInstance.logKey('api_call_error', {
+          scope: options.scope,
+          model,
+          keyId: key.id,
+          attempt: attempt + 1,
+          elapsedMs: Date.now() - startTime,
+          error: getShortError(error),
+          streamed: true
+        });
+        if (isModelConfigurationError(error)) {
+          break;
+        }
+        options.emit?.({
+          type: 'api_rotation_start',
+          scope: options.scope,
+          message: `Rotando clave para ${options.scope}.`
+        });
+      }
+    }
+
+    if (!isModelConfigurationError(lastError)) {
+      break;
+    }
+  }
+
+  throw lastError || new Error(`No hay claves disponibles para ${options.scope}.`);
+}
+
 export function withTimeout(promise, timeoutMs, message) {
   let timer = null;
   return Promise.race([

@@ -1,3 +1,4 @@
+import { LIVE_MAX_SESSIONS_PER_KEY } from './config.js';
 import { getErrorText } from './text.js';
 import { isModelConfigurationError } from './gemini.js';
 
@@ -8,10 +9,38 @@ export class ApiKeyRing {
       value,
       cooldownUntil: 0,
       failures: 0,
-      lastError: null
+      lastError: null,
+      liveSessions: 0
     }));
     this.cursor = 0;
     this.telemetry = null;
+  }
+
+  // Slot para una sesión Live persistente: clave disponible con menos de
+  // LIVE_MAX_SESSIONS_PER_KEY sesiones abiertas (elige la menos cargada).
+  acquireForLive() {
+    const now = Date.now();
+    const candidates = this.keys
+      .filter((key) => key.cooldownUntil <= now && key.liveSessions < LIVE_MAX_SESSIONS_PER_KEY)
+      .sort((a, b) => a.liveSessions - b.liveSessions);
+    const key = candidates[0] || null;
+    if (key) {
+      key.liveSessions += 1;
+      this.logKey('live_slot_acquired', { keyId: key.id, liveSessions: key.liveSessions });
+    } else {
+      this.logKey('live_slot_unavailable', {
+        keys: this.keys.map((k) => ({ keyId: k.id, liveSessions: k.liveSessions, cooling: k.cooldownUntil > now }))
+      });
+    }
+    return key;
+  }
+
+  releaseLive(key) {
+    if (!key) {
+      return;
+    }
+    key.liveSessions = Math.max(0, key.liveSessions - 1);
+    this.logKey('live_slot_released', { keyId: key.id, liveSessions: key.liveSessions });
   }
 
   setTelemetry(telemetryInstance) {

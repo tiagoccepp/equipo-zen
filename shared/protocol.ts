@@ -107,6 +107,8 @@ export interface SpawnAgentPayload {
 
 export type ClientMessage =
   | { type: 'hello'; meetingId?: string }
+  | { type: 'interrupt'; turnId?: string; agentId?: string; reason: 'barge_in' | 'manual'; playedMs?: number }
+  | { type: 'playback_complete'; turnId: string; agentId: string }
   | { type: 'user_turn'; text: string }
   | { type: 'audio_prepare' }
   | { type: 'audio_start' }
@@ -136,6 +138,8 @@ export type ServerMessage =
       turns: PublicTurn[];
       model: string;
       liveMode: boolean;
+      mode?: 'live' | 'stream' | 'mock';
+      agentBackends?: Record<string, string>;
     }
   | { type: 'meeting_reset' }
   | { type: 'scenario_updated'; scenario: MeetingScenario }
@@ -146,14 +150,22 @@ export type ServerMessage =
   | { type: 'route_decision'; turnId: string; route: RouteDecision }
   | { type: 'no_agent_response'; turnId: string; note: string }
   | { type: 'agent_turn_start'; turnId: string; agentId: string }
-  | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string }
-  | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType?: string }
+  | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string; seq?: number }
+  | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType?: string; seq?: number }
+  | { type: 'agent_audio_start'; turnId: string; agentId: string; sampleRate: number }
+  | { type: 'agent_audio_end'; turnId: string; agentId: string; reason: 'complete' | 'interrupted' | 'error'; sentMs: number }
+  | { type: 'agent_interrupted'; turnId?: string; agentId?: string }
+  | { type: 'turn_cancelled'; turnId: string; reason: 'superseded' | 'barge_in' }
+  | { type: 'agent_state'; agentId: string; state: 'idle' | 'thinking' | 'speaking' | 'interrupted' }
+  | { type: 'live_session_status'; agentId: string; status: 'open' | 'closed' | 'resumed' | 'fallback'; keyId?: string }
   | {
       type: 'agent_turn_complete';
       turnId: string;
       agentId: string;
       text: string;
       usedMock?: boolean;
+      backend?: 'live' | 'stream' | 'mock';
+      interrupted?: boolean;
       keyStatus?: KeyStatus[];
     }
   | { type: 'agent_silence'; turnId: string; agentId: string; reason: string }
@@ -236,6 +248,28 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         return { ok: false, error: 'meetingId inválido.' };
       }
       return { ok: true, message: { type: 'hello', meetingId } };
+    }
+
+    case 'interrupt': {
+      const reason = value.reason === 'barge_in' || value.reason === 'manual' ? value.reason : 'manual';
+      const turnId = optionalCappedString(value.turnId, 40);
+      const agentId = optionalCappedString(value.agentId, 80);
+      if (turnId === null || agentId === null) {
+        return { ok: false, error: 'interrupt inválido.' };
+      }
+      const playedMs = typeof value.playedMs === 'number' && Number.isFinite(value.playedMs)
+        ? Math.max(0, value.playedMs)
+        : undefined;
+      return { ok: true, message: { type: 'interrupt', turnId, agentId, reason, playedMs } };
+    }
+
+    case 'playback_complete': {
+      const turnId = cappedString(value.turnId, 40);
+      const agentId = cappedString(value.agentId, 80);
+      if (!turnId || !agentId) {
+        return { ok: false, error: 'playback_complete requiere turnId y agentId.' };
+      }
+      return { ok: true, message: { type: 'playback_complete', turnId, agentId } };
     }
 
     case 'update_agent': {
