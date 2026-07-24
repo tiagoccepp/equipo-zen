@@ -4,6 +4,7 @@ import { parseServerMessage } from '../shared/protocol.ts';
 import type {
   AgentTask as Task,
   KeyStatus,
+  MeetingScenario,
   PublicAgent as Agent,
   RouteDecision,
   ServerMessage as MeetingMessage
@@ -47,6 +48,23 @@ let voiceStatusTimer = 0;
 let renderQueued = false;
 
 const MIC_SETTINGS_STORAGE_KEY = 'reunion.micSettings.v1';
+const MEETING_ID_STORAGE_KEY = 'reunion.meetingId.v1';
+
+function loadStoredMeetingId(): string | undefined {
+  try {
+    return window.localStorage.getItem(MEETING_ID_STORAGE_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveStoredMeetingId(meetingId: string) {
+  try {
+    window.localStorage.setItem(MEETING_ID_STORAGE_KEY, meetingId);
+  } catch {
+    // localStorage puede fallar en modo privado; la reunión sigue en memoria.
+  }
+}
 const DEFAULT_MIC_SETTINGS: MicSettings = {
   sensitivity: 55,
   endSilenceMs: 800,
@@ -411,6 +429,8 @@ class BrowserSpeechRecognizer {
 
 const state = {
   sessionId: '',
+  meetingId: '',
+  scenario: null as MeetingScenario | null,
   socket: null as WebSocket | null,
   agents: [] as Agent[],
   model: '',
@@ -461,6 +481,8 @@ function connect() {
   socket.addEventListener('open', () => {
     state.connected = true;
     trace('socket_open');
+    // hello inicializa la reunión: reanuda la guardada o crea una nueva.
+    socket.send(JSON.stringify({ type: 'hello', meetingId: loadStoredMeetingId() }));
     render();
   });
 
@@ -492,24 +514,46 @@ async function handleServerMessage(message: MeetingMessage) {
       state.agents = message.agents;
       break;
 
-    case 'meeting_ready':
+    case 'meeting_ready': {
       state.sessionId = message.id;
+      state.meetingId = message.meetingId;
+      state.scenario = message.scenario;
       state.agents = message.agents;
       state.model = message.model;
       state.liveMode = message.liveMode;
+      saveStoredMeetingId(message.meetingId);
       trace('meeting_ready', {
         model: message.model,
         liveMode: message.liveMode,
+        meetingId: message.meetingId,
+        resumed: message.resumed,
         agents: message.agents.map((agent) => ({ id: agent.id, name: agent.name, title: agent.title }))
       });
+      if (message.resumed && message.turns.length > 0) {
+        state.turns = message.turns.map((turn) => ({
+          id: turn.id,
+          kind: turn.kind,
+          speaker: turn.speaker,
+          agentId: turn.agentId || undefined,
+          text: turn.text
+        }));
+      }
+      const statusText = message.resumed
+        ? 'Reunión retomada: se restauró la conversación, los agentes y las tareas.'
+        : message.liveMode
+          ? 'Reunión nueva en modo Live. Los agentes responden con Gemini en el backend.'
+          : 'Reunión nueva en modo simulación. Configura .env con tus claves Gemini para activar Live API.';
       state.turns.push({
         id: crypto.randomUUID(),
         kind: 'system',
         speaker: 'Sistema',
-        text: message.liveMode
-          ? 'Modo Live conectado. Julio y Tomasa responden por sesiones Gemini Live en el backend.'
-          : 'Modo simulacion activo. Configura .env con tus claves Gemini para activar Live API.'
+        text: statusText
       });
+      break;
+    }
+
+    case 'scenario_updated':
+      state.scenario = message.scenario;
       break;
 
     case 'meeting_reset':

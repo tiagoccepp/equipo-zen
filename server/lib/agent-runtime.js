@@ -80,7 +80,7 @@ export class LiveAgentRuntime {
         maxOutputTokens: 200,
         temperature: 0.8,
         thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        systemInstruction: buildSystemInstruction(this.agent, this.meetingSession)
+        systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.() || {})
       },
       contents: [{ role: 'user', parts: [{ text: this.buildTurnPrompt(turn) }] }]
     });
@@ -201,13 +201,37 @@ export function emptyAgentResponse() {
   return { rawText: '', text: '', audioChunks: [], usedMock: false };
 }
 
-export function buildSystemInstruction(agent, session) {
-  const agentsList = session ? session.sessionAgents : agentConfig.agents;
+// context: { agents?: Array<{name}>, scenario?: {name, text} | null,
+//            learningsSection?: string } — desacoplado de MeetingSession
+// para que el preview HTTP y las sesiones Live puedan armar el mismo prompt.
+export function buildSystemInstruction(agent, context = {}) {
+  const agentsList = context.agents && context.agents.length > 0 ? context.agents : agentConfig.agents;
   const participants = agentsList.map((item) => item.name).join(', ');
+  const scenario = context.scenario || null;
 
   const tasksFormatted = (agent.tasks && agent.tasks.length > 0)
     ? agent.tasks.map((task, idx) => `#${idx + 1}: ${task.text} (${task.completed ? 'Completada' : 'Pendiente'})`).join('\n')
     : 'No tenés tareas asignadas por el momento.';
+
+  const scenarioBlock = scenario && (scenario.name || scenario.text)
+    ? [
+        'CONTEXTO DE LA EMPRESA:',
+        [scenario.name, scenario.text].filter(Boolean).join(' — '),
+        ''
+      ]
+    : [];
+
+  const boundariesBlock = (agent.boundaries && agent.boundaries.length > 0)
+    ? [
+        'TUS LÍMITES (no los cruces jamás):',
+        ...agent.boundaries.map((boundary) => `- ${boundary}`),
+        ''
+      ]
+    : [];
+
+  const learningsBlock = context.learningsSection
+    ? [context.learningsSection, '']
+    : [];
 
   return [
     `Sos ${agent.name}, ${agent.title}. Estás en una reunión de trabajo con el usuario y otros compañeros.`,
@@ -215,12 +239,15 @@ export function buildSystemInstruction(agent, session) {
     'PARTICIPANTES DE ESTA REUNIÓN:',
     participants,
     '',
+    ...scenarioBlock,
     'TU ESPECIALIDAD:',
     agent.domains.join(', '),
     '',
     'QUIÉN SOS:',
     agent.style,
     '',
+    ...boundariesBlock,
+    ...learningsBlock,
     '---',
     '',
     'TUS TAREAS ACTUALES:',

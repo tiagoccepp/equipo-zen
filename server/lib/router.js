@@ -22,12 +22,18 @@ export class AgentRouter {
     this.agents = agents;
   }
 
+  // Los agentes deshabilitados para la reunión siguen en el roster (UI)
+  // pero no reciben la palabra.
+  get activeAgents() {
+    return this.agents.filter((agent) => agent.enabled !== false);
+  }
+
   route(text, memory) {
     const normalized = normalize(text);
     const closingSignal = isClosingSignal(normalized);
     const lastAgent = memory?.lastAgentTurn?.();
     if (closingSignal && lastAgent?.agentId) {
-      const agent = this.agents.find((item) => item.id === lastAgent.agentId);
+      const agent = this.activeAgents.find((item) => item.id === lastAgent.agentId);
       if (agent) {
         return {
           closing: true,
@@ -46,7 +52,7 @@ export class AgentRouter {
 
     const groupAddressed = /\b(equipo|ambos|los dos|todos|reunion|ustedes|analicemos|pensemos|discutamos|revisemos|conversemos)\b/.test(normalized);
     const collaborationSignal = /\b(solucion|cliente|empresa|sistema|implementar|disenar|validar|riesgo|propuesta|operacion|operaciones|pedido|pedidos|stock|inventario|reparto|ventas|cobranza|dashboard|api|endpoint)\b/.test(normalized);
-    const mentionedAgents = this.agents
+    const mentionedAgents = this.activeAgents
       .map((agent, index) => ({
         agent,
         index,
@@ -57,7 +63,7 @@ export class AgentRouter {
     if (isGreetingTurn(normalized)) {
       const selectedAgents = mentionedAgents.length > 0
         ? mentionedAgents
-        : this.agents.map((agent, index) => ({ agent, index, mentionIndex: index }));
+        : this.activeAgents.map((agent, index) => ({ agent, index, mentionIndex: index }));
 
       return {
         greeting: true,
@@ -79,7 +85,7 @@ export class AgentRouter {
     if (groupAddressed || mentionedAgents.length > 1) {
       const selectedAgents = mentionedAgents.length > 1
         ? mentionedAgents.sort((a, b) => a.mentionIndex - b.mentionIndex)
-        : this.agents.map((agent, index) => ({ agent, index, mentionIndex: index }));
+        : this.activeAgents.map((agent, index) => ({ agent, index, mentionIndex: index }));
 
       return {
         groupAddressed: true,
@@ -103,7 +109,7 @@ export class AgentRouter {
 
     const targets = [];
 
-    for (const agent of this.agents) {
+    for (const agent of this.activeAgents) {
       const mentionIndex = getMentionIndex(normalized, agent.aliases);
       const mentionScore = mentionIndex >= 0 ? 8 : 0;
       const domainMatches = agent.domains.filter((domain) => includesTerm(normalized, domain));
@@ -155,7 +161,7 @@ export class AgentRouter {
     const context = normalize(`${originalText} ${last.text}`);
     const candidates = [];
 
-    for (const agent of this.agents) {
+    for (const agent of this.activeAgents) {
       if (alreadySpoke.has(agent.id)) {
         continue;
       }

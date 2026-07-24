@@ -1,24 +1,18 @@
 import { WebSocketServer } from 'ws';
 
 import { parseClientMessage } from '../../shared/protocol.ts';
-import { MODEL } from './config.js';
 import { MeetingSession } from './meeting-session.js';
 import { getErrorText } from './text.js';
 
 const MAX_WS_PAYLOAD_BYTES = 1024 * 1024;
 
-export function attachMeetingServer(server, keyRing) {
+export function attachMeetingServer(server, keyRing, store) {
   const wss = new WebSocketServer({ server, path: '/meeting', maxPayload: MAX_WS_PAYLOAD_BYTES });
 
   wss.on('connection', (socket) => {
-    const meeting = new MeetingSession(socket, keyRing);
-    meeting.send({
-      type: 'meeting_ready',
-      id: meeting.id,
-      agents: meeting.publicAgents(),
-      model: MODEL,
-      liveMode: keyRing.hasKeys()
-    });
+    // meeting_ready se envía cuando el cliente manda `hello {meetingId?}`
+    // (reanuda esa reunión o crea una nueva).
+    const meeting = new MeetingSession(socket, keyRing, store);
 
     socket.on('message', async (raw) => {
       const parsed = parseClientMessage(String(raw));

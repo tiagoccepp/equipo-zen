@@ -38,6 +38,33 @@ export interface PublicAgent {
   style: string;
   voice: string;
   tasks: AgentTask[];
+  origin?: 'builtin' | 'custom';
+  enabled?: boolean;
+  learningEnabled?: boolean;
+}
+
+export interface MeetingScenario {
+  name: string | null;
+  text: string | null;
+}
+
+export interface PublicTurn {
+  id: string;
+  kind: 'user' | 'agent' | 'system';
+  speaker: string;
+  agentId?: string | null;
+  text: string;
+}
+
+export interface AgentPatch {
+  name?: string;
+  title?: string;
+  color?: string;
+  voice?: string;
+  style?: string;
+  aliases?: string[];
+  domains?: string[];
+  boundaries?: string[];
 }
 
 export interface RouteTarget {
@@ -79,6 +106,7 @@ export interface SpawnAgentPayload {
 }
 
 export type ClientMessage =
+  | { type: 'hello'; meetingId?: string }
   | { type: 'user_turn'; text: string }
   | { type: 'audio_prepare' }
   | { type: 'audio_start' }
@@ -89,13 +117,28 @@ export type ClientMessage =
   | { type: 'reset' }
   | { type: 'health' }
   | { type: 'spawn_agent'; agent: SpawnAgentPayload }
+  | { type: 'update_agent'; agentId: string; patch: AgentPatch }
+  | { type: 'archive_agent'; agentId: string }
+  | { type: 'set_agent_enabled'; agentId: string; enabled: boolean }
+  | { type: 'set_scenario'; text: string }
   | { type: 'add_task'; agentId: string; text: string }
   | { type: 'toggle_task'; agentId: string; taskId: string; completed: boolean }
   | { type: 'delete_task'; agentId: string; taskId: string };
 
 export type ServerMessage =
-  | { type: 'meeting_ready'; id: string; agents: PublicAgent[]; model: string; liveMode: boolean }
+  | {
+      type: 'meeting_ready';
+      id: string;
+      meetingId: string;
+      resumed: boolean;
+      agents: PublicAgent[];
+      scenario: MeetingScenario;
+      turns: PublicTurn[];
+      model: string;
+      liveMode: boolean;
+    }
   | { type: 'meeting_reset' }
+  | { type: 'scenario_updated'; scenario: MeetingScenario }
   | { type: 'meeting_warmup_start' }
   | { type: 'meeting_warmup_complete'; ok: boolean; failures: number }
   | { type: 'agents_updated'; agents: PublicAgent[] }
@@ -187,6 +230,86 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
   }
 
   switch (value.type) {
+    case 'hello': {
+      const meetingId = optionalCappedString(value.meetingId, 40);
+      if (meetingId === null) {
+        return { ok: false, error: 'meetingId inválido.' };
+      }
+      return { ok: true, message: { type: 'hello', meetingId } };
+    }
+
+    case 'update_agent': {
+      const agentId = cappedString(value.agentId, 80);
+      if (!agentId || !isRecord(value.patch)) {
+        return { ok: false, error: 'update_agent requiere agentId y patch.' };
+      }
+      const raw = value.patch;
+      const patch: AgentPatch = {};
+      if (raw.name !== undefined) {
+        const name = cappedString(raw.name, LIMITS.agentName);
+        if (!name || !name.trim()) return { ok: false, error: 'Nombre inválido.' };
+        patch.name = name.trim();
+      }
+      if (raw.title !== undefined) {
+        const title = cappedString(raw.title, LIMITS.agentTitle);
+        if (!title || !title.trim()) return { ok: false, error: 'Título inválido.' };
+        patch.title = title.trim();
+      }
+      if (raw.style !== undefined) {
+        const style = cappedString(raw.style, LIMITS.agentStyle);
+        if (style === null) return { ok: false, error: `El estilo supera ${LIMITS.agentStyle} caracteres.` };
+        patch.style = style;
+      }
+      if (raw.color !== undefined) {
+        const color = cappedString(raw.color, 20);
+        if (!color || !/^#[0-9a-fA-F]{3,8}$/.test(color)) return { ok: false, error: 'Color inválido.' };
+        patch.color = color;
+      }
+      if (raw.voice !== undefined) {
+        const voice = cappedString(raw.voice, 30);
+        if (!voice || !(GEMINI_VOICES as readonly string[]).includes(voice)) {
+          return { ok: false, error: `Voz inválida. Opciones: ${GEMINI_VOICES.join(', ')}.` };
+        }
+        patch.voice = voice;
+      }
+      for (const field of ['aliases', 'domains', 'boundaries'] as const) {
+        if (raw[field] !== undefined) {
+          const maxLength = field === 'boundaries' ? LIMITS.boundaryLength : LIMITS.listItemLength;
+          const list = toStringList(raw[field], LIMITS.listItems, maxLength);
+          if (!list) return { ok: false, error: `Lista de ${field} inválida o demasiado larga.` };
+          patch[field] = list;
+        }
+      }
+      if (Object.keys(patch).length === 0) {
+        return { ok: false, error: 'El patch no tiene cambios válidos.' };
+      }
+      return { ok: true, message: { type: 'update_agent', agentId, patch } };
+    }
+
+    case 'archive_agent': {
+      const agentId = cappedString(value.agentId, 80);
+      if (!agentId) {
+        return { ok: false, error: 'archive_agent requiere agentId.' };
+      }
+      return { ok: true, message: { type: 'archive_agent', agentId } };
+    }
+
+    case 'set_agent_enabled': {
+      const agentId = cappedString(value.agentId, 80);
+      if (!agentId) {
+        return { ok: false, error: 'set_agent_enabled requiere agentId.' };
+      }
+      return { ok: true, message: { type: 'set_agent_enabled', agentId, enabled: Boolean(value.enabled) } };
+    }
+
+    case 'set_scenario': {
+      const text = cappedString(value.text, 2000);
+      if (text === null) {
+        return { ok: false, error: 'El escenario supera 2000 caracteres.' };
+      }
+      return { ok: true, message: { type: 'set_scenario', text } };
+    }
+
     case 'user_turn': {
       const text = cappedString(value.text, LIMITS.turnText);
       if (text === null) {

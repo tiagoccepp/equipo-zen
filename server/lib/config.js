@@ -50,6 +50,7 @@ export const FALLBACK_TRANSCRIBE_DELAY_MS = 120;
 export const MAX_INLINE_TRANSCRIBE_BYTES = 8 * 1024 * 1024;
 export const TELEMETRY_MAX_EVENTS = 800;
 export const TELEMETRY_TEXT_LIMIT = 4000;
+export const DB_PATH = process.env.DB_PATH || path.join(rootDir, 'server', 'data', 'meetings.db');
 
 export const ALLOWED_ORIGINS = new Set(
   (process.env.CORS_ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')

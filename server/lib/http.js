@@ -6,13 +6,13 @@ import {
   ALLOWED_ORIGINS,
   MODEL,
   TELEMETRY_MAX_EVENTS,
-  agentConfig,
   collectApiKeys,
   rootDir
 } from './config.js';
+import { buildSystemInstruction } from './agent-runtime.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
 
-export function createApp() {
+export function createApp({ store }) {
   const app = express();
 
   app.use((req, res, next) => {
@@ -65,18 +65,78 @@ export function createApp() {
     res.status(204).end();
   });
 
-  app.use('/api/agents', (_req, res) => {
+  app.get('/api/agents', (_req, res) => {
     res.json({
-      agents: agentConfig.agents.map(({ id, name, title, color, domains, aliases }) => ({
-        id,
-        name,
-        title,
-        color,
-        domains,
-        aliases
-      })),
+      agents: store.listAgents(),
       model: MODEL,
       hasApiKeys: collectApiKeys().length > 0
+    });
+  });
+
+  // Devuelve el system prompt ensamblado tal como lo vería el modelo:
+  // herramienta clave para verificar escenario, límites y (luego) memoria.
+  app.get('/api/agents/:id/prompt-preview', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent || agent.status !== 'active') {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    const meetingId = typeof req.query.meetingId === 'string' ? req.query.meetingId : null;
+    const latest = meetingId ? { id: meetingId } : store.listMeetings(1)[0] || null;
+    const meeting = latest ? store.getMeeting(latest.id) : null;
+    const scenario = meeting
+      ? { name: meeting.scenario_name, text: meeting.scenario_text }
+      : null;
+    const instruction = buildSystemInstruction(agent, {
+      agents: store.listAgents(),
+      scenario
+    });
+    res.json({ agentId: agent.id, meetingId: meeting?.id || null, systemInstruction: instruction });
+  });
+
+  app.get('/api/agents/:id/versions', (req, res) => {
+    const agent = store.getAgent(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: 'agente no encontrado' });
+    }
+    res.json({ versions: store.listAgentVersions(agent.id) });
+  });
+
+  app.get('/api/meetings', (_req, res) => {
+    res.json({ meetings: store.listMeetings(50) });
+  });
+
+  app.get('/api/meetings/:id', (req, res) => {
+    const meeting = store.getMeeting(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ error: 'reunión no encontrada' });
+    }
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+    res.json({ meeting, turns: store.recentTurns(meeting.id, limit), tasks: store.tasksForMeeting(meeting.id) });
+  });
+
+  app.patch('/api/meetings/:id', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.title === 'string') {
+      patch.title = body.title.slice(0, 120);
+    }
+    if (typeof body.scenarioText === 'string') {
+      patch.scenarioText = body.scenarioText.slice(0, 2000);
+    }
+    const meeting = store.updateMeeting(req.params.id, patch);
+    if (!meeting) {
+      return res.status(404).json({ error: 'reunión no encontrada' });
+    }
+    res.json({ meeting });
+  });
+
+  app.get('/api/changelog', (req, res) => {
+    res.json({
+      entries: store.listChangelog({
+        entity: typeof req.query.entity === 'string' ? req.query.entity : null,
+        entityId: typeof req.query.entityId === 'string' ? req.query.entityId : null,
+        limit: Math.max(1, Math.min(200, Number(req.query.limit) || 50))
+      })
     });
   });
 

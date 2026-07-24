@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import {
   AUDIO_MIME_TYPE,
   MAX_CONTEXTUAL_FOLLOWUPS,
+  MODEL,
   ROUTER_MODELS,
   ROUTER_TIMEOUT_MS,
   TELEMETRY_MAX_EVENTS,
@@ -20,46 +21,151 @@ import { TurnQueue } from './turn-queue.js';
 
 const MAX_SESSION_AGENTS = 8;
 
+// Tipos de telemetría que alimentan el auto-ajuste del router: se persisten
+// en SQLite además del ring en RAM.
+const PERSISTED_TELEMETRY_TYPES = new Set([
+  'route_decision',
+  'contextual_route_decision',
+  'no_agent_response',
+  'ai_route_planned',
+  'turn_error'
+]);
+
+// Una sola sesión WS viva por reunión (single-writer): una segunda pestaña
+// que intente retomar la misma reunión recibe una reunión nueva.
+const activeSessionsByMeeting = new Map();
+
 export class MeetingSession {
-  constructor(socket, keyRingInstance) {
+  constructor(socket, keyRingInstance, store) {
     this.id = nanoid(10);
     this.createdAt = new Date().toISOString();
     this.socket = socket;
     this.keyRing = keyRingInstance;
-    this.memory = new MeetingMemory();
+    this.store = store;
 
-    // Lista dinámica de agentes mutable en memoria por sesión
-    this.sessionAgents = JSON.parse(JSON.stringify(agentConfig.agents)).map((agent) => ({
-      ...agent,
-      tasks: agent.tasks || []
-    }));
+    // Se inicializan en initMeeting() cuando llega el hello del cliente.
+    this.meeting = null;
+    this.memory = null;
+    this.sessionAgents = [];
+    this.router = null;
+    this.agents = new Map();
 
-    this.router = new AgentRouter(this.sessionAgents);
-    this.transcriber = new LiveAudioTranscriberRuntime(this.keyRing, this.memory, {
+    this.transcriber = new LiveAudioTranscriberRuntime(this.keyRing, null, {
       emit: (event) => this.send(event),
       onTranscript: (text) => this.enqueueAudioTranscript(text)
     });
+    this.turnQueue = new TurnQueue({ timeoutMs: 60000, maxPending: 10 });
+    this.warmupStarted = false;
+  }
+
+  initMeeting(requestedMeetingId = null) {
+    let meeting = this.store.findResumableMeeting(requestedMeetingId);
+    if (meeting && activeSessionsByMeeting.has(meeting.id)) {
+      meeting = null;
+    }
+    const resumed = Boolean(meeting);
+    if (!meeting) {
+      meeting = this.store.createMeeting({
+        scenarioName: agentConfig.companySimulation?.name || null,
+        scenarioText: agentConfig.companySimulation?.scenario || null
+      });
+    }
+
+    this.meeting = meeting;
+    activeSessionsByMeeting.set(meeting.id, this);
+    this.memory = new MeetingMemory({ store: this.store, meetingId: meeting.id });
+
+    let restoredTurns = [];
+    if (resumed) {
+      const rows = this.store.recentTurns(meeting.id, 80);
+      this.memory.hydrate(rows);
+      restoredTurns = rows.slice(-40).map((row) => ({
+        id: String(row.turn_id || row.id),
+        kind: row.kind,
+        speaker: row.speaker,
+        agentId: row.agent_id,
+        text: row.text
+      }));
+    }
+
+    const tasksByAgent = new Map();
+    for (const task of this.store.tasksForMeeting(meeting.id)) {
+      if (!tasksByAgent.has(task.agentId)) {
+        tasksByAgent.set(task.agentId, []);
+      }
+      tasksByAgent.get(task.agentId).push({
+        id: task.id,
+        text: task.text,
+        completed: task.completed,
+        createdAt: task.createdAt
+      });
+    }
+
+    this.sessionAgents = this.store.rosterForMeeting(meeting.id).map((agent) => ({
+      ...agent,
+      tasks: tasksByAgent.get(agent.id) || []
+    }));
+    this.router = new AgentRouter(this.sessionAgents);
     this.agents = new Map(
       this.sessionAgents.map((agent) => [
         agent.id,
         new LiveAgentRuntime(agent, this.keyRing, this.memory, this)
       ])
     );
-    this.turnQueue = new TurnQueue({ timeoutMs: 60000, maxPending: 10 });
-    this.warmupStarted = false;
+
     telemetry.add({
       type: 'meeting_session_created',
       sessionId: this.id,
       payload: {
+        meetingId: meeting.id,
+        resumed,
         liveMode: this.keyRing.hasKeys(),
         agents: this.sessionAgents.map((agent) => ({ id: agent.id, name: agent.name, title: agent.title }))
       }
     });
     setTimeout(() => this.warmupLiveSessions(), 250);
+
+    this.send({
+      type: 'meeting_ready',
+      id: this.id,
+      meetingId: meeting.id,
+      resumed,
+      agents: this.publicAgents(),
+      scenario: { name: meeting.scenario_name, text: meeting.scenario_text },
+      turns: restoredTurns,
+      model: MODEL,
+      liveMode: this.keyRing.hasKeys()
+    });
+  }
+
+  closeCurrentMeeting(reason) {
+    if (!this.meeting) {
+      return;
+    }
+    this.store.closeMeeting(this.meeting.id);
+    if (activeSessionsByMeeting.get(this.meeting.id) === this) {
+      activeSessionsByMeeting.delete(this.meeting.id);
+    }
+    this.logTelemetry('meeting_closed', { meetingId: this.meeting.id, reason });
+    this.meeting = null;
+    this.memory?.reset();
+    this.transcriber.reset();
+    for (const agent of this.agents.values()) {
+      agent.reset();
+    }
+  }
+
+  promptContext() {
+    return {
+      agents: this.sessionAgents,
+      scenario: this.meeting
+        ? { name: this.meeting.scenario_name, text: this.meeting.scenario_text }
+        : null
+    };
   }
 
   publicAgents() {
-    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, style, voice, tasks }) => ({
+    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, style, voice, tasks, origin, enabled, learningEnabled }) => ({
       id,
       name,
       title,
@@ -69,13 +175,28 @@ export class MeetingSession {
       boundaries,
       style,
       voice,
-      tasks: tasks || []
+      tasks: tasks || [],
+      origin,
+      enabled,
+      learningEnabled
     }));
   }
 
 
   async handleClientMessage(message) {
     this.logClientMessage(message);
+
+    if (message.type === 'hello') {
+      if (!this.meeting) {
+        this.initMeeting(message.meetingId || null);
+      }
+      return;
+    }
+
+    if (!this.meeting) {
+      this.send({ type: 'error', message: 'La reunión todavía no está inicializada; recargá la página.' });
+      return;
+    }
 
     if (message.type === 'user_turn') {
       const text = String(message.text || '').trim();
@@ -145,12 +266,11 @@ export class MeetingSession {
     }
 
     if (message.type === 'reset') {
-      this.memory.reset();
-      this.transcriber.reset();
-      for (const agent of this.agents.values()) {
-        agent.reset();
-      }
+      // "Reiniciar reunión" = cerrar la reunión actual (queda en el
+      // historial, reanudable solo por lista) y abrir una nueva.
+      this.closeCurrentMeeting('user_reset');
       this.send({ type: 'meeting_reset' });
+      this.initMeeting(null);
       return;
     }
 
@@ -176,17 +296,7 @@ export class MeetingSession {
 
       const id = name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
 
-      const tasks = (initialTasks || [])
-        .map(t => t.trim())
-        .filter(Boolean)
-        .map((t) => ({
-          id: 'task-' + nanoid(6),
-          text: t,
-          completed: false,
-          createdAt: new Date().toISOString()
-        }));
-
-      const newAgent = {
+      const profile = {
         id,
         name,
         title,
@@ -195,23 +305,35 @@ export class MeetingSession {
         domains: Array.isArray(domains) ? domains : (domains || '').split(',').map(s => s.trim()).filter(Boolean),
         boundaries: Array.isArray(boundaries) ? boundaries : (boundaries || '').split(',').map(s => s.trim()).filter(Boolean),
         style: style || 'Conversador estándar y profesional.',
-        voice: voice || 'Charon',
-        tasks
+        voice: voice || 'Charon'
       };
 
-      const lowerName = newAgent.name.toLowerCase();
-      if (!newAgent.aliases.some(alias => alias.toLowerCase() === lowerName)) {
-        newAgent.aliases.push(lowerName);
+      const lowerName = profile.name.toLowerCase();
+      if (!profile.aliases.some(alias => alias.toLowerCase() === lowerName)) {
+        profile.aliases.push(lowerName);
       }
+
+      const stored = this.store.insertAgent(profile, 'custom', 'user');
+      this.store.addAgentToMeeting(this.meeting.id, id);
+
+      const tasks = (initialTasks || [])
+        .map(t => t.trim())
+        .filter(Boolean)
+        .map((t) => {
+          const taskId = this.store.insertTask(this.meeting.id, id, { text: t });
+          return { id: taskId, text: t, completed: false, createdAt: new Date().toISOString() };
+        });
+
+      const newAgent = { ...stored, enabled: true, tasks };
 
       this.sessionAgents.push(newAgent);
       this.agents.set(id, new LiveAgentRuntime(newAgent, this.keyRing, this.memory, this));
-      this.logTelemetry('agent_spawned', { agentId: id, name, title, domains, taskCount: tasks.length });
+      this.logTelemetry('agent_spawned', { agentId: id, name, title, domains: newAgent.domains, taskCount: tasks.length });
 
       this.broadcastAgentsUpdated();
 
       const systemMsgId = nanoid(8);
-      this.memory.add('system', 'Orquestador', `Se ha unido ${name} (${title}) a la mesa de trabajo.`);
+      this.memory.add('system', 'Orquestador', `Se ha unido ${name} (${title}) a la mesa de trabajo.`, null, systemMsgId);
       this.send({
         type: 'user_turn_received',
         turnId: systemMsgId,
@@ -221,13 +343,99 @@ export class MeetingSession {
       return;
     }
 
+    if (message.type === 'update_agent') {
+      const agent = this.sessionAgents.find(a => a.id === message.agentId);
+      if (!agent) {
+        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        return;
+      }
+      if (message.patch.name) {
+        const lowerName = message.patch.name.toLowerCase();
+        if (this.sessionAgents.some(a => a.id !== agent.id && a.name.toLowerCase() === lowerName)) {
+          this.send({ type: 'error', message: `Ya hay un agente llamado ${message.patch.name} en la mesa.` });
+          return;
+        }
+      }
+      const updated = this.store.updateAgent(agent.id, message.patch, 'user', 'edición desde la UI');
+      if (!updated) {
+        this.send({ type: 'error', message: 'No pude guardar los cambios del agente.' });
+        return;
+      }
+      Object.assign(agent, {
+        name: updated.name,
+        title: updated.title,
+        voice: updated.voice,
+        color: updated.color,
+        style: updated.style,
+        aliases: updated.aliases,
+        domains: updated.domains,
+        boundaries: updated.boundaries,
+        learningEnabled: updated.learningEnabled,
+        version: updated.version
+      });
+      const runtime = this.agents.get(agent.id);
+      if (runtime) {
+        runtime.name = updated.name;
+      }
+      this.logTelemetry('agent_updated', { agentId: agent.id, fields: Object.keys(message.patch) });
+      this.broadcastAgentsUpdated();
+      return;
+    }
+
+    if (message.type === 'archive_agent') {
+      const index = this.sessionAgents.findIndex(a => a.id === message.agentId);
+      if (index === -1) {
+        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        return;
+      }
+      const agent = this.sessionAgents[index];
+      if (agent.origin === 'builtin') {
+        this.send({ type: 'error', message: `${agent.name} es parte del equipo base y no se puede archivar; podés deshabilitarlo para esta reunión.` });
+        return;
+      }
+      this.store.archiveAgent(agent.id, 'user');
+      this.sessionAgents.splice(index, 1);
+      this.agents.get(agent.id)?.close();
+      this.agents.delete(agent.id);
+      this.logTelemetry('agent_archived', { agentId: agent.id, name: agent.name });
+      this.broadcastAgentsUpdated();
+      return;
+    }
+
+    if (message.type === 'set_agent_enabled') {
+      const agent = this.sessionAgents.find(a => a.id === message.agentId);
+      if (!agent) {
+        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        return;
+      }
+      agent.enabled = message.enabled;
+      this.store.setAgentEnabled(this.meeting.id, agent.id, message.enabled);
+      this.logTelemetry('agent_enabled_changed', { agentId: agent.id, enabled: message.enabled });
+      this.broadcastAgentsUpdated();
+      return;
+    }
+
+    if (message.type === 'set_scenario') {
+      const updated = this.store.updateMeeting(this.meeting.id, { scenarioText: message.text || null });
+      if (updated) {
+        this.meeting = updated;
+        this.logTelemetry('scenario_updated', { length: (message.text || '').length });
+        this.send({
+          type: 'scenario_updated',
+          scenario: { name: updated.scenario_name, text: updated.scenario_text }
+        });
+      }
+      return;
+    }
+
     if (message.type === 'add_task') {
       const { agentId, text } = message;
       const agent = this.sessionAgents.find(a => a.id === agentId);
       if (agent && text?.trim()) {
         agent.tasks = agent.tasks || [];
+        const taskId = this.store.insertTask(this.meeting.id, agentId, { text: text.trim() });
         agent.tasks.push({
-          id: 'task-' + nanoid(6),
+          id: taskId,
           text: text.trim(),
           completed: false,
           createdAt: new Date().toISOString()
@@ -245,6 +453,7 @@ export class MeetingSession {
         const task = agent.tasks?.find(t => t.id === taskId);
         if (task) {
           task.completed = !!completed;
+          this.store.setTaskCompleted(taskId, !!completed);
           this.logTelemetry('task_toggled', { agentId, taskId, completed: !!completed, taskText: task.text });
           this.broadcastAgentsUpdated();
         }
@@ -258,6 +467,7 @@ export class MeetingSession {
       if (agent) {
         const task = agent.tasks?.find(t => t.id === taskId);
         agent.tasks = (agent.tasks || []).filter(t => t.id !== taskId);
+        this.store.deleteTask(taskId);
         this.logTelemetry('task_deleted', { agentId, taskId, taskText: task?.text });
         this.broadcastAgentsUpdated();
       }
@@ -288,8 +498,9 @@ export class MeetingSession {
       const targetAgent = this.sessionAgents.find(a => a.id === targetAgentId);
       if (targetAgent && taskText) {
         targetAgent.tasks = targetAgent.tasks || [];
+        const newTaskId = this.store.insertTask(this.meeting.id, targetAgentId, { text: taskText });
         targetAgent.tasks.push({
-          id: 'task-' + nanoid(6),
+          id: newTaskId,
           text: taskText,
           completed: false,
           createdAt: new Date().toISOString()
@@ -309,8 +520,9 @@ export class MeetingSession {
         const targetAgent = this.sessionAgents.find(a => a.id === agentId);
         if (targetAgent) {
           targetAgent.tasks = targetAgent.tasks || [];
+          const newTaskId = this.store.insertTask(this.meeting.id, agentId, { text: taskText });
           targetAgent.tasks.push({
-            id: 'task-' + nanoid(6),
+            id: newTaskId,
             text: taskText,
             completed: false,
             createdAt: new Date().toISOString()
@@ -333,6 +545,7 @@ export class MeetingSession {
           const idx = parseInt(taskRef.substring(1), 10) - 1;
           if (idx >= 0 && idx < currentAgent.tasks.length) {
             currentAgent.tasks[idx].completed = true;
+            this.store.setTaskCompleted(currentAgent.tasks[idx].id, true);
             this.logTelemetry('task_completed_by_agent', { agentId, taskRef, taskText: currentAgent.tasks[idx].text, method: 'index' });
             changed = true;
           }
@@ -340,6 +553,7 @@ export class MeetingSession {
           const task = currentAgent.tasks.find(t => t.id === taskRef);
           if (task) {
             task.completed = true;
+            this.store.setTaskCompleted(task.id, true);
             this.logTelemetry('task_completed_by_agent', { agentId, taskRef, taskText: task.text, method: 'id' });
             changed = true;
           }
@@ -417,7 +631,7 @@ export class MeetingSession {
       this.logTelemetry('turn_rejected_queue_full', { turnId, source }, turnId);
       return;
     }
-    this.memory.add('user', 'Tu', text);
+    this.memory.add('user', 'Tu', text, null, turnId);
     this.send({ type: 'user_turn_received', turnId, text, source });
     this.logTelemetry('user_turn_enqueued', { turnId, source, text }, turnId);
   }
@@ -570,7 +784,7 @@ export class MeetingSession {
 
     if (route.targets.length === 0) {
       const note = route.reason || 'Ningun agente tiene suficiente senal de dominio para responder sin inventar.';
-      this.memory.add('system', 'Orquestador', note);
+      this.memory.add('system', 'Orquestador', note, null, turnId);
       this.send({ type: 'no_agent_response', turnId, note });
       this.logTelemetry('no_agent_response', { turnId, note }, turnId);
       return;
@@ -605,7 +819,7 @@ export class MeetingSession {
         response.text = response.text ? cleanedText : '';
       }
       if (response.text) {
-        this.memory.add('agent', agent.name, response.text, agent.id);
+        this.memory.add('agent', agent.name, response.text, agent.id, turnId);
         route.responses = [
           ...(route.responses || []),
           {
@@ -684,7 +898,7 @@ export class MeetingSession {
         response.text = response.text ? cleanedText : '';
       }
       if (response.text) {
-        this.memory.add('agent', agent.name, response.text, agent.id);
+        this.memory.add('agent', agent.name, response.text, agent.id, turnId);
         route.responses = [
           ...(route.responses || []),
           {
@@ -741,6 +955,16 @@ export class MeetingSession {
     };
     this.logTelemetry('meeting_session_summary', summary);
     this.logTelemetry('meeting_session_closed', {});
+    if (this.meeting) {
+      try {
+        this.store.saveSessionSummary(this.meeting.id, this.id, this.createdAt, summary);
+      } catch {
+        // El resumen no debe impedir el cierre.
+      }
+      if (activeSessionsByMeeting.get(this.meeting.id) === this) {
+        activeSessionsByMeeting.delete(this.meeting.id);
+      }
+    }
     this.transcriber.close();
     for (const agent of this.agents.values()) {
       agent.close();
@@ -754,6 +978,13 @@ export class MeetingSession {
       turnId,
       payload
     });
+    if (this.meeting && PERSISTED_TELEMETRY_TYPES.has(type)) {
+      try {
+        this.store.logTelemetryEvent(this.meeting.id, turnId, type, payload);
+      } catch {
+        // La telemetría persistida es best-effort.
+      }
+    }
   }
 
   logClientMessage(message) {
@@ -779,6 +1010,16 @@ export class MeetingSession {
     const skipped = new Set(['agent_audio_chunk', 'agent_transcript_delta', 'user_audio_transcript_delta']);
     if (skipped.has(payload.type)) {
       return;
+    }
+    if (this.meeting && payload.type === 'agent_silence') {
+      try {
+        this.store.logTelemetryEvent(this.meeting.id, payload.turnId || null, 'agent_silence', {
+          agentId: payload.agentId || null,
+          reason: payload.reason || null
+        });
+      } catch {
+        // Best-effort.
+      }
     }
     this.logTelemetry('server_ws_message', summarizeServerMessage(payload), payload.turnId || null);
   }
