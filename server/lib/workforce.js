@@ -263,7 +263,11 @@ export class Workforce {
       '  tipografía cuidada y jerarquía visual clara, responsive de verdad (media queries, sin scroll horizontal en móvil),',
       '  contraste accesible, foco visible, alt en imágenes y <title>/<meta description> propios. Sin librerías externas ni CDNs.',
       '- Preferí SVG inline o gradientes CSS antes que imágenes remotas (no hay internet en el navegador del usuario).',
-      '- Si es un documento: estructura con títulos, datos concretos y conclusiones accionables, no relleno.'
+      '- Si es un documento: estructura con títulos, datos concretos y conclusiones accionables, no relleno.',
+      '- IDIOMA: todo en español, sin mezclar inglés. Nada de "Start Your Project" o "QA Engineer" conviviendo con textos en español;',
+      '  tampoco Title Case a la inglesa: en español va mayúscula solo en la primera palabra y en los nombres propios',
+      '  ("Nuestro equipo", "Proyectos entregados", no "Nuestro Equipo" ni "Proyectos Entregados").',
+      '- Usá el contexto real de la empresa: los nombres y puestos de tus compañeros valen más que personas inventadas.'
     ].filter(Boolean).join('\n');
 
     // El contexto de la tarea viaja SIEMPRE; cada paso suma la historia de
@@ -490,6 +494,7 @@ export class Workforce {
       contents.length ? `\nCONTENIDO REAL:\n${contents.join('\n\n')}` : '',
       '',
       'Revisá contra estos criterios: (1) ¿cumple lo que se pidió?, (2) ¿tiene contenido real o hay placeholders/TODOs/lorem ipsum?,',
+      '(2b) ¿está TODO en español, sin palabras sueltas en inglés y sin Title Case a la inglesa?,',
       '(3) si es web: ¿HTML semántico, responsive, contraste y foco accesibles, se ve profesional?, (4) ¿algo roto o vacío?',
       'Sé exigente pero justo: aprobá si está bien hecho, pedí cambios SOLO si hay algo concreto que arreglar.',
       '',
