@@ -13,6 +13,20 @@ export class ApiKeyRing {
     this.telemetry = null;
   }
 
+  // Reemplaza las claves en caliente (cuando el usuario las cambia desde
+  // Ajustes) conservando la instancia compartida.
+  setKeys(keys) {
+    this.keys = keys.map((value, index) => ({
+      id: `key-${index + 1}`,
+      value,
+      cooldownUntil: 0,
+      failures: 0,
+      lastError: null
+    }));
+    this.cursor = 0;
+    this.logKey('api_keys_replaced', { count: keys.length });
+  }
+
 
   setTelemetry(telemetryInstance) {
     this.telemetry = telemetryInstance;

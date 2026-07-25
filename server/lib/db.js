@@ -153,6 +153,15 @@ const MIGRATIONS = [
   ALTER TABLE meetings ADD COLUMN company_id TEXT;
   CREATE INDEX idx_agents_company ON agents(company_id, status);
   CREATE INDEX idx_meetings_company ON meetings(company_id, last_active_at);
+  `,
+  // v3: ajustes del usuario (claves de API y elección de modelos) —
+  // sobreescriben a las variables de entorno.
+  `
+  CREATE TABLE settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
   `
 ];
 

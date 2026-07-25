@@ -528,6 +528,32 @@ export class Store {
     this.logChange(actor, 'learning', agentId, 'forget_all', {});
   }
 
+  // ── Ajustes del usuario ────────────────────────────────────────────────
+
+  getSetting(key) {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? row.value : null;
+  }
+
+  setSetting(key, value) {
+    this.db.prepare(`
+      INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(key, String(value), now());
+  }
+
+  deleteSetting(key) {
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+  }
+
+  allSettings() {
+    const out = {};
+    for (const row of this.db.prepare('SELECT key, value FROM settings').all()) {
+      out[row.key] = row.value;
+    }
+    return out;
+  }
+
   // ── Sugerencias del tuner ──────────────────────────────────────────────
 
   insertSuggestion(agentId, kind, value, evidence = {}) {

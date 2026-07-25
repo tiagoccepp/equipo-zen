@@ -2,21 +2,21 @@
 
 App local para crear **simulaciones de empresas** (una tecnológica, una automotora, una distribuidora… todas las que quieras) y conversar por voz o texto con sus **empleados IA**, cada uno con sus skills, conocimientos, personalidad y voz propia. Los empleados hablan en streaming, se los puede interrumpir a mitad de frase, recuerdan reuniones anteriores y **aprenden de lo que les enseñás**.
 
-- **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3).
-- **Voz**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) corriendo **100% local** (ONNX, 31 idiomas incluido español, 10 voces).
-- **Reconocimiento de voz del usuario**: SpeechRecognition del navegador (Chrome recomendado).
+- **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3, elegible desde Ajustes).
+- **Voz de los empleados**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) corriendo **100% local** (ONNX, 31 idiomas, 10 voces).
+- **Tu voz**: **Whisper** (el open source de OpenAI) corriendo **local** vía faster-whisper — o Groq (cloud) o el navegador, a elección en ⚙ Ajustes. Por defecto: todo local.
 
 ## Ejecutar
 
 ```bash
 npm install
-cp .env.example .env                 # poné tu MINIMAX_API_KEY (sin clave: modo simulación)
+cp .env.example .env                 # o cargá las claves después desde ⚙ Ajustes
 
-# Voz local (una sola vez; descarga ~250 MB de modelos en el primer arranque):
+# Audio local (una sola vez; los modelos se descargan en el primer arranque):
 python3 -m venv .venv-tts
-.venv-tts/bin/pip install 'supertonic[serve]'
+.venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
 
-npm run dev                          # levanta backend + frontend + TTS local
+npm run dev                          # backend + frontend + TTS + STT locales
 ```
 
 Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:8787`); el cliente le habla vía proxy same-origin.
@@ -45,12 +45,15 @@ server/lib/
   ws.js                 WS + validación             meeting-session.js  orquestación por empresa
   router.js             ruteo heurístico            turn-pipeline.js    TurnQueue cancelable + SpeakerGate
   agent-runtime.js      stream (MiniMax+Supertonic) | mock, prompts
-  transcriber.js        STT vía hint del navegador
+  transcriber.js        captura PCM del turno + STT según Ajustes
+  stt.js                Whisper local | Groq | navegador (+ WAV builder)
+  settings.js           ajustes del usuario (SQLite) que pisan al .env
   db.js / store.js      SQLite (migraciones v2: companies) / repositorios
   learning.js           observador de aprendizajes  reflection.js  resumen + tuner del router
   key-ring.js           rotación de claves          memory.js      memoria de reunión
   telemetry.js          ring en RAM + SSE + análisis
 server/company-templates.json   plantillas de empresas con equipos
+server/stt/whisper_server.py    STT local (faster-whisper + FastAPI)
 ```
 
 ## Observabilidad local

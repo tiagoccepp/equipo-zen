@@ -1,4 +1,5 @@
-import { LEARNING_ENABLED, MINIMAX_LEARNING_MODELS } from './config.js';
+import { LEARNING_ENABLED } from './config.js';
+import { getMinimaxModels } from './settings.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
@@ -107,7 +108,7 @@ export class LearningObserver {
     ].join('\n');
 
     const { text: responseText } = await completeChat(this.keyRing, {
-      models: MINIMAX_LEARNING_MODELS,
+      models: getMinimaxModels(),
       scope: 'observador',
       timeoutMs: 12000,
       maxTokens: 1400,

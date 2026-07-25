@@ -1,4 +1,5 @@
-import { SUPERTONIC_LANGUAGE, SUPERTONIC_URL, TTS_TIMEOUT_MS } from './config.js';
+import { TTS_TIMEOUT_MS } from './config.js';
+import { getTtsLanguage, getTtsUrl } from './settings.js';
 
 // Adaptador del TTS local Supertonic (supertone-inc/supertonic, servido por
 // `supertonic serve`). Devuelve PCM crudo listo para el SpeakerGate; todo
@@ -29,7 +30,7 @@ export async function isAvailable() {
     return availability.ok;
   }
   try {
-    const response = await fetch(`${SUPERTONIC_URL}/docs`, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(`${getTtsUrl()}/docs`, { signal: AbortSignal.timeout(1500) });
     availability = { checked: Date.now(), ok: response.ok };
   } catch {
     availability = { checked: Date.now(), ok: false };
@@ -74,13 +75,13 @@ export async function synthesize(text, voice, { signal, speed } = {}) {
   signal?.addEventListener('abort', abortListener, { once: true });
 
   try {
-    const response = await fetch(`${SUPERTONIC_URL}/v1/tts`, {
+    const response = await fetch(`${getTtsUrl()}/v1/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: clean,
         voice: normalizeVoice(voice),
-        lang: SUPERTONIC_LANGUAGE,
+        lang: getTtsLanguage(),
         response_format: 'wav',
         ...(speed ? { speed } : {})
       }),

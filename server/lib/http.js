@@ -13,6 +13,9 @@ import {
 import { buildSystemInstruction } from './agent-runtime.js';
 import { renderLearningsSection } from './learning.js';
 import { applySuggestion } from './reflection.js';
+import { applySettings, publicSettings } from './settings.js';
+import { whisperHealthy } from './stt.js';
+import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
 
 export function createApp({ store }) {
@@ -23,7 +26,7 @@ export function createApp({ store }) {
     if (origin && ALLOWED_ORIGINS.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
     }
     res.setHeader('Vary', 'Origin');
     if (req.method === 'OPTIONS') {
@@ -66,6 +69,29 @@ export function createApp({ store }) {
     telemetry.reset();
     telemetry.add({ type: 'telemetry_reset', payload: { reason: 'manual reset' } });
     res.status(204).end();
+  });
+
+  app.get('/api/settings', (_req, res) => {
+    res.json({ settings: publicSettings() });
+  });
+
+  app.put('/api/settings', (req, res) => {
+    const applied = applySettings(req.body?.settings || req.body || {});
+    res.json({ applied, settings: publicSettings() });
+  });
+
+  app.get('/api/settings/status', async (_req, res) => {
+    const [tts, whisper] = await Promise.all([ttsAvailable(), whisperHealthy()]);
+    const current = publicSettings();
+    res.json({
+      llm: { configured: current.llm.apiKeySet, model: current.llm.model },
+      tts: { engine: 'supertonic', healthy: tts },
+      stt: {
+        provider: current.stt.provider,
+        localHealthy: whisper,
+        groqConfigured: current.stt.groqKeySet
+      }
+    });
   });
 
   app.get('/api/companies', (_req, res) => {

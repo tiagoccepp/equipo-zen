@@ -3,11 +3,10 @@ import { nanoid } from 'nanoid';
 import {
   AUDIO_MIME_TYPE,
   MAX_CONTEXTUAL_FOLLOWUPS,
-  MINIMAX_MODEL,
-  MINIMAX_ROUTER_MODELS,
   ROUTER_TIMEOUT_MS,
   TELEMETRY_MAX_EVENTS
 } from './config.js';
+import { getMinimaxModels } from './settings.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
@@ -16,7 +15,7 @@ import { ReflectionRunner } from './reflection.js';
 import { AgentRouter } from './router.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
-import { HintTranscriberRuntime } from './transcriber.js';
+import { CaptureTranscriberRuntime } from './transcriber.js';
 import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
@@ -61,7 +60,7 @@ export class MeetingSession {
     this.router = null;
     this.agents = new Map();
 
-    this.transcriber = new HintTranscriberRuntime({
+    this.transcriber = new CaptureTranscriberRuntime({
       emit: (event) => this.send(event),
       onTranscript: (text) => this.enqueueAudioTranscript(text)
     });
@@ -162,7 +161,7 @@ export class MeetingSession {
       agents: this.publicAgents(),
       scenario: { name: this.company.name, text: meeting.scenario_text },
       turns: restoredTurns,
-      model: MINIMAX_MODEL,
+      model: getMinimaxModels()[0],
       liveMode: this.keyRing.hasKeys(),
       mode,
       agentBackends: Object.fromEntries(this.sessionAgents.map((agent) => [agent.id, mode]))
@@ -768,7 +767,7 @@ export class MeetingSession {
     ].join('\n');
 
     const { text: routerText } = await completeChat(this.keyRing, {
-      models: MINIMAX_ROUTER_MODELS,
+      models: getMinimaxModels(),
       scope: 'orquestador',
       timeoutMs: ROUTER_TIMEOUT_MS,
       emit: (event) => this.send(event),

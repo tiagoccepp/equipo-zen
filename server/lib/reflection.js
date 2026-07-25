@@ -1,9 +1,9 @@
 import {
-  MINIMAX_LEARNING_MODELS,
   REFLECTION_ENABLED,
   ROUTER_AUTO_APPLY_VOCAB,
   ROUTER_TUNING_ENABLED
 } from './config.js';
+import { getMinimaxModels } from './settings.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
@@ -98,7 +98,7 @@ export class ReflectionRunner {
     ].join('\n');
 
     const { text: responseText } = await completeChat(this.keyRing, {
-      models: MINIMAX_LEARNING_MODELS,
+      models: getMinimaxModels(),
       scope: 'reflexion',
       timeoutMs: 20000,
       maxTokens: 1800,

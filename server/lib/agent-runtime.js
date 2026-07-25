@@ -1,7 +1,5 @@
-import {
-  AGENT_TEXT_TIMEOUT_MS,
-  MINIMAX_MODELS
-} from './config.js';
+import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
+import { getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { cleanAgentText, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
@@ -115,7 +113,7 @@ export class LiveAgentRuntime {
     let result;
     try {
       result = await streamChat(this.keyRing, {
-        models: MINIMAX_MODELS,
+        models: getMinimaxModels(),
         scope: `${this.name} texto`,
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
         emit,

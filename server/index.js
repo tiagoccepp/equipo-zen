@@ -5,7 +5,9 @@ import { createServer } from 'node:http';
 import { DB_PATH, HOST, PORT, collectApiKeys, companyTemplates } from './lib/config.js';
 import { createApp } from './lib/http.js';
 import { ApiKeyRing } from './lib/key-ring.js';
+import { initSettings } from './lib/settings.js';
 import { Store } from './lib/store.js';
+import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable } from './lib/supertonic.js';
 import { telemetry } from './lib/telemetry.js';
 import { attachMeetingServer } from './lib/ws.js';
@@ -20,6 +22,7 @@ const app = createApp({ store });
 const server = createServer(app);
 const keyRing = new ApiKeyRing(collectApiKeys());
 keyRing.setTelemetry(telemetry);
+initSettings(store, keyRing);
 attachMeetingServer(server, keyRing, store);
 
 server.listen(PORT, HOST, () => {
@@ -27,9 +30,16 @@ server.listen(PORT, HOST, () => {
   if (!keyRing.hasKeys()) {
     console.log('Sin claves MiniMax (MINIMAX_API_KEY): los agentes responden en modo simulación.');
   }
-  void ttsAvailable().then((ok) => {
-    console.log(ok
-      ? 'Supertonic TTS local detectado: los agentes hablan con voz.'
-      : 'Supertonic TTS no responde (npm run dev lo levanta; ver README): reunión sin voz.');
-  });
+  setTimeout(() => {
+    void ttsAvailable().then((ok) => {
+      console.log(ok
+        ? 'Supertonic TTS local: OK (los empleados hablan con voz).'
+        : 'Supertonic TTS no responde todavía: reunión sin voz hasta que levante.');
+    });
+    void whisperHealthy().then((ok) => {
+      console.log(ok
+        ? 'Whisper local: OK (tu voz se transcribe en la máquina).'
+        : 'Whisper local no responde todavía: el STT usará el hint del navegador.');
+    });
+  }, 4000);
 });
