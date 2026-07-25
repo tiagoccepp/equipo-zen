@@ -23,7 +23,7 @@ export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.jo
 
 const TICK_MS = Number(process.env.WORKFORCE_TICK_MS || 5000);
 const MAX_CONCURRENT = Number(process.env.WORKFORCE_MAX_CONCURRENT || 2);
-const MAX_STEPS_PER_RUN = Number(process.env.WORKFORCE_MAX_STEPS || 10);
+const MAX_STEPS_PER_RUN = Number(process.env.WORKFORCE_MAX_STEPS || 12);
 const MAX_FILE_BYTES = 200 * 1024;
 const MAX_FILES_PER_RUN = 12;
 const STEP_TIMEOUT_MS = Number(process.env.WORKFORCE_STEP_TIMEOUT_MS || 180000);
@@ -446,6 +446,10 @@ export class Workforce {
           'Tu trabajo es CONTINUARLO, no reemplazarlo. Reglas, en serio:',
           `- Si tu tarea toca algo que ya está en ${estado.principal}, EDITÁ ese archivo (usá edit_file). No creés uno nuevo al lado.`,
           '- Respetá la identidad visual que ya tiene: mismos colores, misma tipografía, mismas clases, mismo tono de los textos.',
+          '- NO inventes colores nuevos: usá las variables ya declaradas en :root (var(--...)). Si de verdad falta un tono,',
+          '  agregalo dentro del :root existente, con el mismo criterio de los que ya están. Un bloque con fondo claro en una',
+          '  página oscura (o al revés) es un error, no una decisión de diseño.',
+          '- Si tu bloque nuevo necesita estilos, escribilos dentro del <style> que ya existe, siguiendo sus convenciones de nombres.',
           '- No rehagas secciones que ya están bien solo porque las harías distinto.',
           '- Si de verdad hay que rehacer el archivo completo, primero leelo y después escribilo MANTENIENDO su estilo.',
           ...(estado.identidad.length ? ['', 'IDENTIDAD DEL PROYECTO (respetala):', ...estado.identidad] : []),
@@ -725,6 +729,9 @@ export class Workforce {
       '',
       'Revisá contra estos criterios: (1) ¿cumple lo que se pidió?, (2) ¿tiene contenido real o hay placeholders/TODOs/lorem ipsum?,',
       '(2b) ¿está TODO en español, sin palabras sueltas en inglés y sin Title Case a la inglesa?,',
+      '(2c) ¿las partes agregadas usan las MISMAS variables de color y tipografía que el resto, o alguien metió colores propios',
+      '     que van a verse ajenos? Revisá que ningún bloque tenga fondo claro sobre una página oscura ni al revés,',
+      '     y que lo interactivo (acordeones, pestañas, formularios) de verdad funcione y no solo parezca,',
       '(3) si es web: ¿HTML semántico, responsive, contraste y foco accesibles, se ve profesional?, (4) ¿algo roto o vacío?',
       'Sé exigente pero justo: aprobá si está bien hecho, pedí cambios SOLO si hay algo concreto que arreglar.',
       '',
