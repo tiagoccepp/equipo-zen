@@ -406,6 +406,7 @@ export class Workforce {
       '<<<REEMPLAZAR',
       'el texto nuevo',
       'REEMPLAZAR>>>',
+      '  Para INSERTAR algo nuevo: buscá una línea corta y única (por ejemplo </main> o </body>) y reemplazala por tu bloque seguido de esa misma línea.',
       '- Otras acciones (solo el JSON, nada más):',
       '{"action":"read_file","path":"ruta/relativa"}',
       '{"action":"list_files"}',
@@ -450,7 +451,9 @@ export class Workforce {
           ...(estado.identidad.length ? ['', 'IDENTIDAD DEL PROYECTO (respetala):', ...estado.identidad] : []),
           '',
           `CONTENIDO ACTUAL DE ${estado.principal}:`,
-          estado.contenido.slice(0, 24000),
+          estado.contenido.length > 60000
+            ? `${estado.contenido.slice(0, 60000)}\n… (recortado; leelo completo con read_file antes de editar el final)`
+            : estado.contenido,
           '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
         ].join('\n')
       : '';
@@ -515,7 +518,11 @@ export class Workforce {
           const content = await fs.readFile(safeWorkspacePath(companyId, slug, action.path), 'utf-8');
           leidos.add(String(action.path));
           log.push({ step, action: 'read_file', path: action.path, ok: true });
-          lastObservation = `Contenido de ${action.path}:\n${content.slice(0, 20000)}`;
+          const recortado = content.length > 90000;
+          lastObservation = [
+            `Contenido de ${action.path}${recortado ? ' (recortado)' : ' (completo)'}:`,
+            content.slice(0, 90000)
+          ].join('\n');
         } catch (error) {
           log.push({ step, action: 'read_file', path: action.path, ok: false });
           lastObservation = `No pude leer ${action.path}: ${String(error?.message).slice(0, 120)}`;
@@ -540,7 +547,14 @@ export class Workforce {
           this.emitEvent(companyId, { kind: 'file_written', taskId: task.id, agentId: agent.id, agentName: agent.name, path: String(action.path), edited: true });
         } catch (error) {
           log.push({ step, action: 'edit_file', path: action.path, ok: false, note: String(error?.message).slice(0, 140) });
-          lastObservation = `No pude editar ${action.path}: ${String(error?.message).slice(0, 200)}. Si necesitás verlo de nuevo, usá read_file.`;
+          const cola = await fs.readFile(safeWorkspacePath(companyId, slug, action.path), 'utf-8')
+            .then((texto) => texto.slice(-1200))
+            .catch(() => '');
+          lastObservation = [
+            `No pude editar ${action.path}: ${String(error?.message).slice(0, 200)}`,
+            cola ? `Así TERMINA el archivo ahora (copiá de acá un fragmento corto y único para BUSCAR):\n${cola}` : '',
+            'Truco: para insertar algo nuevo, buscá una línea corta y única —por ejemplo </main> o </body>— y reemplazala por tu bloque seguido de esa misma línea.'
+          ].filter(Boolean).join('\n');
         }
       } else if (action.action === 'write_file') {
         try {
