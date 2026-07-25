@@ -1,5 +1,9 @@
 import { escapeRegExp, getMentionIndex, includesTerm, isGreetingTurn, normalize } from './text.js';
 
+// Saludo dirigido al grupo: ahí sí contesta el equipo. Sin acentos porque el
+// texto llega normalizado ("compañeros" → "companeros").
+const GROUP_GREETING = /\b(equipo|chicos|chicas|gente|todos|todas|ustedes|muchachos|muchachas|pibes|amigos|companeros|companeras|compas|familia|banda|gurises|a todos)\b/;
+
 // Frases que cierran el tema a cualquier longitud del enunciado.
 const CLOSING_PHRASES = /\b(ya entendi|queda claro|quedo claro|cambiemos de tema|pasemos a otra cosa|no sigas|dejemoslo ahi|tema cerrado)\b/;
 // Palabras sueltas que solo cierran si el enunciado es corto (≤ 3 palabras):
@@ -61,12 +65,36 @@ export class AgentRouter {
       .filter((item) => item.mentionIndex >= 0);
 
     if (isGreetingTurn(normalized)) {
+      // Un "hola" pelado no puede hacer que hablen los ocho: contesta la CEO,
+      // que es la interlocutora. Solo si el saludo es al grupo ("hola chicos",
+      // "buenas equipo") responden todos.
+      const groupGreeting = GROUP_GREETING.test(normalized);
+      if (mentionedAgents.length === 0 && !groupGreeting) {
+        const ceo = this.activeAgents.find((agent) => agent.role === 'ceo') || this.activeAgents[0];
+        if (ceo) {
+          return {
+            greeting: true,
+            responses: [],
+            targets: [{
+              agentId: ceo.id,
+              name: ceo.name,
+              score: 10,
+              directMention: false,
+              mentionIndex: 0,
+              matchedDomains: ['saludo']
+            }],
+            reason: 'Saludo simple: contesta solo la CEO, no todo el equipo a coro.'
+          };
+        }
+      }
+
       const selectedAgents = mentionedAgents.length > 0
         ? mentionedAgents
         : this.activeAgents.map((agent, index) => ({ agent, index, mentionIndex: index }));
 
       return {
         greeting: true,
+        groupGreeting: groupGreeting && mentionedAgents.length === 0,
         responses: [],
         targets: selectedAgents.map(({ agent, mentionIndex }) => ({
           agentId: agent.id,
@@ -78,7 +106,7 @@ export class AgentRouter {
         })),
         reason: mentionedAgents.length > 0
           ? 'El usuario saludo a agentes mencionados; responden breve como apertura.'
-          : 'El usuario hizo un saludo general; ambos agentes responden breve como apertura.'
+          : 'El usuario saludo al grupo; responden, pero sin repetir el saludo entre ellos.'
       };
     }
 

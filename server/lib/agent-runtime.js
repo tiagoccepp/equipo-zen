@@ -243,6 +243,15 @@ export class LiveAgentRuntime {
       lines.push('Lo que dijeron tus compañeros antes de tu turno:');
       lines.push(priorResponses);
       lines.push('');
+      if (turn.route?.greeting) {
+        // Ocho "hola" seguidos no son una reunión, son un eco.
+        lines.push('YA TE SALUDARON: no repitas el saludo ni digas hola de nuevo.');
+        lines.push('O aportás algo tuyo en una línea (quién sos, en qué andás), o respondés SILENCIO.');
+        lines.push('');
+      }
+    } else if (turn.route?.greeting && turn.route?.groupGreeting) {
+      lines.push('Sos el primero en contestar el saludo: saludá breve y presentate en una línea.');
+      lines.push('');
     }
 
     if (recentContext) {
