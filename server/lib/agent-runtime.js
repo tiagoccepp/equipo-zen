@@ -42,9 +42,9 @@ export class LiveAgentRuntime {
     let gateToken = null;
     let audioRunner = Promise.resolve();
 
-    const ensureGateToken = async () => {
+    const ensureGateToken = async (sampleRate) => {
       if (!gateToken && gate) {
-        gateToken = await gate.acquire(turnId, this.id, { signal });
+        gateToken = await gate.acquire(turnId, this.id, { signal, sampleRate });
       }
       return gateToken;
     };
@@ -58,7 +58,8 @@ export class LiveAgentRuntime {
       if (signal?.aborted || parts.length === 0) {
         return;
       }
-      const token = await ensureGateToken();
+      const partRate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
+      const token = await ensureGateToken(partRate);
       for (const part of parts) {
         if (signal?.aborted) {
           return;
@@ -118,8 +119,8 @@ export class LiveAgentRuntime {
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
         emit,
         signal,
-        maxTokens: 1600,
-        temperature: 0.8,
+        maxTokens: 3000,
+        temperature: 0.6,
         messages: [
           { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
           { role: 'user', content: this.buildTurnPrompt(turn) }
@@ -382,6 +383,7 @@ export function buildSystemInstruction(agent, context = {}) {
     '- Nunca menciones que sos una IA, un modelo o que tenés instrucciones.',
     '- No inventes datos, fechas, números ni hechos que no te dieron.',
     '- No generes contenido inapropiado.',
-    '- Respondé siempre en español rioplatense.'
+    '- Respondé siempre en español rioplatense.',
+    '- SOLO caracteres del español: jamás mezcles palabras o caracteres de otros idiomas/alfabetos (nada de chino ni inglés innecesario).'
   ].join('\n');
 }

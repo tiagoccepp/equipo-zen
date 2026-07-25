@@ -18,7 +18,7 @@ function buildBody(options, stream) {
     messages: options.messages,
     stream,
     temperature: options.temperature ?? 0.7,
-    max_completion_tokens: options.maxTokens ?? 2000,
+    max_completion_tokens: options.maxTokens ?? 3000,
     thinking: { type: options.thinking || 'disabled' }
   });
 }
@@ -127,7 +127,8 @@ export async function streamChat(keyRing, options, onDelta) {
   let lastError = null;
 
   for (const model of models) {
-    for (let attempt = 0; attempt < Math.max(1, keyRing.size()); attempt += 1) {
+    // Con una sola clave igual damos un reintento (p.ej. stream vacío).
+    for (let attempt = 0; attempt < Math.max(2, keyRing.size()); attempt += 1) {
       const key = keyRing.acquire();
       if (!key) {
         break;
@@ -153,8 +154,11 @@ export async function streamChat(keyRing, options, onDelta) {
         }
 
         if (!emitted.trim()) {
+          // Vacío = el modelo gastó el presupuesto pensando o falló la
+          // generación: NO es culpa de la clave (sin cooldown); se
+          // reintenta y luego se prueba el siguiente modelo.
           lastError = new Error(`MiniMax ${model} devolvió stream vacío.`);
-          keyRing.reportFailure(key, lastError);
+          keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
           continue;
         }
         keyRing.reportSuccess(key);
@@ -191,7 +195,7 @@ export async function streamChat(keyRing, options, onDelta) {
         });
       }
     }
-    if (!isModelNotFound(lastError)) {
+    if (!isModelNotFound(lastError) && !isEmptyResponse(lastError)) {
       break;
     }
   }
@@ -207,7 +211,7 @@ export async function completeChat(keyRing, options) {
   let lastError = null;
 
   for (const model of models) {
-    for (let attempt = 0; attempt < Math.max(1, keyRing.size()); attempt += 1) {
+    for (let attempt = 0; attempt < Math.max(2, keyRing.size()); attempt += 1) {
       const key = keyRing.acquire();
       if (!key) {
         break;
@@ -224,7 +228,7 @@ export async function completeChat(keyRing, options) {
         );
         if (!text) {
           lastError = new Error(`MiniMax ${model} devolvió respuesta vacía.`);
-          keyRing.reportFailure(key, lastError);
+          keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
           continue;
         }
         keyRing.reportSuccess(key);
@@ -248,7 +252,7 @@ export async function completeChat(keyRing, options) {
         });
       }
     }
-    if (!isModelNotFound(lastError)) {
+    if (!isModelNotFound(lastError) && !isEmptyResponse(lastError)) {
       break;
     }
   }
@@ -257,6 +261,10 @@ export async function completeChat(keyRing, options) {
 
 function isModelNotFound(error) {
   return /model.*(not found|invalid|does not exist)|2013|1004/i.test(getErrorText(error));
+}
+
+function isEmptyResponse(error) {
+  return /devolvió (stream|respuesta) vac/i.test(getErrorText(error));
 }
 
 export function withTimeout(promise, timeoutMs, message) {
