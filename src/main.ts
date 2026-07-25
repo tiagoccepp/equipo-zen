@@ -11,6 +11,8 @@ import type {
 } from '../shared/protocol.ts';
 import { evaluateBargeIn, idleBargeInState, trimPreBuffer } from './lib/barge-in.ts';
 import type { BargeInState } from './lib/barge-in.ts';
+import { OrbField } from './lib/call-orbs.ts';
+import type { OrbSlot } from './lib/call-orbs.ts';
 
 type TranscriptTurn = {
   id: string;
@@ -371,9 +373,15 @@ function backendHttpBase() {
 class PcmAudioQueue {
   private context: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private analyser: AnalyserNode | null = null;
+  private levelFrame: Float32Array<ArrayBuffer> | null = null;
   private nextStart = 0;
   private activeSources = new Set<AudioBufferSourceNode>();
   onDrained: (() => void) | null = null;
+  // ¿El analizador vio alguna vez señal real? Si nunca vio nada (TTS caído,
+  // navegador que no entrega el buffer), el modo llamada sabe que tiene que
+  // caer al pulso sintético en vez de dibujar esferas muertas.
+  levelAvailable = false;
 
   async enqueueBase64Pcm(base64: string, sampleRate: number) {
     const context = this.ensureContext();
@@ -406,6 +414,36 @@ class PcmAudioQueue {
 
   get isPlaying() {
     return this.activeSources.size > 0;
+  }
+
+  // Amplitud REAL de la voz que está sonando (0..1), leída del AnalyserNode
+  // colgado del gain maestro. Es lo que hace que las partículas del modo
+  // llamada sigan la voz y no un temporizador: cada frame se calcula el RMS
+  // del bloque más reciente y se lo pasa por una curva de medidor de voz.
+  //
+  // Los números salen de medir el TTS real (Supertonic, PCM 44.1 kHz):
+  // silencio 0.000, voz normal 0.030–0.060, énfasis 0.090, picos 0.47. Con una
+  // referencia de 0.09 y exponente 0.7, una frase normal vive entre 0.55 y
+  // 0.85 de energía y solo los golpes de voz llegan a 1.
+  level() {
+    const analyser = this.analyser;
+    const frame = this.levelFrame;
+    if (!analyser || !frame || this.context?.state !== 'running') {
+      return 0;
+    }
+    analyser.getFloatTimeDomainData(frame);
+    let sum = 0;
+    for (let index = 0; index < frame.length; index += 1) {
+      sum += frame[index] * frame[index];
+    }
+    const rms = Math.sqrt(sum / frame.length);
+    if (rms > 0.004 && !this.levelAvailable) {
+      // Una sola vez por sesión: queda registrado que la voz del agente llegó
+      // de verdad al parlante (y que la UI está siguiendo audio, no un reloj).
+      this.levelAvailable = true;
+      trace('agent_audio_level_ready', { rms: Number(rms.toFixed(4)) });
+    }
+    return Math.min(1, Math.pow(rms / 0.09, 0.7));
   }
 
   // Corta TODO el audio pendiente sin cerrar el contexto (barge-in).
@@ -443,7 +481,15 @@ class PcmAudioQueue {
     }
     this.context = new AudioContext({ sampleRate: 24000 });
     this.masterGain = this.context.createGain();
-    this.masterGain.connect(this.context.destination);
+    // El analizador va DESPUÉS del gain maestro: así el ducking del barge-in
+    // también baja la amplitud que ve la UI (si le pisás la voz al agente, sus
+    // partículas se aplacan solas).
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 512;
+    this.analyser.smoothingTimeConstant = 0;
+    this.levelFrame = new Float32Array(this.analyser.fftSize);
+    this.masterGain.connect(this.analyser);
+    this.analyser.connect(this.context.destination);
     this.nextStart = this.context.currentTime;
     return this.context;
   }
@@ -665,7 +711,7 @@ class LiveMicrophoneStreamer {
         window.setTimeout(() => {
           if (state.recording && state.voiceStatus === 'Ruido descartado.') {
             state.voiceStatus = VOICE_READY;
-            markDirty('voice');
+            markDirty('voice', 'call');
           }
         }, 900);
         return;
@@ -787,6 +833,19 @@ class BrowserSpeechRecognizer {
 
 // ¿Está sonando la voz de un agente ahora mismo? (lo consulta el reconocedor
 // del navegador para no transcribir el eco del propio agente como si fueras vos)
+// Ventana móvil del subtítulo: se lee lo último dicho (como un subtítulo de
+// verdad), no el arranque de un turno largo. Corta en palabra.
+const CAPTION_MAX = 210;
+
+function tailCaption(text: string): string {
+  if (text.length <= CAPTION_MAX) {
+    return text;
+  }
+  const cola = text.slice(-CAPTION_MAX);
+  const corte = cola.search(/[\s]/);
+  return `…${corte > 0 ? cola.slice(corte + 1) : cola}`;
+}
+
 function agentAudioIsPlaying(): boolean {
   return Boolean(state?.audio?.isPlaying || state?.audioSegment);
 }
@@ -833,6 +892,17 @@ const state = {
   clientSpeechText: '',
   micSettings: initialMicSettings,
   micMeter: { level: 0, startThreshold: micThresholds(initialMicSettings).startThreshold, speaking: false } as MicMeter,
+  // Modo llamada: la vista dedicada con una esfera de partículas por empleado.
+  // Se entra al prender el micrófono (o con el botón) y se sale con Escape /
+  // "Volver al chat". El transcript de texto sigue existiendo abajo, intacto.
+  callMode: false,
+  // Último turno de agente que arrancó (`${turnId}-${agentId}`). Es el respaldo
+  // del subtítulo cuando todavía no hay audio sonando; el subtítulo queda hasta
+  // que arranca el siguiente, como los de una película.
+  callTurnKey: '',
+  // Texto ya cerrado del último turno: es lo único que se anuncia al lector de
+  // pantalla (los deltas se ven, no se cantan uno por uno).
+  callAnnounced: '',
   // Señal visible del barge-in: 'listening' mientras pisás al agente y le
   // bajamos el volumen, 'cut' el acuse de que lo cortamos.
   bargePhase: 'idle' as 'idle' | 'listening' | 'cut',
@@ -1006,6 +1076,8 @@ function resetMeetingLocalState() {
   state.clientSpeechText = '';
   state.audioSegment = null;
   state.interruptedAgentId = '';
+  state.callTurnKey = '';
+  state.callAnnounced = '';
   window.clearTimeout(interruptedBadgeTimer);
   clearBargeSignals();
   state.turnStartedAt.clear();
@@ -1046,7 +1118,7 @@ function enterCompany(companyId: string, seed?: Company | null) {
   lastFrameKey = '';
   workHtmlCache.clear();
   syncWorkPolling();
-  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'micTuning', 'work');
+  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work');
   trace('company_entered', { companyId });
   connect();
 }
@@ -1059,8 +1131,9 @@ function leaveToHome() {
   closeSocketSilently();
   closeModal('closeMeetingModal');
   state.view = 'home';
+  state.callMode = false;
   syncWorkPolling();
-  markDirty('view', 'connection', 'home');
+  markDirty('view', 'connection', 'home', 'call');
   trace('back_to_home');
   void loadCompanies();
 }
@@ -1085,7 +1158,7 @@ async function handleServerMessage(message: MeetingMessage) {
   switch (message.type) {
     case 'agents_updated':
       state.agents = message.agents;
-      markDirty('agents');
+      markDirty('agents', 'call');
       break;
 
     case 'meeting_ready': {
@@ -1131,7 +1204,7 @@ async function handleServerMessage(message: MeetingMessage) {
       // Sondeo del trabajo: si hay metas activas, se muestra el aviso
       // "El equipo está trabajando" y el organigrama queda precargado.
       void refreshWork();
-      markDirty('view', 'company', 'agents', 'scenario', 'keys', 'voice', 'route', 'work');
+      markDirty('view', 'company', 'agents', 'scenario', 'keys', 'voice', 'call', 'route', 'work');
       break;
     }
 
@@ -1182,7 +1255,7 @@ async function handleServerMessage(message: MeetingMessage) {
       state.turns.push(turn);
       transcriptAppend(turn);
       state.voiceStatus = message.source === 'audio' ? 'Orquestando respuesta…' : state.voiceStatus;
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
     }
 
@@ -1211,7 +1284,10 @@ async function handleServerMessage(message: MeetingMessage) {
       };
       state.turns.push(turn);
       transcriptAppend(turn);
-      markDirty('agents', 'voice');
+      // El subtítulo de la llamada pasa a este turno: el del anterior deja de
+      // estar en pantalla justo cuando arranca el siguiente en hablar.
+      state.callTurnKey = turn.id;
+      markDirty('agents', 'voice', 'call');
       break;
     }
 
@@ -1237,10 +1313,10 @@ async function handleServerMessage(message: MeetingMessage) {
           if (state.speakingAgentId === segment.agentId) {
             state.speakingAgentId = '';
           }
-          markDirty('agents');
+          markDirty('agents', 'call');
         }
       };
-      markDirty('agents');
+      markDirty('agents', 'call');
       break;
 
     case 'agent_audio_end':
@@ -1252,7 +1328,7 @@ async function handleServerMessage(message: MeetingMessage) {
           if (state.speakingAgentId === message.agentId) {
             state.speakingAgentId = '';
           }
-          markDirty('agents');
+          markDirty('agents', 'call');
         }
       }
       break;
@@ -1268,7 +1344,7 @@ async function handleServerMessage(message: MeetingMessage) {
       );
       state.audioSegment = null;
       state.speakingAgentId = '';
-      markDirty('agents', 'voice');
+      markDirty('agents', 'voice', 'call');
       break;
     }
 
@@ -1288,7 +1364,7 @@ async function handleServerMessage(message: MeetingMessage) {
       } else if (state.speakingAgentId === message.agentId && !state.audioSegment) {
         state.speakingAgentId = '';
       }
-      markDirty('agents');
+      markDirty('agents', 'call');
       break;
 
     case 'live_session_status':
@@ -1312,10 +1388,16 @@ async function handleServerMessage(message: MeetingMessage) {
       }, message.turnId);
       if (!message.text?.trim()) {
         removeAgentTurn(message.turnId, message.agentId);
+        if (state.callTurnKey === `${message.turnId}-${message.agentId}`) {
+          state.callTurnKey = '';
+        }
       } else {
         setAgentText(message.turnId, message.agentId, message.text);
+        // Turno cerrado: ESTE es el único momento en que lo dicho se anuncia al
+        // lector de pantalla (una frase entera, no 200 deltas).
+        state.callAnnounced = `${agentName(message.agentId)}: ${message.text.trim()}`;
       }
-      markDirty('agents', 'keys');
+      markDirty('agents', 'keys', 'call');
       break;
 
     case 'agent_silence':
@@ -1329,12 +1411,12 @@ async function handleServerMessage(message: MeetingMessage) {
     case 'audio_listening_stop':
       state.voiceStatus = '';
       state.activeAudioTranscript = '';
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
 
     case 'user_audio_transcript_delta':
       state.activeAudioTranscript = message.text;
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
 
     case 'user_audio_turn_final': {
@@ -1347,19 +1429,19 @@ async function handleServerMessage(message: MeetingMessage) {
         client: 'Reconocido por el navegador.'
       };
       state.voiceStatus = sourceLabels[message.source] || 'Turno de voz enviado.';
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
     }
 
     case 'audio_transcription_status':
       state.voiceStatus = message.message;
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
 
     case 'audio_transcription_empty':
       state.voiceStatus = '';
       upsertAlert('audio-empty', 'Voz', message.message, 'error', 2600);
-      markDirty('voice');
+      markDirty('voice', 'call');
       break;
 
     case 'api_rotation_start':
@@ -1509,6 +1591,7 @@ type Region =
   | 'route'
   | 'keys'
   | 'voice'
+  | 'call'
   | 'micTuning'
   | 'micMeter'
   | 'scenario'
@@ -1527,7 +1610,7 @@ function markDirty(...regions: Region[]) {
 
 // Compat con los caminos que re-renderizan toda la app.
 function render() {
-  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario', 'work');
+  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'micMeter', 'scenario', 'work');
 }
 
 function flushRender() {
@@ -1589,27 +1672,19 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     byId('keysPanel').innerHTML = renderKeys();
   },
   voice() {
-    const mic = byId<HTMLButtonElement>('micButton');
-    mic.classList.toggle('is-recording', state.recording);
-    mic.classList.toggle('is-barge', state.bargePhase === 'listening');
-    mic.setAttribute('aria-pressed', String(state.recording));
-    const label = state.recording ? 'Apagar el micrófono' : 'Hablar con el equipo (activar micrófono)';
-    mic.title = label;
-    mic.setAttribute('aria-label', label);
-    mic.innerHTML = state.recording ? stopIcon() : micIcon();
+    syncMicButton('micButton');
     const status = byId('speechStatus');
-    status.textContent = state.activeAudioTranscript
-      ? `“${state.activeAudioTranscript}”`
-      : state.voiceStatus;
+    status.textContent = speechStatusText();
     status.classList.toggle('is-live', Boolean(state.activeAudioTranscript));
     // Barge-in: el aviso de que le estamos pisando la voz al agente.
     const hint = byId('bargeHint');
     hint.hidden = state.bargePhase === 'idle';
     hint.classList.toggle('is-cut', state.bargePhase === 'cut');
-    hint.textContent = state.bargePhase === 'cut'
-      ? 'Listo, lo cortamos. Seguí vos.'
-      : 'Te escucho… le bajo la voz al equipo.';
+    hint.textContent = bargeHintText();
     byId<HTMLButtonElement>('sendButton').disabled = !state.connected;
+  },
+  call() {
+    syncCallView();
   },
   micTuning() {
     byId('micTuning').innerHTML = renderAudioTuning();
@@ -1746,6 +1821,298 @@ function transcriptReset() {
   syncTranscriptEmpty();
 }
 
+// ── Modo llamada: una esfera de partículas por empleado ─────────────────
+// Vista dedicada para conversar por voz. Se entra al prender el micrófono (o
+// con el botón "Modo llamada") y se sale con Escape / "Volver al chat": la
+// reunión de texto y las demás secciones quedan exactamente como estaban.
+//
+// El reparto de responsabilidades:
+//   · CSS pone los huecos (una celda por empleado, con su nombre debajo como
+//     texto real del DOM) y resuelve el responsive.
+//   · Este archivo mide esos huecos y le dice al canvas dónde dibujar.
+//   · src/lib/call-orbs.ts dibuja: un solo <canvas>, un solo rAF, la
+//     armonización del color y toda la animación.
+
+let orbField: OrbField | null = null;
+// Referencias que viven lo que vive la página (la llamada se abre y se cierra,
+// el canvas y sus observadores se crean una sola vez).
+let callStageObserver: ResizeObserver | null = null;
+let callDarkMedia: MediaQueryList | null = null;
+let callOrbsSignature = '';
+let callCanvasLabel = '';
+let callFpsTimer = 0;
+
+// Los empleados en pausa no están en la llamada.
+function callAgents(): Agent[] {
+  return state.agents.filter((agent) => agent.enabled !== false);
+}
+
+// Grilla equilibrada: se prefiere la última fila llena antes que una esfera
+// suelta. (En móvil manda el CSS, que las acomoda por ancho.)
+function orbColumns(count: number) {
+  if (count <= 3) return Math.max(1, count);
+  if (count === 4) return 2;
+  if (count <= 6) return 3;
+  if (count <= 9) return Math.ceil(count / 2);
+  return 5;
+}
+
+function bargeHintText() {
+  return state.bargePhase === 'cut'
+    ? 'Listo, lo cortamos. Seguí vos.'
+    : 'Te escucho… le bajo la voz al equipo.';
+}
+
+function speechStatusText() {
+  return state.activeAudioTranscript ? `“${state.activeAudioTranscript}”` : state.voiceStatus;
+}
+
+function syncMicButton(id: string) {
+  const mic = byId<HTMLButtonElement>(id);
+  mic.classList.toggle('is-recording', state.recording);
+  mic.classList.toggle('is-barge', state.bargePhase === 'listening');
+  mic.setAttribute('aria-pressed', String(state.recording));
+  const label = state.recording ? 'Apagar el micrófono' : 'Hablar con el equipo (activar micrófono)';
+  mic.title = label;
+  mic.setAttribute('aria-label', label);
+  const icon = state.recording ? stopIcon() : micIcon();
+  if (mic.dataset.icon !== icon) {
+    mic.dataset.icon = icon;
+    mic.innerHTML = icon;
+  }
+}
+
+function enterCallMode(source: string) {
+  if (state.callMode || state.view !== 'workspace') {
+    return;
+  }
+  state.callMode = true;
+  trace('call_mode_entered', { source, agents: callAgents().length });
+  markDirty('call');
+  // El foco arranca en "Volver al chat": la salida siempre está a un Tab (o a
+  // un Escape) de distancia.
+  window.setTimeout(() => byId('callBackBtn').focus(), 60);
+  window.clearTimeout(callFpsTimer);
+  callFpsTimer = window.setTimeout(() => {
+    callFpsTimer = 0;
+    if (state.callMode && orbField) {
+      // Diagnóstico de la llamada: cuadros por segundo con todas las esferas
+      // en pantalla, y si las partículas están siguiendo audio real o el
+      // pulso sintético de emergencia.
+      trace('call_orbs_fps', {
+        ...orbField.stats(),
+        // 'analyser' = las partículas siguen amplitud real; 'sintetico' = todavía
+        // no sonó nada y están con el pulso de emergencia.
+        levelSource: state.audio.levelAvailable ? 'analyser' : 'sintetico',
+        reducedMotion: orbField.prefersReducedMotion
+      });
+    }
+  }, 4000);
+}
+
+function exitCallMode(source: string, options: { stopMic?: boolean } = {}) {
+  if (options.stopMic && state.recording) {
+    stopVoiceCapture();
+  }
+  if (!state.callMode) {
+    return;
+  }
+  state.callMode = false;
+  window.clearTimeout(callFpsTimer);
+  callFpsTimer = 0;
+  trace('call_mode_left', { source, stopMic: Boolean(options.stopMic) });
+  markDirty('call');
+  window.setTimeout(() => byId('micButton').focus(), 60);
+}
+
+// Amplitud que mueve las partículas del que está hablando (0..1).
+// Es audio REAL: el RMS del AnalyserNode colgado del gain maestro de la cola
+// PCM. El pulso sintético queda solo para el caso en que nunca hubo audio (TTS
+// caído, o el turno todavía es solo texto en streaming).
+function callEnergy() {
+  if (!state.speakingAgentId || state.bargePhase !== 'idle') {
+    return 0;
+  }
+  const level = state.audio.level();
+  if (level > 0.05) {
+    return level;
+  }
+  if (state.audio.levelAvailable) {
+    // Hay audio de verdad y este silencio es real (pausa entre oraciones).
+    return 0;
+  }
+  // Fallback: respiración sintética mientras el turno esté vivo.
+  return 0.28 + 0.22 * Math.sin(performance.now() / 210);
+}
+
+function ensureOrbField(): OrbField | null {
+  if (orbField) {
+    return orbField;
+  }
+  const canvas = document.getElementById('callCanvas');
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    return null;
+  }
+  orbField = new OrbField(canvas, { energy: callEnergy });
+  callDarkMedia = window.matchMedia('(prefers-color-scheme: dark)');
+  callDarkMedia.addEventListener('change', () => {
+    orbField?.setTheme(callDarkMedia?.matches ? 'dark' : 'light');
+  });
+  orbField.setTheme(callDarkMedia.matches ? 'dark' : 'light');
+  // El layout lo decide CSS; acá solo se vuelve a medir cuando cambia.
+  if (typeof ResizeObserver === 'function') {
+    callStageObserver = new ResizeObserver(() => syncOrbSlots());
+    callStageObserver.observe(byId('callStage'));
+  }
+  return orbField;
+}
+
+// Traduce el layout del DOM a coordenadas del canvas.
+function syncOrbSlots() {
+  const field = orbField;
+  if (!field || !state.callMode) {
+    return;
+  }
+  const stage = byId('callStage');
+  const box = stage.getBoundingClientRect();
+  if (box.width < 8 || box.height < 8) {
+    return;
+  }
+  field.resize(box.width, box.height);
+  const slots: OrbSlot[] = [];
+  for (const item of stage.querySelectorAll<HTMLElement>('.call-orb')) {
+    const hole = item.querySelector<HTMLElement>('.call-orb-slot');
+    const id = item.dataset.orbId;
+    if (!hole || !id) {
+      continue;
+    }
+    const rect = hole.getBoundingClientRect();
+    slots.push({
+      id,
+      cx: rect.left - box.left + rect.width / 2,
+      cy: rect.top - box.top + rect.height / 2,
+      r: Math.min(rect.width, rect.height) / 2
+    });
+  }
+  field.setSlots(slots);
+}
+
+function syncCallView() {
+  const view = byId<HTMLElement>('callView');
+  const active = state.callMode && state.view === 'workspace';
+  view.hidden = !active;
+  document.body.classList.toggle('is-in-call', active);
+
+  // El botón del composer es el camino de vuelta cuando la llamada está
+  // minimizada y el micrófono sigue prendido: nunca queda un callejón sin salida.
+  byId('callEnterLabel').textContent = state.recording ? 'Volver a la llamada' : 'Modo llamada';
+  byId('callEnterBtn').hidden = active;
+
+  if (!active) {
+    orbField?.stop();
+    return;
+  }
+
+  const field = ensureOrbField();
+  const agents = callAgents();
+
+  // El elenco se repinta solo si cambió (nombre, color o quién está en la mesa).
+  const signature = agents.map((agent) => `${agent.id}:${agent.color}:${agent.name}`).join('|');
+  if (signature !== callOrbsSignature) {
+    callOrbsSignature = signature;
+    // Las columnas las decide el elenco: 6 empleados quedan 3×2 y 8 quedan
+    // 4×2, nunca cinco arriba y uno solo abajo.
+    byId('callOrbs').style.setProperty('--orb-cols', String(orbColumns(agents.length)));
+    byId('callOrbs').innerHTML = agents.length
+      ? agents.map((agent) => `
+        <li class="call-orb" data-orb-id="${escapeHtml(agent.id)}">
+          <span class="call-orb-slot" aria-hidden="true"></span>
+          <span class="call-orb-name">${escapeHtml(agent.name)}</span>
+        </li>
+      `).join('')
+      : '';
+    field?.setAgents(agents.map((agent) => ({ id: agent.id, name: agent.name, color: agent.color })));
+    syncOrbSlots();
+  }
+
+  // Quién habla: peso tipográfico en el nombre, nada de color chillón.
+  for (const item of byId('callOrbs').querySelectorAll<HTMLElement>('.call-orb')) {
+    item.classList.toggle('is-speaking', item.dataset.orbId === state.speakingAgentId);
+  }
+
+  byId('callTitleText').textContent = state.company
+    ? `Llamada · ${state.company.name}`
+    : 'Llamada con el equipo';
+
+  // Subtítulo: manda el AUDIO que está sonando, no el texto más reciente. El
+  // servidor puede estar streameando el texto del siguiente mientras todavía se
+  // escucha al anterior (el SpeakerGate serializa la voz, no el texto); si el
+  // subtítulo siguiera al texto, diría "Hugo" mientras suena Bruno.
+  const audioKey = state.audioSegment
+    ? `${state.audioSegment.turnId}-${state.audioSegment.agentId}`
+    : '';
+  const audible = state.audioSegment?.agentId || state.speakingAgentId || '';
+  // Si suena alguien pero su texto todavía no llegó, se muestra SU nombre sin
+  // texto. Caer al turno anterior ponía la frase de otro debajo de la esfera
+  // que estaba hablando (decía "Hugo" con Bruno sonando).
+  const key = audioKey && state.turns.some((item) => item.id === audioKey)
+    ? audioKey
+    : (audible ? '' : state.callTurnKey);
+  const turn = key ? state.turns.find((item) => item.id === key) : undefined;
+  const caption = tailCaption(turn?.text?.trim() || '');
+  const captionText = byId('callCaptionText');
+  if (captionText.textContent !== caption) {
+    captionText.textContent = caption;
+  }
+  // Entre "arrancó el turno" y el primer delta hay un momento sin texto: ahí va
+  // el nombre de quien tomó la palabra, no la invitación a hablar (que
+  // aparecería justo cuando el equipo está por decir algo).
+  const live = Boolean(key) || Boolean(audible);
+  // Quien suena manda sobre quien escribió: el nombre y la frase son del mismo.
+  const speakerName = audible ? agentName(audible) : (turn?.speaker || '');
+  byId('callCaptionSpeaker').textContent = caption || live ? speakerName : '';
+  byId('callCaptionHint').hidden = Boolean(caption) || live;
+  byId('callCaption').classList.toggle('is-past', Boolean(caption) && !state.speakingAgentId);
+  const announcer = byId('callCaptionLive');
+  if (state.callAnnounced && announcer.textContent !== state.callAnnounced) {
+    announcer.textContent = state.callAnnounced;
+  }
+
+  // Barge-in con la misma señal que el composer, en su lugar de esta vista.
+  const barge = byId('callBarge');
+  barge.hidden = state.bargePhase === 'idle';
+  barge.classList.toggle('is-cut', state.bargePhase === 'cut');
+  barge.textContent = bargeHintText();
+
+  const status = byId('callStatus');
+  status.textContent = speechStatusText();
+  status.classList.toggle('is-live', Boolean(state.activeAudioTranscript));
+  syncMicButton('callMic');
+
+  // El canvas es decorativo salvo por su descripción: ahí va el estado.
+  const speaker = state.speakingAgentId ? agentName(state.speakingAgentId) : '';
+  const label = agents.length
+    ? `Llamada con ${agents.length} ${agents.length === 1 ? 'empleado' : 'empleados'}: una esfera de partículas por cada uno. ${speaker ? `Habla ${speaker}.` : 'Nadie habla en este momento.'}`
+    : 'Todavía no hay nadie en la llamada.';
+  if (label !== callCanvasLabel) {
+    callCanvasLabel = label;
+    byId('callCanvas').setAttribute('aria-label', label);
+  }
+
+  field?.setSpeaking(state.speakingAgentId);
+  field?.start();
+}
+
+// El bucle no corre con la pestaña oculta (ni la llamada minimizada).
+function syncCallLoop() {
+  if (document.hidden || !state.callMode || state.view !== 'workspace') {
+    orbField?.stop();
+    return;
+  }
+  syncOrbSlots();
+  orbField?.start();
+}
+
 // ── Modales accesibles (overlay + Escape + foco) ────────────────────────
 
 const modalStack: string[] = [];
@@ -1870,10 +2237,13 @@ function mountShell() {
 
             <section class="ws-pane" id="meetingView" role="tabpanel" aria-labelledby="tabMeeting">
               <h2 class="sr-only">Conversación</h2>
-              <button class="work-notice" id="workNotice" data-action="open-work-tab" type="button" hidden>
-                <span class="live-dot" aria-hidden="true"></span>
-                <span>El equipo está trabajando en segundo plano — ver Tareas</span>
-              </button>
+              <div class="meeting-toolbar">
+                <button class="work-notice" id="workNotice" data-action="open-work-tab" type="button" hidden>
+                  <span class="live-dot" aria-hidden="true"></span>
+                  <span>El equipo está trabajando en segundo plano — ver Tareas</span>
+                </button>
+                <button class="btn ghost sm call-enter-btn" id="callEnterBtn" data-action="open-call" type="button" title="Ver el equipo en la llamada">${orbIcon()}<span id="callEnterLabel">Modo llamada</span></button>
+              </div>
               <div class="transcript" id="transcript" tabindex="-1">
                 <div class="transcript-empty" id="transcriptEmpty">
                   <p class="empty-title">La mesa está lista</p>
@@ -1961,6 +2331,36 @@ function mountShell() {
           </main>
         </div>
       </div>
+
+      <section class="call" id="callView" role="dialog" aria-modal="true" aria-labelledby="callTitle" hidden>
+        <header class="call-top">
+          <button class="btn ghost sm" id="callBackBtn" data-action="close-call" type="button">← Volver al chat <kbd>Esc</kbd></button>
+          <p class="call-title" id="callTitle">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="callTitleText">Llamada con el equipo</span>
+          </p>
+        </header>
+
+        <div class="call-stage" id="callStage">
+          <canvas id="callCanvas" role="img" aria-label="Esferas de partículas del equipo en la llamada"></canvas>
+          <ul class="call-orbs" id="callOrbs"></ul>
+        </div>
+
+        <footer class="call-bottom">
+          <p class="barge-hint call-barge" id="callBarge" role="status" hidden></p>
+          <div class="call-caption" id="callCaption">
+            <p class="call-caption-speaker" id="callCaptionSpeaker" aria-hidden="true"></p>
+            <p class="call-caption-text" id="callCaptionText" aria-hidden="true"></p>
+            <p class="call-caption-hint muted" id="callCaptionHint">Hablá cuando quieras: lo que diga el equipo aparece acá.</p>
+            <p class="sr-only" id="callCaptionLive" aria-live="polite" aria-atomic="true"></p>
+          </div>
+          <p class="speech-status call-status" id="callStatus"></p>
+          <div class="call-controls">
+            <button class="mic-btn" id="callMic" data-action="toggle-mic" type="button" aria-pressed="false" aria-label="Hablar con el equipo (activar micrófono)">${micIcon()}</button>
+            <button class="btn ghost sm call-end-btn" data-action="end-call" type="button">Cortar</button>
+          </div>
+        </footer>
+      </section>
     </div>
 
     <div class="toasts" id="alerts" aria-live="polite"></div>
@@ -2213,9 +2613,19 @@ function mountShell() {
   document.addEventListener('change', handleDelegatedChange);
   document.addEventListener('input', handleDelegatedInput);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && modalStack.length > 0) {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    // Un modal abierto encima de la llamada se cierra primero: Escape saca
+    // siempre la capa más alta, no la vista de abajo.
+    if (modalStack.length > 0) {
       event.preventDefault();
       closeTopModal();
+      return;
+    }
+    if (state.callMode) {
+      event.preventDefault();
+      exitCallMode('escape');
     }
   });
   // Árbol del organigrama: flechas / Home / End mueven el foco entre nodos.
@@ -2224,6 +2634,12 @@ function mountShell() {
   document.addEventListener('keydown', handleWsTabsKeydown);
   // El polling del panel de trabajo se pausa cuando la pestaña no se ve.
   document.addEventListener('visibilitychange', syncWorkPolling);
+  // Y con la pestaña oculta tampoco se dibujan las esferas de la llamada.
+  document.addEventListener('visibilitychange', syncCallLoop);
+  // Al cambiar el tamaño de la ventana hay que volver a medir los huecos (el
+  // ResizeObserver del stage cubre el caso normal; esto cubre el zoom y los
+  // cambios de devicePixelRatio al mover la ventana entre pantallas).
+  window.addEventListener('resize', syncOrbSlots);
   // El estado abierto/cerrado de las tareas por agente sobrevive a los
   // re-render de la región (toggle no burbujea: se captura).
   document.addEventListener('toggle', (event) => {
@@ -2296,6 +2712,15 @@ function handleDelegatedClick(event: Event) {
     // ── Workspace: reunión ──
     case 'toggle-mic':
       void toggleLiveAudio();
+      break;
+    case 'open-call':
+      enterCallMode('button');
+      break;
+    case 'close-call':
+      exitCallMode('back');
+      break;
+    case 'end-call':
+      exitCallMode('hangup', { stopMic: true });
       break;
     case 'reset':
       trace('reset_clicked');
@@ -2485,7 +2910,7 @@ function handleDelegatedClick(event: Event) {
         saveStoredMeetingId(state.companyId, meetingId);
         closeModal('meetingsModal');
         resetMeetingLocalState();
-        markDirty('agents', 'route', 'keys', 'voice', 'scenario');
+        markDirty('agents', 'route', 'keys', 'voice', 'call', 'scenario');
         reconnectNow();
       }
       break;
@@ -4803,7 +5228,7 @@ function signalBargeListening() {
     return;
   }
   state.bargePhase = 'listening';
-  markDirty('voice', 'micMeter');
+  markDirty('voice', 'micMeter', 'call');
 }
 
 // Falso positivo: se apaga el aviso de "te escucho", pero NO el acuse de
@@ -4823,7 +5248,7 @@ function clearBargeSignals() {
     return;
   }
   state.bargePhase = 'idle';
-  markDirty('voice', 'micMeter');
+  markDirty('voice', 'micMeter', 'call');
 }
 
 // Corte confirmado: acuse en el compositor, badge en la tarjeta del empleado
@@ -4835,7 +5260,7 @@ function markAgentInterrupted(agentId: string, turnKey: string) {
     bargeHintTimer = 0;
     if (state.bargePhase === 'cut') {
       state.bargePhase = 'idle';
-      markDirty('voice', 'micMeter');
+      markDirty('voice', 'micMeter', 'call');
     }
   }, BARGE_CUT_HOLD_MS);
 
@@ -4845,7 +5270,7 @@ function markAgentInterrupted(agentId: string, turnKey: string) {
     interruptedBadgeTimer = window.setTimeout(() => {
       interruptedBadgeTimer = 0;
       state.interruptedAgentId = '';
-      markDirty('agents');
+      markDirty('agents', 'call');
     }, INTERRUPTED_BADGE_MS);
   }
 
@@ -4857,7 +5282,7 @@ function markAgentInterrupted(agentId: string, turnKey: string) {
     transcriptMarkInterrupted(turnKey);
   }
 
-  markDirty('voice', 'micMeter', 'agents');
+  markDirty('voice', 'micMeter', 'agents', 'call');
 }
 
 // ── Captura de voz ──────────────────────────────────────────────────────
@@ -4922,6 +5347,9 @@ async function toggleLiveAudio() {
       }, 80);
     });
     await state.microphone.start();
+    // Prender el micrófono ES entrar a la llamada: si vas a hablar, querés ver
+    // al equipo. Volver al chat es un Escape.
+    enterCallMode('mic');
   } catch (error) {
     state.recording = false;
     state.microphone = null;
@@ -4943,6 +5371,11 @@ function appendAgentText(turnId: string, agentId: string, delta: string) {
   if (turn) {
     turn.text = `${turn.text}${delta}`;
     transcriptSetText(id, turn.text);
+    // El subtítulo de la llamada se pinta en el flush del próximo frame: 200
+    // deltas de un turno largo son, como máximo, un write por frame.
+    if (state.callMode && state.callTurnKey === id) {
+      markDirty('call');
+    }
   }
 }
 
@@ -4977,7 +5410,7 @@ function setVoiceStatus(message: string, timeoutMs = 0) {
   if (timeoutMs > 0) {
     voiceStatusTimer = window.setTimeout(() => {
       state.voiceStatus = state.recording ? VOICE_READY : '';
-      markDirty('voice');
+      markDirty('voice', 'call');
     }, timeoutMs);
   }
 }
@@ -5245,6 +5678,11 @@ function eyeIcon() {
 
 function eyeOffIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.82 11.82 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2.71 3.16a1 1 0 0 0-1.42 1.41l1.97 1.97A11.77 11.77 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.52 0 2.98-.3 4.32-.82l2.72 2.72a1 1 0 0 0 1.42-1.42L2.71 3.16ZM12 17a5 5 0 0 1-5-5c0-.77.18-1.5.49-2.14l1.57 1.57a3 3 0 0 0 3.51 3.51l1.57 1.57c-.64.31-1.37.49-2.14.49Z"/></svg>`;
+}
+
+// Tres puntos de una nube: el ícono del modo llamada.
+function orbIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14Z" opacity=".45"/><circle cx="12" cy="8.4" r="1.5"/><circle cx="8.6" cy="13.4" r="1.3"/><circle cx="15.2" cy="14" r="1.2"/></svg>`;
 }
 
 function chevronIcon() {
