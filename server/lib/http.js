@@ -18,7 +18,7 @@ import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
-import { projectDir, WORKSPACE_ROOT } from './workforce.js';
+import { projectDir, renderWorkSection, WORKSPACE_ROOT } from './workforce.js';
 
 // Índice de archivos de un proyecto para el navegador integrado del cliente.
 // Síncrono a propósito: son unas pocas decenas de entradas por proyecto.
@@ -289,6 +289,7 @@ export function createApp({ store }) {
     const instruction = buildSystemInstruction(agent, {
       agents: store.listAgents({ companyId: agent.companyId }),
       scenario,
+      workSection: renderWorkSection(store, agent.companyId),
       learningsSection: renderLearningsSection(store, agent.id)
     });
     res.json({ agentId: agent.id, companyId: agent.companyId, systemInstruction: instruction });

@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid';
 
 import { rootDir } from './config.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
+import { hasLiveSession, isUserSpeaking } from './priority.js';
 import { getMinimaxModels } from './settings.js';
 import { telemetry } from './telemetry.js';
 
@@ -88,6 +89,52 @@ export function extractFileContent(rawText, action) {
   return '';
 }
 
+// Cede la clave mientras la persona conversa (con tope, para que un cliente
+// colgado no congele el trabajo para siempre).
+async function waitWhileUserSpeaks(maxWaitMs = 60000) {
+  const until = Date.now() + maxWaitMs;
+  while (isUserSpeaking() && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+// Estado real del trabajo de la empresa, para que en la reunión los agentes
+// (sobre todo la CEO) sepan qué está pasando y no contesten "no sé".
+export function renderWorkSection(store, companyId) {
+  if (!companyId) {
+    return '';
+  }
+  const goals = store.listGoals(companyId, 'active').slice(0, 3);
+  if (goals.length === 0) {
+    return '';
+  }
+  const ESTADOS = {
+    pending: 'en cola',
+    in_progress: 'trabajando ahora',
+    done: 'terminada',
+    blocked: 'trabada',
+    noted: 'anotada como acuerdo'
+  };
+  const nameOf = (agentId) => store.getAgent(agentId)?.name || 'alguien del equipo';
+
+  const lines = [];
+  for (const goal of goals) {
+    lines.push(`Proyecto "${goal.title}":`);
+    for (const task of store.tasksForGoal(goal.id).slice(0, 8)) {
+      const estado = ESTADOS[task.status] || task.status;
+      const revision = task.review_status === 'cambios'
+        ? ' (le pidieron cambios)'
+        : task.review_status === 'aprobado' ? ' (revisada y aprobada)' : '';
+      lines.push(`- ${nameOf(task.agent_id)}: ${String(task.text).slice(0, 120)} — ${estado}${revision}`);
+    }
+  }
+  return [
+    'TRABAJO EN CURSO DE LA EMPRESA (está pasando de verdad ahora mismo;',
+    'si te preguntan cómo viene algo, respondé con esto y no digas que no sabés):',
+    ...lines
+  ].join('\n');
+}
+
 export class Workforce {
   constructor(store, keyRing, { onEvent } = {}) {
     this.store = store;
@@ -157,12 +204,20 @@ export class Workforce {
   }
 
   async tick() {
-    if (!this.keyRing.hasKeys() || this.busyAgents.size >= MAX_CONCURRENT) {
+    // Con una reunión abierta se trabaja de a uno: la clave es la misma que
+    // usa la conversación y los pasos de trabajo son largos.
+    const maxConcurrent = hasLiveSession() ? 1 : MAX_CONCURRENT;
+    if (!this.keyRing.hasKeys() || this.busyAgents.size >= maxConcurrent) {
+      return;
+    }
+    // La persona tiene prioridad: mientras conversa, el equipo no arranca
+    // trabajo nuevo (comparten la misma clave y los pasos son largos).
+    if (isUserSpeaking()) {
       return;
     }
     for (const companyId of this.store.activeWorkCompanies()) {
       for (const task of this.store.workQueue(companyId)) {
-        if (this.busyAgents.size >= MAX_CONCURRENT) {
+        if (this.busyAgents.size >= maxConcurrent) {
           return;
         }
         const agent = this.store.getAgent(task.agent_id);
@@ -282,6 +337,7 @@ export class Workforce {
     for (let step = 1; step <= MAX_STEPS_PER_RUN; step += 1) {
       let action = null;
       let rawText = '';
+      await waitWhileUserSpeaks();
       try {
         const history = log.length
           ? 'Acciones que ya hiciste: ' + log.map((entry) => `${entry.step}:${entry.action}${entry.path ? '(' + entry.path + ')' : ''}${entry.ok === false ? '✗' : ''}`).join(', ')

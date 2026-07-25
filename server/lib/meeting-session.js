@@ -12,7 +12,9 @@ import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
 import { ReflectionRunner } from './reflection.js';
+import { registerSession, unregisterSession } from './priority.js';
 import { AgentRouter } from './router.js';
+import { renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { CaptureTranscriberRuntime } from './transcriber.js';
@@ -78,7 +80,7 @@ export class MeetingSession {
     });
     this.gate = new SpeakerGate({ emit: (event) => this.send(event) });
     this.turnQueue = new CancellableTurnQueue({
-      timeoutMs: 60000,
+      timeoutMs: Number(process.env.TURN_TIMEOUT_MS || 120000),
       maxPending: 10,
       onCancelled: (turnId, reason) => {
         this.send({ type: 'turn_cancelled', turnId, reason: reason === 'barge_in' ? 'barge_in' : 'superseded' });
@@ -91,6 +93,9 @@ export class MeetingSession {
     // en UN solo turno antes de rutear (el agente espera a que termines la idea).
     this.pendingUser = null;
     this.pendingClose = null;
+    // Con alguien conectado, el trabajo de fondo cede la clave.
+    registerSession();
+    this.sessionCounted = true;
   }
 
   createAgentRuntime(agent) {
@@ -215,8 +220,83 @@ export class MeetingSession {
       scenario: this.company
         ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
         : null,
+      workSection: renderWorkSection(this.store, this.company?.id),
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
     };
+  }
+
+  closeCurrentMeeting(reason) {
+    if (!this.meeting) {
+      return;
+    }
+    const closingMeetingId = this.meeting.id;
+    this.store.closeMeeting(closingMeetingId);
+    this.reflection.runNow(closingMeetingId);
+    if (activeSessionsByMeeting.get(this.meeting.id) === this) {
+      activeSessionsByMeeting.delete(this.meeting.id);
+    }
+    this.logTelemetry('meeting_closed', { meetingId: this.meeting.id, reason });
+    this.meeting = null;
+    this.memory?.reset();
+    this.transcriber.reset();
+    for (const agent of this.agents.values()) {
+      agent.reset();
+    }
+  }
+
+  promptContext(agentId = null) {
+    const scenarioText = this.company
+      ? [
+          this.company.scenario,
+          this.meeting?.scenario_text ? `Objetivo de esta reunión: ${this.meeting.scenario_text}` : ''
+        ].filter(Boolean).join('\n')
+      : this.meeting?.scenario_text || '';
+    return {
+      agents: this.sessionAgents,
+      scenario: this.company
+        ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
+        : null,
+      workSection: renderWorkSection(this.store, this.company?.id),
+      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
+    };
+  }
+
+  // Qué está produciendo el equipo AHORA. Sin esto, preguntarle a la CEO cómo
+  // viene un proyecto que su propio equipo está construyendo daba un "no sé".
+  renderWorkSection() {
+    if (!this.company) {
+      return '';
+    }
+    const goals = this.store.listGoals(this.company.id, 'active').slice(0, 3);
+    if (goals.length === 0) {
+      return '';
+    }
+    const nameOf = (agentId) => this.store.getAgent(agentId)?.name || 'alguien del equipo';
+    const ESTADOS = {
+      pending: 'en cola',
+      in_progress: 'trabajando ahora',
+      done: 'terminada',
+      blocked: 'trabada',
+      noted: 'anotada como acuerdo'
+    };
+
+    const lines = [];
+    for (const goal of goals) {
+      const tasks = this.store.tasksForGoal(goal.id);
+      lines.push(`Proyecto "${goal.title}":`);
+      for (const task of tasks.slice(0, 8)) {
+        const estado = ESTADOS[task.status] || task.status;
+        const revision = task.review_status === 'cambios'
+          ? ' (le pidieron cambios)'
+          : task.review_status === 'aprobado' ? ' (revisada y aprobada)' : '';
+        lines.push(`- ${nameOf(task.agent_id)}: ${task.text.slice(0, 120)} — ${estado}${revision}`);
+      }
+    }
+    return [
+      'TRABAJO EN CURSO DE LA EMPRESA (esto está pasando de verdad ahora mismo;',
+      'si te preguntan cómo viene algo, respondé con esto y no digas que no sabés):',
+      ...lines
+    ].join('\n');
   }
 
   publicAgents() {
@@ -1311,6 +1391,10 @@ export class MeetingSession {
   }
 
   close() {
+    if (this.sessionCounted) {
+      unregisterSession();
+      this.sessionCounted = false;
+    }
     const allEvents = telemetry.list(TELEMETRY_MAX_EVENTS).filter(e => e.sessionId === this.id);
     const summary = {
       sessionDurationMs: Date.now() - new Date(this.createdAt).getTime(),

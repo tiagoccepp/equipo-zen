@@ -278,7 +278,7 @@ export function emptyAgentResponse() {
 }
 
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
-//            learningsSection?: string } — desacoplado de MeetingSession
+//            workSection?: string, learningsSection?: string } — desacoplado de MeetingSession
 // para que el preview HTTP arme exactamente el mismo prompt.
 export function buildSystemInstruction(agent, context = {}) {
   const agentsList = context.agents && context.agents.length > 0 ? context.agents : [agent];
@@ -305,6 +305,8 @@ export function buildSystemInstruction(agent, context = {}) {
       ]
     : [];
 
+  const workBlock = context.workSection ? [context.workSection, ''] : [];
+
   const learningsBlock = context.learningsSection
     ? [context.learningsSection, '']
     : [];
@@ -316,6 +318,7 @@ export function buildSystemInstruction(agent, context = {}) {
     participants,
     '',
     ...scenarioBlock,
+    ...workBlock,
     'TU ESPECIALIDAD:',
     agent.domains.join(', '),
     '',

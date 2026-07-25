@@ -1,4 +1,5 @@
 import { withTimeout } from './llm.js';
+import { beginUserTurn, endUserTurn } from './priority.js';
 
 // ── SpeakerGate ─────────────────────────────────────────────────────────
 // Garantiza que UN solo agente emite audio a la vez, a nivel servidor.
@@ -188,6 +189,7 @@ export class CancellableTurnQueue {
       const entry = this.pending.shift();
       const controller = new AbortController();
       this.current = { id: entry.id, controller };
+      beginUserTurn();
       try {
         await withTimeout(
           entry.job(controller.signal),
@@ -204,6 +206,7 @@ export class CancellableTurnQueue {
         }
       } finally {
         this.current = null;
+        endUserTurn();
       }
     }
     this.processing = false;
