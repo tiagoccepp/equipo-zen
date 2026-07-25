@@ -203,6 +203,30 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_work_runs_task ON work_runs(task_id, id);
   CREATE INDEX idx_work_runs_company ON work_runs(company_id, id);
+  `,
+
+  // v5: proyectos con carpeta propia, tareas tipadas (no todo es entregable)
+  // y revisión entre compañeros.
+  `
+  ALTER TABLE goals ADD COLUMN slug TEXT;
+  ALTER TABLE goals ADD COLUMN kind TEXT NOT NULL DEFAULT 'proyecto';
+
+  ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'entregable';
+  ALTER TABLE tasks ADD COLUMN reviewer_id TEXT;
+  ALTER TABLE tasks ADD COLUMN review_status TEXT;
+  ALTER TABLE tasks ADD COLUMN parent_task_id TEXT;
+
+  CREATE TABLE task_comments (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    company_id  TEXT,
+    author_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'nota',
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX idx_task_comments_task ON task_comments(task_id, created_at);
+  CREATE INDEX idx_task_comments_company ON task_comments(company_id, created_at);
   `
 ];
 

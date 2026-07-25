@@ -1,3 +1,4 @@
+import { readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -17,7 +18,44 @@ import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
-import { WORKSPACE_ROOT } from './workforce.js';
+import { projectDir, WORKSPACE_ROOT } from './workforce.js';
+
+// Índice de archivos de un proyecto para el navegador integrado del cliente.
+// Síncrono a propósito: son unas pocas decenas de entradas por proyecto.
+function listProjectFiles(companyId, slug) {
+  const base = projectDir(companyId, slug);
+  const out = [];
+  const walk = (dir, prefix) => {
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || out.length >= 60) continue;
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), rel);
+      } else {
+        let size = 0;
+        try {
+          size = statSync(path.join(dir, entry.name)).size;
+        } catch {
+          size = 0;
+        }
+        out.push({ path: rel, size, url: `/workspace/${companyId}/${slug || 'general'}/${rel}` });
+      }
+    }
+  };
+  walk(base, '');
+  return out.sort((a, b) => {
+    // index.html primero: es lo que abre el navegador integrado.
+    const aIndex = /(^|\/)index\.html?$/i.test(a.path) ? 0 : 1;
+    const bIndex = /(^|\/)index\.html?$/i.test(b.path) ? 0 : 1;
+    return aIndex - bIndex || a.path.localeCompare(b.path);
+  });
+}
 
 export function createApp({ store }) {
   const app = express();
@@ -109,16 +147,39 @@ export function createApp({ store }) {
     if (!company) {
       return res.status(404).json({ error: 'empresa no encontrada' });
     }
-    const goals = store.listGoals(company.id).slice(0, 10).map((goal) => ({
+    const comments = store.recentComments(company.id, 60);
+    const commentsByTask = new Map();
+    for (const comment of comments) {
+      if (!commentsByTask.has(comment.task_id)) {
+        commentsByTask.set(comment.task_id, []);
+      }
+      commentsByTask.get(comment.task_id).push({
+        id: comment.id,
+        authorId: comment.author_id,
+        kind: comment.kind,
+        text: comment.text,
+        createdAt: comment.created_at
+      });
+    }
+
+    const goals = store.listGoals(company.id).slice(0, 12).map((goal) => ({
       ...goal,
+      // Cada proyecto vive en su propia carpeta del entorno aislado.
+      files: goal.kind === 'acuerdo' ? [] : listProjectFiles(company.id, goal.slug),
+      url: goal.kind === 'acuerdo' ? null : `/workspace/${company.id}/${goal.slug || 'general'}/`,
       tasks: store.tasksForGoal(goal.id).map((task) => ({
         id: task.id,
         text: task.text,
         status: task.status,
+        kind: task.kind || 'entregable',
         agentId: task.agent_id,
+        reviewerId: task.reviewer_id,
+        reviewStatus: task.review_status,
+        parentTaskId: task.parent_task_id,
         resultSummary: task.result_summary,
         blockedReason: task.blocked_reason,
-        runCount: task.run_count
+        runCount: task.run_count,
+        comments: commentsByTask.get(task.id) || []
       }))
     }));
     res.json({
@@ -126,6 +187,14 @@ export function createApp({ store }) {
       team: store.listAgents({ companyId: company.id }).map(({ id, name, title, color, role, managerId }) => ({ id, name, title, color, role, managerId })),
       goals,
       runs: store.recentWorkRuns(company.id, 30),
+      comments: comments.map((comment) => ({
+        id: comment.id,
+        taskId: comment.task_id,
+        authorId: comment.author_id,
+        kind: comment.kind,
+        text: comment.text,
+        createdAt: comment.created_at
+      })),
       workspaceUrl: `/workspace/${company.id}/`
     });
   });

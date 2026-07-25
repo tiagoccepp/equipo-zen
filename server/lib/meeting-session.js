@@ -1087,20 +1087,41 @@ export class MeetingSession {
         tasks: agent.tasks.filter((task) => !task.completed).map((task) => task.text)
       }));
 
+    // Cada tarea se numera para que la CEO pueda clasificarla: no toda
+    // reunión termina en un entregable — muchas solo dejan acuerdos.
+    const numbered = [];
+    for (const assignment of assignments) {
+      for (const text of assignment.tasks) {
+        numbered.push({ n: numbered.length + 1, agentName: assignment.agentName, text });
+      }
+    }
+
     const transcript = this.memory.recentContext(30);
     const prompt = [
-      `Sos ${ceo ? ceo.name : 'la CEO'}, CEO de ${this.company.name}. La reunión está por cerrarse y los empleados van a ponerse a TRABAJAR en serio con lo asignado.`,
+      `Sos ${ceo ? ceo.name : 'la CEO'}, CEO de ${this.company.name}. Se está cerrando la reunión y tenés que decidir, con criterio, qué pasa después.`,
       '',
       'TAREAS PENDIENTES POR EMPLEADO:',
-      assignments.length
-        ? assignments.map((a) => `- ${a.agentName}: ${a.tasks.join(' | ')}`).join('\n')
+      numbered.length
+        ? numbered.map((item) => `${item.n}. ${item.agentName}: ${item.text}`).join('\n')
         : '(no se asignaron tareas en esta reunión)',
       '',
       'TRANSCRIPCIÓN RECIENTE:',
       transcript || '(vacía)',
       '',
+      'CRITERIO IMPORTANTE — no inventes trabajo:',
+      '- "entregable" = hay que PRODUCIR algo concreto y revisable (una página, un documento, un plan escrito, un análisis).',
+      '- "decision" = un acuerdo o definición que ya quedó tomada en la reunión; no hay nada que construir.',
+      '- "seguimiento" = algo para retomar más adelante o que depende de terceros; tampoco se construye ahora.',
+      '- Si la reunión fue de alineación, presentación, dudas o charla, "producesWork" es false y NO se abre ningún proyecto.',
+      'Marcá "entregable" SOLO si de verdad hay que crear algo. Es perfectamente válido cerrar sin proyecto.',
+      '',
       'Devolvé SOLO un JSON válido:',
-      '{"goalTitle":"título corto de la meta de esta reunión","goalDescription":"1-2 oraciones: qué se busca lograr y por qué","spokenSummary":"tu repaso HABLADO en 2-5 oraciones, cálido y claro: qué quedó a cargo de cada uno y qué pasa ahora; terminá preguntando si está bien así para arrancar","hires":[{"need":"si detectás que falta una habilidad que NADIE del equipo tiene, describila; lista vacía si no falta nada"}]}'
+      '{"producesWork":true|false,',
+      ' "tasks":[{"n":1,"kind":"entregable|decision|seguimiento"}],',
+      ' "goalTitle":"título corto del proyecto (o del acuerdo, si no hay trabajo)",',
+      ' "goalDescription":"1-2 oraciones: qué se busca y por qué",',
+      ' "spokenSummary":"tu repaso HABLADO en 2-5 oraciones, cálido y claro: qué quedó a cargo de cada uno o, si no hay nada que producir, qué se acordó; terminá preguntando si está bien así",',
+      ' "hires":[{"need":"solo si falta una habilidad que NADIE del equipo tiene; lista vacía si no falta nada"}]}'
     ].join('\n');
 
     let plan = null;
@@ -1120,14 +1141,41 @@ export class MeetingSession {
       }
     }
 
-    const fallbackSummary = assignments.length
-      ? `Repasemos antes de cerrar: ${assignments.map((a) => `${a.agentName} queda con ${a.tasks.join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`
-      : 'No quedaron tareas asignadas en esta reunión. ¿Cerramos igual?';
+    // Clasificación por número de tarea → tipo. Sin plan del modelo, se
+    // asume entregable (comportamiento anterior) solo si hay tareas.
+    const kindByIndex = new Map();
+    for (const item of Array.isArray(plan?.tasks) ? plan.tasks : []) {
+      const n = Number(item?.n);
+      const kind = ['entregable', 'decision', 'seguimiento'].includes(item?.kind) ? item.kind : 'entregable';
+      if (Number.isFinite(n)) {
+        kindByIndex.set(n, kind);
+      }
+    }
+    let cursor = 0;
+    const classified = assignments.map((assignment) => ({
+      ...assignment,
+      tasks: assignment.tasks.map((text) => {
+        cursor += 1;
+        return { text, kind: kindByIndex.get(cursor) || 'entregable' };
+      })
+    }));
+
+    const deliverables = classified.flatMap((a) => a.tasks).filter((t) => t.kind === 'entregable').length;
+    const producesWork = plan?.producesWork === false ? false : deliverables > 0;
+    const hires = producesWork && Array.isArray(plan?.hires) ? plan.hires.filter((h) => h?.need).slice(0, 3) : [];
+
+    const fallbackSummary = producesWork
+      ? `Repasemos antes de cerrar: ${classified.map((a) => `${a.agentName} queda con ${a.tasks.map((t) => t.text).join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`
+      : assignments.length
+        ? 'De esta reunión no sale nada para construir todavía: quedan los acuerdos anotados. ¿Cerramos así?'
+        : 'No quedaron tareas para producir en esta reunión, solo la conversación. ¿Cerramos igual?';
 
     this.pendingClose = {
-      goalTitle: String(plan?.goalTitle || `Objetivos de la reunión`).slice(0, 120),
+      producesWork,
+      goalTitle: String(plan?.goalTitle || (producesWork ? 'Objetivos de la reunión' : 'Acuerdos de la reunión')).slice(0, 120),
       goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
-      hires: Array.isArray(plan?.hires) ? plan.hires.filter((h) => h?.need).slice(0, 3) : []
+      kinds: [...kindByIndex.entries()],
+      hires
     };
 
     const spoken = String(plan?.spokenSummary || fallbackSummary).slice(0, 900);
@@ -1136,12 +1184,13 @@ export class MeetingSession {
     }
     this.send({
       type: 'meeting_closing_summary',
+      producesWork,
       goalTitle: this.pendingClose.goalTitle,
       goalDescription: this.pendingClose.goalDescription,
-      assignments,
+      assignments: classified,
       hires: this.pendingClose.hires.map((h) => ({ need: String(h.need).slice(0, 200) }))
     });
-    this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, hires: this.pendingClose.hires.length });
+    this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, deliverables, producesWork, hires: this.pendingClose.hires.length });
   }
 
   confirmMeetingClose() {
@@ -1152,31 +1201,40 @@ export class MeetingSession {
       return;
     }
 
+    // Sin nada que producir, la reunión deja un ACUERDO registrado (queda en
+    // el tablero como historia de la empresa) y nadie se pone a "trabajar".
     const goal = this.store.createGoal({
       companyId: this.company.id,
       meetingId: this.meeting.id,
       title: pending.goalTitle,
-      description: pending.goalDescription
+      description: pending.goalDescription,
+      kind: pending.producesWork ? 'proyecto' : 'acuerdo'
     });
 
-    // Las tareas pendientes de la reunión pasan a la meta → cola de trabajo.
+    const kindByIndex = new Map(pending.kinds || []);
+    let cursor = 0;
     let taskCount = 0;
     for (const agent of this.sessionAgents) {
       for (const task of agent.tasks || []) {
         if (!task.completed) {
-          this.store.assignTaskToGoal(task.id, goal.id);
-          taskCount += 1;
+          cursor += 1;
+          const kind = pending.producesWork ? (kindByIndex.get(cursor) || 'entregable') : 'decision';
+          this.store.assignTaskToGoal(task.id, goal.id, { kind });
+          if (kind === 'entregable') {
+            taskCount += 1;
+          }
         }
       }
     }
     // Necesidades sin dueño → tareas del contratista (contrata y delega).
     const contratista = this.sessionAgents.find((agent) => agent.role === 'contratista');
-    if (contratista) {
+    if (contratista && pending.producesWork) {
       for (const hire of pending.hires) {
         const taskId = this.store.insertTask(this.meeting.id, contratista.id, {
-          text: `Contratar a alguien para: ${hire.need}`
+          text: `Contratar a alguien para: ${hire.need}`,
+          kind: 'contratacion'
         });
-        this.store.assignTaskToGoal(taskId, goal.id);
+        this.store.assignTaskToGoal(taskId, goal.id, { kind: 'contratacion' });
         taskCount += 1;
       }
     }

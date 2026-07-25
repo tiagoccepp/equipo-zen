@@ -149,10 +149,19 @@ type WorkFeedItem = {
   html: string;
 };
 
+// Solo los entregables llegan a producir archivos; el resto queda registrado.
+const TASK_KIND_LABEL: Record<string, string> = {
+  decision: 'acuerdo',
+  seguimiento: 'seguimiento',
+  revision: 'revisión',
+  contratacion: 'contratación'
+};
+
 type ClosingSummary = {
+  producesWork: boolean;
   goalTitle: string;
   goalDescription: string;
-  assignments: Array<{ agentId: string; agentName: string; tasks: string[] }>;
+  assignments: Array<{ agentId: string; agentName: string; tasks: Array<{ text: string; kind: string }> }>;
   hires: Array<{ need: string }>;
 };
 
@@ -1010,6 +1019,7 @@ async function handleServerMessage(message: MeetingMessage) {
     case 'meeting_closing_summary':
       state.endingMeeting = false;
       state.closingSummary = {
+        producesWork: message.producesWork !== false,
         goalTitle: message.goalTitle,
         goalDescription: message.goalDescription,
         assignments: message.assignments || [],
@@ -1899,7 +1909,7 @@ function mountShell() {
         <div class="modal-body" id="closeMeetingBody"></div>
         <footer class="modal-foot">
           <button type="button" class="btn ghost" data-action="close-close-meeting">Seguir conversando</button>
-          <button type="button" class="btn primary" data-action="confirm-end-meeting">Confirmar y ponerlos a trabajar</button>
+          <button type="button" class="btn primary" id="confirmCloseBtn" data-action="confirm-end-meeting">Confirmar y ponerlos a trabajar</button>
         </footer>
       </section>
     </div>
@@ -3777,20 +3787,22 @@ function openClosingModal() {
   if (!summary) return;
   const agentById = (id: string) => state.agents.find((agent) => agent.id === id);
   byId('closeMeetingBody').innerHTML = `
-    <p class="close-intro">Esto es lo que el equipo entendió de la reunión. Si está bien, confirmá y se ponen a trabajar en segundo plano; si falta algo, seguí conversando.</p>
+    <p class="close-intro">${summary.producesWork
+      ? 'Esto es lo que el equipo entendió de la reunión. Si está bien, confirmá y se ponen a trabajar en segundo plano; si falta algo, seguí conversando.'
+      : 'De esta reunión no sale nada para construir: quedan los acuerdos anotados en el historial de la empresa. Nadie se pone a producir.'}</p>
     <section class="close-goal" aria-label="Meta de la reunión">
-      <span class="eyebrow">Meta</span>
+      <span class="eyebrow">${summary.producesWork ? 'Proyecto' : 'Acuerdo'}</span>
       <h3>${escapeHtml(summary.goalTitle)}</h3>
       ${summary.goalDescription ? `<p>${escapeHtml(summary.goalDescription)}</p>` : ''}
     </section>
     <section class="close-assignments" aria-label="Asignaciones por empleado">
-      <span class="eyebrow">Quién hace qué</span>
+      <span class="eyebrow">${summary.producesWork ? 'Quién hace qué' : 'Qué quedó anotado'}</span>
       ${summary.assignments.length ? summary.assignments.map((assignment) => `
         <article class="assign-card" style="--agent-color: ${escapeHtml(agentById(assignment.agentId)?.color || state.company?.color || '#31655a')}">
           <span class="org-avatar" aria-hidden="true">${escapeHtml(assignment.agentName.slice(0, 1))}</span>
           <div class="assign-info">
             <strong>${escapeHtml(assignment.agentName)}${roleBadgeHtml(agentById(assignment.agentId)?.role)}</strong>
-            <ul>${assignment.tasks.map((task) => `<li>${escapeHtml(task)}</li>`).join('')}</ul>
+            <ul>${assignment.tasks.map((task) => `<li>${escapeHtml(task.text)}${task.kind && task.kind !== 'entregable' ? ` <span class="task-kind">${escapeHtml(TASK_KIND_LABEL[task.kind] || task.kind)}</span>` : ''}</li>`).join('')}</ul>
           </div>
         </article>
       `).join('') : '<p class="muted">No quedaron tareas pendientes asignadas. Podés confirmar igual (la reunión se archiva) o volver y repartir trabajo.</p>'}
@@ -3803,6 +3815,9 @@ function openClosingModal() {
       </section>
     ` : ''}
   `;
+  byId('confirmCloseBtn').textContent = summary.producesWork
+    ? 'Confirmar y ponerlos a trabajar'
+    : 'Confirmar y cerrar';
   openModal('closeMeetingModal');
 }
 

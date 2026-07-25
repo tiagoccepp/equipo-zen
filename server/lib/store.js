@@ -6,6 +6,17 @@ function now() {
   return new Date().toISOString();
 }
 
+// Nombre de carpeta del proyecto: sin acentos, sin espacios, sin sorpresas
+// en el sistema de archivos.
+function slugify(text) {
+  return String(text || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
 function parseJsonColumn(value, fallback) {
   try {
     const parsed = JSON.parse(value);
@@ -460,13 +471,47 @@ export class Store {
 
   // ── Tareas ─────────────────────────────────────────────────────────────
 
-  insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null }) {
+  insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null, kind = 'entregable', parentTaskId = null, reviewerId = null }) {
     const taskId = id || 'task-' + nanoid(6);
     this.db.prepare(`
-      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(taskId, meetingId, agentId, text, completed ? 1 : 0, createdAt || now(), completed ? now() : null);
+      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, completed_at, kind, parent_task_id, reviewer_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(taskId, meetingId, agentId, text, completed ? 1 : 0, createdAt || now(), completed ? now() : null, kind, parentTaskId, reviewerId);
     return taskId;
+  }
+
+  setTaskKind(taskId, kind) {
+    this.db.prepare('UPDATE tasks SET kind = ? WHERE id = ?').run(kind, taskId);
+  }
+
+  getTask(taskId) {
+    return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) || null;
+  }
+
+  setReviewStatus(taskId, reviewStatus, reviewerId = null) {
+    this.db.prepare('UPDATE tasks SET review_status = ?, reviewer_id = COALESCE(?, reviewer_id) WHERE id = ?')
+      .run(reviewStatus, reviewerId, taskId);
+  }
+
+  // ── Comentarios entre compañeros (colaboración visible) ────────────────
+
+  addTaskComment({ taskId, companyId, authorId, kind = 'nota', text }) {
+    const id = 'cmt-' + nanoid(8);
+    this.db.prepare(`
+      INSERT INTO task_comments (id, task_id, company_id, author_id, kind, text, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, taskId, companyId, authorId, kind, String(text).slice(0, 4000), now());
+    return id;
+  }
+
+  taskComments(taskId) {
+    return this.db.prepare('SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at').all(taskId);
+  }
+
+  recentComments(companyId, limit = 40) {
+    return this.db.prepare(
+      'SELECT * FROM task_comments WHERE company_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
+    ).all(companyId, limit);
   }
 
   setTaskCompleted(taskId, completed) {
@@ -491,13 +536,14 @@ export class Store {
 
   // ── Metas y trabajo (estilo Paperclip) ─────────────────────────────────
 
-  createGoal({ companyId, meetingId = null, title, description = '' }) {
+  createGoal({ companyId, meetingId = null, title, description = '', kind = 'proyecto', slug = null }) {
     const id = 'goal-' + nanoid(8);
+    const folder = slug || slugify(title) || id;
     this.db.prepare(`
-      INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at)
-      VALUES (?, ?, ?, ?, ?, 'active', ?)
-    `).run(id, companyId, meetingId, title, description, now());
-    this.logChange('user', 'goal', id, 'create', { title });
+      INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at, kind, slug)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, companyId, meetingId, title, description, kind === 'acuerdo' ? 'done' : 'active', now(), kind, folder);
+    this.logChange('user', 'goal', id, 'create', { title, kind });
     return this.getGoal(id);
   }
 
@@ -523,8 +569,11 @@ export class Store {
     return false;
   }
 
-  assignTaskToGoal(taskId, goalId) {
-    this.db.prepare("UPDATE tasks SET goal_id = ?, status = 'pending' WHERE id = ?").run(goalId, taskId);
+  // Las tareas que NO son entregables (acuerdos, seguimientos) quedan
+  // registradas como 'noted': se ven en el tablero pero nadie las "trabaja".
+  assignTaskToGoal(taskId, goalId, { kind = 'entregable' } = {}) {
+    const status = kind === 'decision' || kind === 'seguimiento' ? 'noted' : 'pending';
+    this.db.prepare('UPDATE tasks SET goal_id = ?, status = ?, kind = ? WHERE id = ?').run(goalId, status, kind, taskId);
   }
 
   // Checkout atómico: un solo worker puede tomar la tarea (semántica issue).
@@ -548,6 +597,7 @@ export class Store {
     return this.db.prepare(`
       SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id
       WHERE g.company_id = ? AND g.status = 'active' AND t.status = 'pending'
+        AND t.kind IN ('entregable', 'revision', 'contratacion')
       ORDER BY t.created_at
     `).all(companyId);
   }

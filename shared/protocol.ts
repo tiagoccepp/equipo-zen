@@ -64,6 +64,10 @@ export interface MeetingScenario {
   text: string | null;
 }
 
+// Qué clase de tarea es: solo 'entregable' (y sus derivadas de proceso)
+// llega a producir archivos; los acuerdos quedan registrados sin trabajo.
+export type TaskKind = 'entregable' | 'decision' | 'seguimiento' | 'revision' | 'contratacion';
+
 export interface PublicCompany {
   id: string;
   name: string;
@@ -179,9 +183,15 @@ export type ServerMessage =
   | { type: 'scenario_updated'; scenario: MeetingScenario }
   | {
       type: 'meeting_closing_summary';
+      // false = la reunión no genera nada para construir: solo quedan acuerdos.
+      producesWork: boolean;
       goalTitle: string;
       goalDescription: string;
-      assignments: Array<{ agentId: string; agentName: string; tasks: string[] }>;
+      assignments: Array<{
+        agentId: string;
+        agentName: string;
+        tasks: Array<{ text: string; kind: TaskKind }>;
+      }>;
       hires: Array<{ need: string }>;
     }
   | { type: 'work_event'; kind: string; [key: string]: unknown }

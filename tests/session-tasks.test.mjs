@@ -151,7 +151,8 @@ test('cierre de reunión: la meta agrupa las tareas pendientes y arranca la cola
   await session.prepareMeetingClose();
   const summary = socket.sent.find((m) => m.type === 'meeting_closing_summary');
   assert.ok(summary, 'llega el resumen de cierre');
-  assert.ok(summary.assignments.some((a) => a.tasks.includes('armar la landing del catálogo')));
+  assert.ok(summary.assignments.some((a) => a.tasks.some((t) => t.text === 'armar la landing del catálogo')));
+  assert.equal(summary.producesWork, true, 'hay algo concreto para construir');
 
   const oldMeetingId = session.meeting.id;
   session.confirmMeetingClose();
@@ -167,6 +168,38 @@ test('cierre de reunión: la meta agrupa las tareas pendientes y arranca la cola
   // Checkout atómico: solo un worker puede tomarla
   assert.equal(store.checkoutTask(queue[0].id), true);
   assert.equal(store.checkoutTask(queue[0].id), false);
+});
+
+test('cierre sin entregables: no se abre proyecto ni cola de trabajo', async () => {
+  const { session, store } = newSession();
+
+  // Reunión de pura conversación: nadie asignó tareas.
+  await session.prepareMeetingClose();
+  assert.equal(session.pendingClose.producesWork, false);
+
+  session.confirmMeetingClose();
+  assert.equal(store.listGoals(session.company.id, 'active').length, 0, 'no queda ningún proyecto activo');
+  assert.equal(store.workQueue(session.company.id).length, 0, 'nadie se pone a trabajar');
+
+  const acuerdos = store.listGoals(session.company.id).filter((g) => g.kind === 'acuerdo');
+  assert.equal(acuerdos.length, 1, 'queda el acuerdo registrado en el historial');
+});
+
+test('una tarea clasificada como acuerdo queda anotada, no entra a la cola', async () => {
+  const { session, store, julioId } = newSession();
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'definimos que el foco es retail' });
+
+  await session.prepareMeetingClose();
+  // Sin claves el modelo no clasifica: se simula el veredicto de la CEO.
+  session.pendingClose.producesWork = true;
+  session.pendingClose.kinds = [[1, 'decision']];
+  session.confirmMeetingClose();
+
+  assert.equal(store.workQueue(session.company.id).length, 0, 'un acuerdo no se "trabaja"');
+  const goal = store.listGoals(session.company.id)[0];
+  const tasks = store.tasksForGoal(goal.id);
+  assert.equal(tasks[0].kind, 'decision');
+  assert.equal(tasks[0].status, 'noted');
 });
 
 test('continuidad: turnos, agente spawneado y tareas sobreviven a otra sesión', async () => {
