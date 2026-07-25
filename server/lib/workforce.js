@@ -140,6 +140,49 @@ export function renderWorkSection(store, companyId) {
 // principal completo y las señas de su identidad visual. Sin esto, cada
 // empleado regeneraba index.html con su propio estilo y el sitio cambiaba de
 // cara en cada vuelta.
+// El JSON de la acción vive ANTES del primer marcador (<<<CONTENIDO,
+// <<<BUSCAR, <<<REEMPLAZAR). Cortarlo solo en <<<CONTENIDO hacía que el
+// contenido —HTML y CSS, llenos de llaves— se mezclara con el JSON y la
+// acción se descartara como inválida, quemando el paso.
+// Reemplazo exacto y, si no da, tolerante a espacios/indentación: el modelo
+// casi nunca reproduce el sangrado tal cual, y rechazarlo por eso quemaba
+// pasos sin que el archivo avanzara.
+export function applyEdit(contenido, desde, hacia) {
+  if (!desde.trim()) {
+    throw new Error('el bloque BUSCAR está vacío');
+  }
+  const exactas = contenido.split(desde).length - 1;
+  if (exactas === 1) {
+    return contenido.replace(desde, hacia);
+  }
+  if (exactas > 1) {
+    throw new Error(`ese texto aparece ${exactas} veces: incluí más contexto alrededor para que sea único`);
+  }
+
+  // Segundo intento: mismo texto salvo cantidad de espacios y saltos.
+  const flexible = new RegExp(
+    desde
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+'),
+    'g'
+  );
+  const coincidencias = contenido.match(flexible);
+  if (!coincidencias) {
+    throw new Error('ese texto no está en el archivo. Volvé a leerlo con read_file y copiá un fragmento EXACTO, corto y único');
+  }
+  if (coincidencias.length > 1) {
+    throw new Error(`ese texto aparece ${coincidencias.length} veces: incluí más contexto para que sea único`);
+  }
+  return contenido.replace(flexible, () => hacia);
+}
+
+export function splitBeforeHeredoc(text) {
+  const marker = String(text || '').search(/<<<[A-ZÁÉÍÓÚ]/);
+  return marker >= 0 ? String(text).slice(0, marker) : String(text || '');
+}
+
 export async function readProjectState(dir, files) {
   if (files.length === 0) {
     return null;
@@ -442,7 +485,7 @@ export class Workforce {
           ]
         });
         rawText = text;
-        action = parseJsonFromModel(text.split('<<<CONTENIDO')[0]);
+        action = parseJsonFromModel(splitBeforeHeredoc(text));
       } catch (error) {
         log.push({ step, action: 'error', note: String(error?.message || error).slice(0, 200) });
         this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la llamada al modelo.', log, artifacts: [...artifacts] });
@@ -488,14 +531,7 @@ export class Workforce {
           }
           const desde = buscar[1];
           const hacia = reemplazar ? reemplazar[1] : '';
-          const ocurrencias = actual.split(desde).length - 1;
-          if (ocurrencias === 0) {
-            throw new Error('el texto a reemplazar no está en el archivo, tal cual lo escribiste');
-          }
-          if (ocurrencias > 1) {
-            throw new Error(`el texto a reemplazar aparece ${ocurrencias} veces: incluí más contexto alrededor para que sea único`);
-          }
-          const nuevo = actual.replace(desde, hacia);
+          const nuevo = applyEdit(actual, desde, hacia);
           await fs.writeFile(target, nuevo, 'utf-8');
           leidos.add(String(action.path));
           artifacts.add(String(action.path));

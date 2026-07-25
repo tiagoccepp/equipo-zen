@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { Store } from '../server/lib/store.js';
-import { extractFileContent, readProjectState, safeWorkspacePath, Workforce } from '../server/lib/workforce.js';
+import {
+  applyEdit,
+  extractFileContent,
+  readProjectState,
+  safeWorkspacePath,
+  splitBeforeHeredoc,
+  Workforce
+} from '../server/lib/workforce.js';
 
 const companyTemplates = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
@@ -178,4 +185,50 @@ test('dos empleados no trabajan a la vez sobre el mismo proyecto', async () => {
   await workforce.tick();
   assert.equal(arrancadas.length, 2);
   assert.notEqual(arrancadas[0], arrancadas[1]);
+});
+
+test('el JSON de la acción se separa de CUALQUIER marcador de contenido', () => {
+  // Sin esto, una respuesta con edit_file mezclaba el JSON con el HTML (lleno
+  // de llaves) y la acción se descartaba: 10 pasos quemados, cero avance.
+  const conEdit = [
+    '{"action":"edit_file","path":"index.html"}',
+    '<<<BUSCAR',
+    '<style>.hero { color: #fff; }</style>',
+    'BUSCAR>>>',
+    '<<<REEMPLAZAR',
+    '<style>.hero { color: #eee; }</style>',
+    'REEMPLAZAR>>>'
+  ].join('\n');
+  assert.equal(splitBeforeHeredoc(conEdit).trim(), '{"action":"edit_file","path":"index.html"}');
+
+  const conWrite = '{"action":"write_file","path":"a.html"}\n<<<CONTENIDO\n<h1>x</h1>\nCONTENIDO>>>';
+  assert.equal(splitBeforeHeredoc(conWrite).trim(), '{"action":"write_file","path":"a.html"}');
+
+  assert.equal(splitBeforeHeredoc('{"action":"finish","summary":"listo"}').trim(), '{"action":"finish","summary":"listo"}');
+});
+
+test('editar tolera que el modelo no reproduzca la indentación exacta', () => {
+  const archivo = [
+    '<body>',
+    '  <section id="servicios">',
+    '    <h2>Nuestras soluciones</h2>',
+    '  </section>',
+    '</body>'
+  ].join('\n');
+
+  // Copia "de memoria": mismo texto, espacios distintos.
+  const editado = applyEdit(
+    archivo,
+    '<section id="servicios">\n<h2>Nuestras soluciones</h2>\n</section>',
+    '<section id="servicios">\n    <h2>Nuestras soluciones</h2>\n    <p>Tres líneas de trabajo.</p>\n  </section>'
+  );
+  assert.match(editado, /Tres líneas de trabajo/);
+  assert.match(editado, /<body>/, 'el resto del archivo queda intacto');
+});
+
+test('editar avisa con precisión cuando no puede aplicar el cambio', () => {
+  const archivo = '<p>uno</p>\n<p>dos</p>\n<p>uno</p>';
+  assert.throws(() => applyEdit(archivo, '<p>tres</p>', 'x'), /no está en el archivo/);
+  assert.throws(() => applyEdit(archivo, '<p>uno</p>', 'x'), /aparece 2 veces/);
+  assert.throws(() => applyEdit(archivo, '   ', 'x'), /vacío/);
 });
