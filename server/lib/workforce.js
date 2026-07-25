@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
@@ -73,6 +73,7 @@ export class Workforce {
       return;
     }
     mkdirSync(WORKSPACE_ROOT, { recursive: true });
+    this.migrateLegacyLayout();
     this.timer = setInterval(() => {
       void this.tick().catch((error) => {
         telemetry.add({ type: 'workforce_tick_failed', payload: { error: String(error?.message || error).slice(0, 200) } });
@@ -84,6 +85,40 @@ export class Workforce {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+  }
+
+  // Antes de los proyectos, todo se escribía suelto en workspace/<empresa>/.
+  // Esos archivos se mudan a la carpeta 'general' para que sigan visibles
+  // desde la UI (y para que el entorno tenga una sola forma).
+  migrateLegacyLayout() {
+    let companies = [];
+    try {
+      companies = readdirSync(WORKSPACE_ROOT, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    } catch {
+      return;
+    }
+    for (const company of companies) {
+      const companyPath = path.join(WORKSPACE_ROOT, company.name);
+      let loose = [];
+      try {
+        loose = readdirSync(companyPath, { withFileTypes: true }).filter((entry) => entry.isFile() && !entry.name.startsWith('.'));
+      } catch {
+        continue;
+      }
+      if (loose.length === 0) {
+        continue;
+      }
+      const target = path.join(companyPath, 'general');
+      mkdirSync(target, { recursive: true });
+      for (const file of loose) {
+        try {
+          renameSync(path.join(companyPath, file.name), path.join(target, file.name));
+        } catch {
+          // Un archivo que no se puede mover no debe frenar el arranque.
+        }
+      }
+      telemetry.add({ type: 'workspace_layout_migrated', payload: { companyId: company.name, files: loose.length } });
     }
   }
 

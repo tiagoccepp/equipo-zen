@@ -211,6 +211,10 @@ const MIGRATIONS = [
   ALTER TABLE goals ADD COLUMN slug TEXT;
   ALTER TABLE goals ADD COLUMN kind TEXT NOT NULL DEFAULT 'proyecto';
 
+  -- Las metas anteriores a los proyectos vivían en una carpeta plana:
+  -- se les asigna 'general', que es donde se mueven sus archivos al arrancar.
+  UPDATE goals SET slug = 'general' WHERE slug IS NULL;
+
   ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'entregable';
   ALTER TABLE tasks ADD COLUMN reviewer_id TEXT;
   ALTER TABLE tasks ADD COLUMN review_status TEXT;
