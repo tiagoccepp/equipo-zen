@@ -36,7 +36,7 @@ test('spawn_agent: voz fuera de whitelist y style gigante se rechazan', () => {
 test('spawn_agent válido normaliza listas desde string', () => {
   const res = parseClientMessage(JSON.stringify({
     type: 'spawn_agent',
-    agent: { name: ' Ana ', title: 'QA', domains: 'testing, calidad', voice: 'Kore', initialTasks: ['  probar login  '] }
+    agent: { name: ' Ana ', title: 'QA', domains: 'testing, calidad', voice: 'F1', initialTasks: ['  probar login  '] }
   }));
   assert.equal(res.ok, true);
   assert.equal(res.message.agent.name, 'Ana');

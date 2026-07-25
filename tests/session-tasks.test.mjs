@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { agentConfig } from '../server/lib/config.js';
+import { companyTemplates } from '../server/lib/config.js';
 import { ApiKeyRing } from '../server/lib/key-ring.js';
 import { MeetingSession } from '../server/lib/meeting-session.js';
 import { Store } from '../server/lib/store.js';
@@ -20,7 +20,7 @@ function fakeSocket() {
 
 function newStore() {
   const store = new Store(':memory:');
-  store.seedAgentsIfEmpty(agentConfig);
+  store.ensureCompanies(companyTemplates);
   return store;
 }
 
@@ -28,12 +28,13 @@ function newSession(store = newStore()) {
   const socket = fakeSocket();
   const session = new MeetingSession(socket, new ApiKeyRing([]), store);
   session.initMeeting(null);
-  return { socket, session, store };
+  const byName = (name) => session.sessionAgents.find((a) => a.name === name);
+  return { socket, session, store, julioId: byName('Julio').id, tomasaId: byName('Tomasa').id };
 }
 
 test('SILENCIO + [TAREA_CREAR] crea la tarea aunque el agente calle', async () => {
-  const { socket, session } = newSession();
-  const julio = session.agents.get('programacion');
+  const { socket, session, julioId } = newSession();
+  const julio = session.agents.get(julioId);
   julio.respond = async (_turn, emit) => {
     emit({ type: 'agent_silence', reason: 'protocolo' });
     return { rawText: 'SILENCIO [TAREA_CREAR: revisar stock del depósito]', text: '', audioChunks: [], usedMock: true };
@@ -41,19 +42,19 @@ test('SILENCIO + [TAREA_CREAR] crea la tarea aunque el agente calle', async () =
 
   await session.processUserTurn('t1', 'julio fijate esto');
 
-  const julioAgent = session.sessionAgents.find((a) => a.id === 'programacion');
+  const julioAgent = session.sessionAgents.find((a) => a.id === julioId);
   assert.equal(julioAgent.tasks.length, 1);
   assert.equal(julioAgent.tasks[0].text, 'revisar stock del depósito');
   assert.equal(julioAgent.tasks[0].completed, false);
 
-  const complete = socket.sent.find((m) => m.type === 'agent_turn_complete' && m.agentId === 'programacion');
+  const complete = socket.sent.find((m) => m.type === 'agent_turn_complete' && m.agentId === julioId);
   assert.equal(complete.text, '');
   assert.equal(session.memory.lastAgentTurn(), null);
 });
 
 test('respuesta hablada con tag crea tarea y limpia el texto visible', async () => {
-  const { socket, session } = newSession();
-  const julio = session.agents.get('programacion');
+  const { socket, session, julioId } = newSession();
+  const julio = session.agents.get(julioId);
   julio.respond = async () => ({
     rawText: 'Dale, lo agendo. [TAREA_CREAR: armar endpoint de cobranzas]',
     text: 'Dale, lo agendo. [TAREA_CREAR: armar endpoint de cobranzas]',
@@ -63,26 +64,26 @@ test('respuesta hablada con tag crea tarea y limpia el texto visible', async () 
 
   await session.processUserTurn('t2', 'julio anotate armar el endpoint');
 
-  const julioAgent = session.sessionAgents.find((a) => a.id === 'programacion');
+  const julioAgent = session.sessionAgents.find((a) => a.id === julioId);
   assert.equal(julioAgent.tasks.at(-1).text, 'armar endpoint de cobranzas');
-  const complete = socket.sent.find((m) => m.type === 'agent_turn_complete' && m.agentId === 'programacion');
+  const complete = socket.sent.find((m) => m.type === 'agent_turn_complete' && m.agentId === julioId);
   assert.equal(complete.text, 'Dale, lo agendo.');
   assert.equal(session.memory.lastAgentTurn().text, 'Dale, lo agendo.');
 });
 
-test('tag con destinatario explícito asigna la tarea al otro agente', async () => {
-  const { session } = newSession();
-  const julio = session.agents.get('programacion');
+test('tag con destinatario por NOMBRE asigna la tarea al otro agente', async () => {
+  const { session, julioId, tomasaId } = newSession();
+  const julio = session.agents.get(julioId);
   julio.respond = async () => ({
-    rawText: 'Eso lo ve Tomasa. [TAREA_CREAR: operaciones: validar stock físico]',
-    text: 'Eso lo ve Tomasa. [TAREA_CREAR: operaciones: validar stock físico]',
+    rawText: 'Eso lo ve Tomasa. [TAREA_CREAR: Tomasa: validar stock físico]',
+    text: 'Eso lo ve Tomasa. [TAREA_CREAR: Tomasa: validar stock físico]',
     audioChunks: [],
     usedMock: true
   });
 
   await session.processUserTurn('t3', 'julio coordiná la validación');
 
-  const tomasa = session.sessionAgents.find((a) => a.id === 'operaciones');
+  const tomasa = session.sessionAgents.find((a) => a.id === tomasaId);
   assert.equal(tomasa.tasks.at(-1).text, 'validar stock físico');
 });
 
@@ -178,41 +179,42 @@ test('reset cierra la reunión actual y abre una nueva', async () => {
 });
 
 test('update_agent persiste el patch con snapshot de versión y changelog', async () => {
-  const { session, store } = newSession();
+  const { session, store, julioId } = newSession();
 
   await session.handleClientMessage({
     type: 'update_agent',
-    agentId: 'programacion',
-    patch: { style: 'habla más formal', boundaries: ['No estima plazos sin datos'] }
+    agentId: julioId,
+    patch: { style: 'habla más formal', boundaries: ['No estima plazos sin datos'], knowledge: 'Sabe del stack legacy.' }
   });
 
-  const updated = store.getAgent('programacion');
+  const updated = store.getAgent(julioId);
   assert.equal(updated.style, 'habla más formal');
   assert.deepEqual(updated.boundaries, ['No estima plazos sin datos']);
+  assert.equal(updated.knowledge, 'Sabe del stack legacy.');
   assert.equal(updated.version, 2);
-  assert.equal(store.listAgentVersions('programacion').length, 1);
-  assert.ok(store.listChangelog({ entity: 'agent', entityId: 'programacion' }).length >= 1);
+  assert.equal(store.listAgentVersions(julioId).length, 1);
+  assert.ok(store.listChangelog({ entity: 'agent', entityId: julioId }).length >= 1);
 
-  const inSession = session.sessionAgents.find((a) => a.id === 'programacion');
+  const inSession = session.sessionAgents.find((a) => a.id === julioId);
   assert.equal(inSession.style, 'habla más formal');
 });
 
 test('set_agent_enabled saca al agente del ruteo pero lo deja en el roster', async () => {
-  const { session } = newSession();
+  const { session, tomasaId } = newSession();
 
-  await session.handleClientMessage({ type: 'set_agent_enabled', agentId: 'operaciones', enabled: false });
+  await session.handleClientMessage({ type: 'set_agent_enabled', agentId: tomasaId, enabled: false });
 
-  const tomasa = session.sessionAgents.find((a) => a.id === 'operaciones');
+  const tomasa = session.sessionAgents.find((a) => a.id === tomasaId);
   assert.equal(tomasa.enabled, false);
   const route = session.router.route('¿cómo viene el stock del inventario?', session.memory);
-  assert.ok(!route.targets.some((t) => t.agentId === 'operaciones'));
-  assert.ok(session.publicAgents().some((a) => a.id === 'operaciones'));
+  assert.ok(!route.targets.some((t) => t.agentId === tomasaId));
+  assert.ok(session.publicAgents().some((a) => a.id === tomasaId));
 });
 
 test('archive_agent solo permite archivar agentes custom', async () => {
-  const { socket, session, store } = newSession();
+  const { socket, session, store, julioId } = newSession();
 
-  await session.handleClientMessage({ type: 'archive_agent', agentId: 'programacion' });
+  await session.handleClientMessage({ type: 'archive_agent', agentId: julioId });
   assert.ok(socket.sent.some((m) => m.type === 'error' && /equipo base/.test(m.message)));
 
   await session.handleClientMessage({
@@ -233,5 +235,6 @@ test('set_scenario actualiza el contexto que ven los prompts', async () => {
 
   assert.equal(session.meeting.scenario_text, 'Sprint de migración del sistema de pedidos');
   assert.ok(socket.sent.some((m) => m.type === 'scenario_updated'));
-  assert.equal(session.promptContext().scenario.text, 'Sprint de migración del sistema de pedidos');
+  assert.ok(session.promptContext().scenario.text.includes('Objetivo de esta reunión: Sprint de migración del sistema de pedidos'));
+  assert.ok(session.promptContext().scenario.name.includes('Distribuidora Norte'));
 });

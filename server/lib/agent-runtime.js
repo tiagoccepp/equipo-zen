@@ -1,28 +1,18 @@
-import { Modality, ThinkingLevel } from '@google/genai';
-
 import {
-  AGENT_TEXT_MODELS,
   AGENT_TEXT_TIMEOUT_MS,
-  TTS_MODELS,
-  TTS_TIMEOUT_MS,
-  agentConfig
+  MINIMAX_MODELS
 } from './config.js';
-import {
-  extractAudioParts,
-  extractTextFromResponse,
-  generateContentWithRotation,
-  streamTextWithRotation
-} from './gemini.js';
+import { streamChat } from './llm.js';
+import { synthesize } from './supertonic.js';
 import { cleanAgentText, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
 const SILENCE_PROBE_LENGTH = 12;
 
-// Fachada por agente. El backend se elige por turno: live (sesión Gemini
-// Live persistente, módulo aparte) → stream (generateContentStream + TTS
-// por oraciones) → mock (sin claves). El barge-in y el orden de audio son
-// responsabilidad del SpeakerGate, común a todos los backends.
+// Fachada por agente: stream (MiniMax streaming + Supertonic por oraciones)
+// con mock sin claves. El barge-in y el orden de audio son responsabilidad
+// del SpeakerGate, común a ambos backends.
 export class LiveAgentRuntime {
   constructor(agent, keyRingInstance, memory, meetingSession) {
     this.id = agent.id;
@@ -31,7 +21,6 @@ export class LiveAgentRuntime {
     this.keyRing = keyRingInstance;
     this.memory = memory;
     this.meetingSession = meetingSession;
-    this.liveBackend = null; // lo inyecta meeting-session cuando hay Live disponible
   }
 
   // context: { signal, gate, turnId }
@@ -39,24 +28,6 @@ export class LiveAgentRuntime {
     if (!this.keyRing.hasKeys()) {
       return this.respondWithMock(turn, emit, context);
     }
-
-    if (this.liveBackend?.isUsable()) {
-      try {
-        return await this.liveBackend.respond(turn, emit, context);
-      } catch (error) {
-        emit({
-          type: 'live_session_status',
-          agentId: this.id,
-          status: 'fallback'
-        });
-        emit({
-          type: 'api_rotation_start',
-          scope: `${this.name} live`,
-          message: `Sesión Live cayó (${getShortError(error)}); usando streaming.`
-        });
-      }
-    }
-
     return this.respondWithStream(turn, emit, context);
   }
 
@@ -143,19 +114,18 @@ export class LiveAgentRuntime {
 
     let result;
     try {
-      result = await streamTextWithRotation(this.keyRing, {
-        models: AGENT_TEXT_MODELS,
+      result = await streamChat(this.keyRing, {
+        models: MINIMAX_MODELS,
         scope: `${this.name} texto`,
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
         emit,
         signal,
-        config: {
-          maxOutputTokens: 200,
-          temperature: 0.8,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-          systemInstruction: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {})
-        },
-        contents: [{ role: 'user', parts: [{ text: this.buildTurnPrompt(turn) }] }]
+        maxTokens: 300,
+        temperature: 0.8,
+        messages: [
+          { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
+          { role: 'user', content: this.buildTurnPrompt(turn) }
+        ]
       }, handleDelta);
     } catch (error) {
       emit({
@@ -277,40 +247,20 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  // TTS de una oración: devuelve las partes de audio (no emite chunks; el
-  // gate decide cuándo salen).
+  // TTS de una oración vía Supertonic local: devuelve las partes de audio
+  // (no emite chunks; el gate decide cuándo salen).
   async generateAudioParts(text, emit, signal) {
     if (!text?.trim() || signal?.aborted) {
       return [];
     }
 
     try {
-      const { response } = await generateContentWithRotation(this.keyRing, {
-        models: TTS_MODELS,
-        scope: `${this.name} TTS`,
-        timeoutMs: TTS_TIMEOUT_MS,
-        maxKeyAttempts: Math.min(4, Math.max(1, this.keyRing.size())),
-        emit,
-        config: {
-          responseModalities: [Modality.AUDIO],
-          abortSignal: signal,
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: this.agent.voice || 'Kore'
-              }
-            }
-          }
-        },
-        contents: [{ role: 'user', parts: [{ text }] }]
-      });
-
-      return extractAudioParts(response);
+      return await synthesize(text, this.agent.voice || 'M1', { signal });
     } catch (error) {
       if (!signal?.aborted) {
         emit({
           type: 'api_rotation_failed',
-          scope: `${this.name} TTS`,
+          scope: `${this.name} voz local`,
           agentId: this.id,
           message: getShortError(error)
         });
@@ -319,14 +269,9 @@ export class LiveAgentRuntime {
     }
   }
 
-  reset() {
-    this.liveBackend?.reset();
-  }
+  reset() {}
 
-  close() {
-    this.liveBackend?.close();
-    this.liveBackend = null;
-  }
+  close() {}
 }
 
 export function emptyAgentResponse() {
@@ -335,13 +280,9 @@ export function emptyAgentResponse() {
 
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
 //            learningsSection?: string } — desacoplado de MeetingSession
-// para que el preview HTTP y las sesiones Live puedan armar el mismo prompt.
-// options.mode: 'text' (default) usa SILENCIO + tags [TAREA_*];
-//               'live' los quita (la voz los diría) — el router decide el
-//               silencio y las tareas van por tool calling.
-export function buildSystemInstruction(agent, context = {}, options = {}) {
-  const mode = options.mode || 'text';
-  const agentsList = context.agents && context.agents.length > 0 ? context.agents : agentConfig.agents;
+// para que el preview HTTP arme exactamente el mismo prompt.
+export function buildSystemInstruction(agent, context = {}) {
+  const agentsList = context.agents && context.agents.length > 0 ? context.agents : [agent];
   const participants = agentsList.map((item) => item.name).join(', ');
   const scenario = context.scenario || null;
 
@@ -382,6 +323,9 @@ export function buildSystemInstruction(agent, context = {}, options = {}) {
     'QUIÉN SOS:',
     agent.style,
     '',
+    ...(agent.knowledge
+      ? ['LO QUE SABÉS (conocimiento propio de tu puesto):', agent.knowledge, '']
+      : []),
     ...boundariesBlock,
     ...learningsBlock,
     '---',
@@ -416,35 +360,21 @@ export function buildSystemInstruction(agent, context = {}, options = {}) {
     '- Alguien ya dijo exactamente lo que ibas a decir.',
     '- Solo ibas a repetir o afirmar lo que otro dijo.',
     '',
-    ...(mode === 'live'
-      ? [
-          'El orquestador solo te da la palabra cuando corresponde: si te llega un turno, respondé.',
-          '',
-          '---',
-          '',
-          'GESTIÓN DE TAREAS:',
-          '',
-          'Conocés tus tareas y las recordás si te preguntan.',
-          'Si en la conversación se define una tarea nueva, usá la función crear_tarea.',
-          'Si completás una tarea, usá la función completar_tarea.',
-          'Nunca digas etiquetas tipo [TAREA_CREAR] en voz alta: para eso están las funciones.'
-        ]
-      : [
-          'Si no tenés nada que aportar: respondé únicamente con la palabra SILENCIO. Nada más.',
-          '',
-          '---',
-          '',
-          'GESTIÓN DE TAREAS:',
-          '',
-          'Conocés tus tareas y las recordás si te preguntan.',
-          'Si en la conversación se define una nueva tarea para vos:',
-          '→ Al final de tu respuesta agregá: [TAREA_CREAR: descripción breve]',
-          '',
-          'Si completás una tarea o se confirma que está hecha:',
-          '→ Al final de tu respuesta agregá: [TAREA_COMPLETAR: #número]',
-          '',
-          'Podés agregar varios tags en el mismo turno si corresponde.'
-        ]),
+    'Si no tenés nada que aportar: respondé únicamente con la palabra SILENCIO. Nada más.',
+    '',
+    '---',
+    '',
+    'GESTIÓN DE TAREAS:',
+    '',
+    'Conocés tus tareas y las recordás si te preguntan.',
+    'Si en la conversación se define una nueva tarea para vos:',
+    '→ Al final de tu respuesta agregá: [TAREA_CREAR: descripción breve]',
+    'Si la tarea es para un compañero: [TAREA_CREAR: NombreDelCompañero: descripción]',
+    '',
+    'Si completás una tarea o se confirma que está hecha:',
+    '→ Al final de tu respuesta agregá: [TAREA_COMPLETAR: #número]',
+    '',
+    'Podés agregar varios tags en el mismo turno si corresponde.',
     '',
     '---',
     '',

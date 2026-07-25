@@ -31,8 +31,27 @@ function rowToAgent(row) {
     aliases: parseJsonColumn(row.aliases_json, []),
     domains: parseJsonColumn(row.domains_json, []),
     boundaries: parseJsonColumn(row.boundaries_json, []),
+    knowledge: row.knowledge || '',
+    companyId: row.company_id || null,
     learningEnabled: Boolean(row.learning_enabled),
     version: row.version
+  };
+}
+
+function rowToCompany(row) {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    industry: row.industry,
+    emoji: row.emoji,
+    color: row.color,
+    scenario: row.scenario,
+    status: row.status,
+    createdAt: row.created_at,
+    lastActiveAt: row.last_active_at
   };
 }
 
@@ -50,37 +69,114 @@ export class Store {
 
   // ── Agentes ────────────────────────────────────────────────────────────
 
-  seedAgentsIfEmpty(agentConfig) {
-    const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM agents').get();
-    if (count > 0) {
-      return false;
+  // Primer arranque: crea la Distribuidora Norte desde la plantilla.
+  // Bases anteriores a v2: crea la empresa default y adopta agentes y
+  // reuniones huérfanos (además de migrar voces Gemini → Supertonic).
+  ensureCompanies(companyTemplates, legacyVoiceMap = {}) {
+    for (const [from, to] of Object.entries(legacyVoiceMap)) {
+      this.db.prepare('UPDATE agents SET voice = ? WHERE voice = ?').run(to, from);
     }
-    for (const agent of agentConfig.agents) {
-      this.insertAgent(
-        {
-          id: agent.id,
-          name: agent.name,
-          title: agent.title,
-          voice: agent.voice || 'Kore',
-          color: agent.color || '#888888',
-          style: agent.style || '',
-          aliases: agent.aliases || [],
-          domains: agent.domains || [],
-          boundaries: agent.boundaries || []
-        },
-        'builtin',
-        'seed'
-      );
+
+    const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM companies').get();
+    if (count === 0) {
+      const template = companyTemplates.templates.find((item) => item.id === 'distribuidora') || companyTemplates.templates[0];
+      const orphanAgents = this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE company_id IS NULL").get().count;
+      if (orphanAgents > 0) {
+        // DB pre-v2: adoptar lo existente bajo la empresa default.
+        const company = this.insertCompany({
+          name: template.name,
+          industry: template.industry,
+          emoji: template.emoji,
+          color: template.color,
+          scenario: template.scenario
+        }, 'migration');
+        this.db.prepare('UPDATE agents SET company_id = ? WHERE company_id IS NULL').run(company.id);
+        this.db.prepare('UPDATE meetings SET company_id = ? WHERE company_id IS NULL').run(company.id);
+        return company;
+      }
+      return this.createCompanyFromTemplate(template, 'seed');
     }
-    return true;
+    return null;
+  }
+
+  // ── Empresas ───────────────────────────────────────────────────────────
+
+  insertCompany(data, actor) {
+    const id = nanoid(10);
+    const at = now();
+    this.db.prepare(`
+      INSERT INTO companies (id, name, industry, emoji, color, scenario, status, created_at, last_active_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(id, data.name, data.industry || '', data.emoji || '🏢', data.color || '#4c6ef5', data.scenario || '', at, at);
+    this.logChange(actor, 'company', id, 'create', { name: data.name });
+    return this.getCompany(id);
+  }
+
+  createCompanyFromTemplate(template, actor = 'user') {
+    const company = this.insertCompany(template, actor);
+    for (const employee of template.employees || []) {
+      const agentId = employee.name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
+      this.insertAgent({
+        id: agentId,
+        companyId: company.id,
+        name: employee.name,
+        title: employee.title,
+        voice: employee.voice || 'M1',
+        color: employee.color || company.color,
+        style: employee.style || '',
+        aliases: employee.aliases || [employee.name.toLowerCase()],
+        domains: employee.skills || [],
+        boundaries: employee.boundaries || [],
+        knowledge: employee.knowledge || ''
+      }, 'builtin', actor);
+    }
+    return company;
+  }
+
+  getCompany(companyId) {
+    return rowToCompany(this.db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId));
+  }
+
+  listCompanies() {
+    return this.db.prepare(`
+      SELECT c.*, (SELECT COUNT(*) FROM agents a WHERE a.company_id = c.id AND a.status = 'active') AS team_size,
+             (SELECT COUNT(*) FROM meetings m WHERE m.company_id = c.id) AS meeting_count
+      FROM companies c WHERE c.status = 'active' ORDER BY c.last_active_at DESC
+    `).all().map((row) => ({ ...rowToCompany(row), teamSize: row.team_size, meetingCount: row.meeting_count }));
+  }
+
+  updateCompany(companyId, patch, actor = 'user') {
+    const company = this.getCompany(companyId);
+    if (!company) {
+      return null;
+    }
+    this.db.prepare('UPDATE companies SET name = ?, industry = ?, emoji = ?, color = ?, scenario = ? WHERE id = ?').run(
+      patch.name ?? company.name,
+      patch.industry ?? company.industry,
+      patch.emoji ?? company.emoji,
+      patch.color ?? company.color,
+      patch.scenario ?? company.scenario,
+      companyId
+    );
+    this.logChange(actor, 'company', companyId, 'update', { patch });
+    return this.getCompany(companyId);
+  }
+
+  archiveCompany(companyId, actor = 'user') {
+    this.db.prepare("UPDATE companies SET status = 'archived' WHERE id = ?").run(companyId);
+    this.logChange(actor, 'company', companyId, 'archive', {});
+  }
+
+  touchCompany(companyId) {
+    this.db.prepare('UPDATE companies SET last_active_at = ? WHERE id = ?').run(now(), companyId);
   }
 
   insertAgent(profile, origin, actor) {
     const at = now();
     this.db.prepare(`
       INSERT INTO agents (id, origin, status, name, title, voice, color, style,
-        aliases_json, domains_json, boundaries_json, learning_enabled, version, created_at, updated_at)
-      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+        aliases_json, domains_json, boundaries_json, knowledge, company_id, learning_enabled, version, created_at, updated_at)
+      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
     `).run(
       profile.id,
       origin,
@@ -92,6 +188,8 @@ export class Store {
       JSON.stringify(profile.aliases),
       JSON.stringify(profile.domains),
       JSON.stringify(profile.boundaries),
+      profile.knowledge || '',
+      profile.companyId || null,
       at,
       at
     );
@@ -103,11 +201,22 @@ export class Store {
     return rowToAgent(this.db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId));
   }
 
-  listAgents({ includeArchived = false } = {}) {
-    const rows = includeArchived
-      ? this.db.prepare('SELECT * FROM agents ORDER BY created_at').all()
-      : this.db.prepare("SELECT * FROM agents WHERE status = 'active' ORDER BY created_at").all();
-    return rows.map(rowToAgent);
+  listAgents({ includeArchived = false, companyId = null } = {}) {
+    let query = 'SELECT * FROM agents';
+    const conditions = [];
+    const params = [];
+    if (!includeArchived) {
+      conditions.push("status = 'active'");
+    }
+    if (companyId) {
+      conditions.push('company_id = ?');
+      params.push(companyId);
+    }
+    if (conditions.length) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    query += ' ORDER BY created_at';
+    return this.db.prepare(query).all(...params).map(rowToAgent);
   }
 
   updateAgent(agentId, patch, actor, note = null) {
@@ -130,12 +239,13 @@ export class Store {
       aliases: patch.aliases ?? current.aliases,
       domains: patch.domains ?? current.domains,
       boundaries: patch.boundaries ?? current.boundaries,
+      knowledge: patch.knowledge ?? current.knowledge,
       learningEnabled: patch.learningEnabled ?? current.learningEnabled
     };
 
     this.db.prepare(`
       UPDATE agents SET name = ?, title = ?, voice = ?, color = ?, style = ?,
-        aliases_json = ?, domains_json = ?, boundaries_json = ?, learning_enabled = ?,
+        aliases_json = ?, domains_json = ?, boundaries_json = ?, knowledge = ?, learning_enabled = ?,
         version = version + 1, updated_at = ?
       WHERE id = ?
     `).run(
@@ -147,6 +257,7 @@ export class Store {
       JSON.stringify(next.aliases),
       JSON.stringify(next.domains),
       JSON.stringify(next.boundaries),
+      next.knowledge,
       next.learningEnabled ? 1 : 0,
       now(),
       agentId
@@ -170,16 +281,19 @@ export class Store {
 
   // ── Reuniones ──────────────────────────────────────────────────────────
 
-  createMeeting({ scenarioName = null, scenarioText = null } = {}) {
+  createMeeting({ companyId, scenarioName = null, scenarioText = null } = {}) {
     const id = nanoid(10);
     const at = now();
     this.db.prepare(`
-      INSERT INTO meetings (id, scenario_name, scenario_text, status, created_at, last_active_at)
-      VALUES (?, ?, ?, 'active', ?, ?)
-    `).run(id, scenarioName, scenarioText, at, at);
+      INSERT INTO meetings (id, company_id, scenario_name, scenario_text, status, created_at, last_active_at)
+      VALUES (?, ?, ?, ?, 'active', ?, ?)
+    `).run(id, companyId || null, scenarioName, scenarioText, at, at);
 
-    for (const agent of this.listAgents()) {
+    for (const agent of this.listAgents({ companyId })) {
       this.db.prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agent.id);
+    }
+    if (companyId) {
+      this.touchCompany(companyId);
     }
     return this.getMeeting(id);
   }
@@ -188,16 +302,26 @@ export class Store {
     return this.db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId) || null;
   }
 
-  findResumableMeeting(meetingId) {
+  findResumableMeeting(meetingId, companyId = null) {
     if (!meetingId) {
       return null;
     }
-    return this.db.prepare("SELECT * FROM meetings WHERE id = ? AND status = 'active'").get(meetingId) || null;
+    const meeting = this.db.prepare("SELECT * FROM meetings WHERE id = ? AND status = 'active'").get(meetingId) || null;
+    if (meeting && companyId && meeting.company_id !== companyId) {
+      return null;
+    }
+    return meeting;
   }
 
-  listMeetings(limit = 30) {
+  listMeetings(limit = 30, companyId = null) {
+    if (companyId) {
+      return this.db.prepare(`
+        SELECT id, company_id, title, scenario_name, status, created_at, last_active_at, closed_at, turn_count, summary
+        FROM meetings WHERE company_id = ? ORDER BY last_active_at DESC LIMIT ?
+      `).all(companyId, limit);
+    }
     return this.db.prepare(`
-      SELECT id, title, scenario_name, status, created_at, last_active_at, closed_at, turn_count, summary
+      SELECT id, company_id, title, scenario_name, status, created_at, last_active_at, closed_at, turn_count, summary
       FROM meetings ORDER BY last_active_at DESC LIMIT ?
     `).all(limit);
   }

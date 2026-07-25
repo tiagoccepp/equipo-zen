@@ -1,62 +1,66 @@
-# Reunión con Julio y Tomasa
+# Simulaciones — empresas con empleados IA
 
-App local para conversar por voz o texto con agentes IA como si estuvieran en una reunión: Julio (programador) y Tomasa (operaciones y datos comerciales), sobre el escenario de una distribuidora. Los agentes hablan con voz nativa de Gemini Live, se los puede interrumpir a mitad de frase, recuerdan reuniones anteriores y **aprenden de lo que les enseñás** conversando.
+App local para crear **simulaciones de empresas** (una tecnológica, una automotora, una distribuidora… todas las que quieras) y conversar por voz o texto con sus **empleados IA**, cada uno con sus skills, conocimientos, personalidad y voz propia. Los empleados hablan en streaming, se los puede interrumpir a mitad de frase, recuerdan reuniones anteriores y **aprenden de lo que les enseñás**.
+
+- **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3).
+- **Voz**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) corriendo **100% local** (ONNX, 31 idiomas incluido español, 10 voces).
+- **Reconocimiento de voz del usuario**: SpeechRecognition del navegador (Chrome recomendado).
 
 ## Ejecutar
 
 ```bash
 npm install
-cp .env.example .env   # completar claves; sin claves corre en modo simulación
-npm run dev
+cp .env.example .env                 # poné tu MINIMAX_API_KEY (sin clave: modo simulación)
+
+# Voz local (una sola vez; descarga ~250 MB de modelos en el primer arranque):
+python3 -m venv .venv-tts
+.venv-tts/bin/pip install 'supertonic[serve]'
+
+npm run dev                          # levanta backend + frontend + TTS local
 ```
 
-Abre la URL que imprime Vite (normalmente `http://127.0.0.1:5173`). El backend escucha solo en loopback (`127.0.0.1:8787`); el cliente le habla vía proxy same-origin de Vite.
+Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:8787`); el cliente le habla vía proxy same-origin.
 
 Scripts: `npm test` (suite `node:test`), `npm run typecheck`, `npm run build`.
 
-## Qué hace
+## Cómo funciona
 
-- **Conversación en tiempo real**: cada agente mantiene una sesión Gemini Live persistente con su propia voz (`speechConfig`); el texto streamea por deltas y el audio nativo por chunks. Si Live no está disponible cae automáticamente a `generateContentStream` + TTS por oraciones, y sin claves a un modo simulación conversable. Un `SpeakerGate` en el servidor garantiza que nunca hablen dos a la vez.
-- **Barge-in**: hablá sobre un agente y su volumen baja al instante; si sostenés la voz ~250 ms se corta su audio, se aborta la generación en curso y tu turno entra con lo que dijiste desde el primer fonema (pre-buffer).
-- **Orquestación**: un router heurístico (menciones con límite de palabra, dominios, cierres de tema por frase) decide quién habla; saludos y turnos grupales pasan por un router IA con JSON estricto. Los agentes deshabilitados para la reunión no reciben la palabra.
-- **Persistencia total (SQLite, `node:sqlite`)**: reuniones, turnos, agentes, tareas, aprendizajes, sugerencias y changelog sobreviven a reconexiones, recargas y `kill -9` (WAL). Al volver, la reunión se retoma con historial, roster y tareas; "Reiniciar reunión" la archiva (recuperable desde el drawer Reuniones) y abre una nueva.
-- **Personalización**: crear agentes nuevos y **editar a Julio/Tomasa** (voz, estilo, dominios, alias, límites) desde la UI, con versionado de perfil, changelog y rollback (`POST /api/agents/:id/rollback`). El escenario de la empresa es editable por reunión y se inyecta en los prompts.
-- **Auto-aprendizaje**: un observador asíncrono detecta correcciones y preferencias en lo que decís (solo turnos del usuario, con evidencia obligatoria), las guarda y las inyecta como "MEMORIA APRENDIDA" en el prompt del agente correspondiente. Al cerrar cada reunión, una reflexión genera título + resumen y propone vocabulario/estilo: el vocabulario aditivo se auto-aplica con guardarraíles; todo lo demás queda como sugerencia para aprobar. Panel "Memoria" por agente: ver, editar, borrar, pausar u olvidar todo.
-- **Tareas**: por UI o por los propios agentes (tags `[TAREA_*]` en modo texto, tool calling `crear_tarea`/`completar_tarea` en modo Live).
+- **Simulaciones**: el home es una galería de empresas. Creá una desde plantilla (equipo pre-armado con skills y conocimientos) o desde cero. Cada empresa tiene su escenario, su equipo y su historial de reuniones, todo persistido en SQLite (`node:sqlite`, WAL — sobrevive a `kill -9`).
+- **Empleados**: perfil completo editable — rol, skills (ruteo), **conocimientos del puesto** (se inyectan en su prompt), personalidad, límites y voz (10 presets Supertonic). Con versionado, changelog y rollback.
+- **Reunión en tiempo real**: un router (heurístico + MiniMax para casos grupales) decide quién habla; el texto streamea por deltas y la voz se sintetiza localmente por oraciones a través de un `SpeakerGate` que garantiza que nunca hablen dos a la vez. **Barge-in**: hablá encima y el empleado baja el volumen, se corta y tu turno entra completo.
+- **Auto-aprendizaje**: un observador (MiniMax) detecta correcciones/preferencias en lo que decís — solo turnos del usuario, con evidencia obligatoria — y las inyecta como MEMORIA APRENDIDA en el prompt del empleado correspondiente. Al cerrar cada reunión, una reflexión genera título+resumen y propone vocabulario/estilo (lo aditivo se auto-aplica con guardarraíles; el resto queda como sugerencia). Panel **Memoria** por empleado: ver, editar, borrar, pausar u olvidar todo.
+- **Tareas**: por UI o por los propios empleados (`[TAREA_CREAR: …]`, con destinatario por nombre).
 
 ## Arquitectura
 
 ```
-src/main.ts             cliente vanilla TS: shell estático + render por regiones,
+src/main.ts             cliente vanilla TS: vistas Simulaciones/Workspace, render por regiones,
                         transcript append-only, cola PCM con ducking, barge-in, drawers
-shared/protocol.ts      protocolo WS tipado + validadores (corre nativo en Node 26 y Vite)
+shared/protocol.ts      protocolo WS tipado + validadores (Node 26 type-stripping + Vite)
 server/index.js         bootstrap
 server/lib/
-  config.js             env + modelos + flags        http.js       REST (meetings/agents/memoria/telemetría)
-  ws.js                 WS + validación de entrada   meeting-session.js  orquestación
-  router.js             ruteo heurístico             gemini.js     rotación (unaria + streaming)
-  turn-pipeline.js      TurnQueue cancelable + SpeakerGate
-  agent-runtime.js      fachada live→stream→mock + prompts
-  agent-live-backend.js sesión Gemini Live por agente (voz nativa, tools, resumption)
-  transcriber.js        transcripción Live del usuario (+ fallback WAV)
-  db.js / store.js      SQLite (migraciones) / repositorios
-  learning.js           observador de aprendizajes + MEMORIA APRENDIDA
-  reflection.js         resumen post-reunión + tuner del router
-  key-ring.js           rotación de claves + slots Live
-  model-registry.js     validación de modelos al arrancar
-  memory.js             memoria de reunión (RAM 80 + persistencia + seeds)
+  config.js             env + modelos + flags       http.js       REST (companies/meetings/agents/memoria)
+  llm.js                cliente MiniMax (SSE, filtro <think>, rotación)
+  supertonic.js         adaptador TTS local (WAV→PCM para el gate)
+  ws.js                 WS + validación             meeting-session.js  orquestación por empresa
+  router.js             ruteo heurístico            turn-pipeline.js    TurnQueue cancelable + SpeakerGate
+  agent-runtime.js      stream (MiniMax+Supertonic) | mock, prompts
+  transcriber.js        STT vía hint del navegador
+  db.js / store.js      SQLite (migraciones v2: companies) / repositorios
+  learning.js           observador de aprendizajes  reflection.js  resumen + tuner del router
+  key-ring.js           rotación de claves          memory.js      memoria de reunión
   telemetry.js          ring en RAM + SSE + análisis
+server/company-templates.json   plantillas de empresas con equipos
 ```
 
 ## Observabilidad local
 
-- `GET /api/telemetry?limit=200` · `GET /api/telemetry/stream` (SSE) · `GET /api/telemetry/analysis`
-- `GET /api/agents/:id/prompt-preview`: el system prompt REAL del agente (escenario, límites y memoria incluidos) — la herramienta clave para inspeccionar qué ve el modelo.
-- `GET /api/meetings`, `GET /api/changelog`: historial y toda mutación que afectó prompts (quién, qué, cuándo).
-- Dashboards HTML: `/auditoria`, `/audit-graph`, `/arquitectura`, `/vault`.
+- `GET /api/agents/:id/prompt-preview`: el system prompt REAL del empleado (escenario de su empresa, conocimientos, límites y memoria).
+- `GET /api/companies` · `GET /api/meetings?companyId=` · `GET /api/changelog`
+- `GET /api/telemetry` · `/api/telemetry/stream` (SSE) · `/api/telemetry/analysis`
 
 ## Seguridad
 
-Pensada como app local de un solo usuario: bind en loopback, CORS con allowlist, lector del vault restringido a `.md` no ocultos, validación y límites en todos los mensajes WS. No la expongas a la red sin agregar autenticación.
+App local de un solo usuario: bind en loopback, CORS con allowlist, validación y límites en todos los mensajes WS, TTS y base de datos sin salir de tu máquina. No la expongas a la red sin agregar autenticación.
 
-> Nota: la documentación del vault Obsidian (`00 - Index` … `08 - Roadmap`) describe la arquitectura ANTERIOR al overhaul de julio 2026 y quedó desactualizada; la referencia vigente es este README + el código.
+> El vault Obsidian (`00 - Index` … `08 - Roadmap`) describe una arquitectura vieja (era Gemini, pre-empresas). La referencia vigente es este README + el código.

@@ -1,7 +1,5 @@
-import { ThinkingLevel } from '@google/genai';
-
-import { LEARNING_ENABLED, LEARNING_MODELS } from './config.js';
-import { extractTextFromResponse, generateContentWithRotation, parseJsonFromModel } from './gemini.js';
+import { LEARNING_ENABLED, MINIMAX_LEARNING_MODELS } from './config.js';
+import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
 
@@ -17,26 +15,11 @@ const MEMORY_TOP_K = 8;
 const MEMORY_CHAR_BUDGET = 4800; // ~1200 tokens
 const LEARNING_ITEM_MAX_CHARS = 200;
 
-const OBSERVER_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    learnings: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          agentId: { type: 'STRING', description: 'Id del agente al que aplica, o "global" si aplica a todos.' },
-          type: { type: 'STRING', enum: ['user_preference', 'correction', 'fact', 'skill_note'] },
-          content: { type: 'STRING', description: 'Una sola oración en español, concreta y accionable.' },
-          confidence: { type: 'NUMBER' },
-          evidence: { type: 'STRING', description: 'Cita textual (recortada) del turno del USUARIO que lo respalda.' }
-        },
-        required: ['type', 'content', 'confidence', 'evidence']
-      }
-    }
-  },
-  required: ['learnings']
-};
+const OBSERVER_FORMAT = [
+  'Respondé ÚNICAMENTE con un JSON válido, sin markdown, con esta forma exacta:',
+  '{"learnings":[{"agentId":"<id del agente o global>","type":"user_preference|correction|fact|skill_note","content":"una oración en español","confidence":0.0,"evidence":"cita textual del turno del usuario"}]}',
+  'Si no hay nada para aprender: {"learnings":[]}'
+].join('\n');
 
 // Observador asíncrono: corre DESPUÉS de que el ciclo del turno terminó
 // (jamás bloquea la conversación) y extrae aprendizajes SOLO de lo que
@@ -123,21 +106,16 @@ export class LearningObserver {
       transcript
     ].join('\n');
 
-    const { response } = await generateContentWithRotation(this.keyRing, {
-      models: LEARNING_MODELS,
+    const { text: responseText } = await completeChat(this.keyRing, {
+      models: MINIMAX_LEARNING_MODELS,
       scope: 'observador',
-      timeoutMs: 9000,
-      config: {
-        maxOutputTokens: 500,
-        temperature: 0,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        responseMimeType: 'application/json',
-        responseSchema: OBSERVER_SCHEMA
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      timeoutMs: 12000,
+      maxTokens: 600,
+      temperature: 0,
+      messages: [{ role: 'user', content: `${prompt}\n\n${OBSERVER_FORMAT}` }]
     });
 
-    const parsed = parseJsonFromModel(response.text || extractTextFromResponse(response));
+    const parsed = parseJsonFromModel(responseText);
     const candidates = Array.isArray(parsed?.learnings) ? parsed.learnings.slice(0, MAX_LEARNINGS_PER_CYCLE) : [];
     const validAgentIds = new Set(agents.map((agent) => agent.id));
 

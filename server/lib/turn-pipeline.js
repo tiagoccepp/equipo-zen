@@ -1,4 +1,4 @@
-import { withTimeout } from './gemini.js';
+import { withTimeout } from './llm.js';
 
 // ── SpeakerGate ─────────────────────────────────────────────────────────
 // Garantiza que UN solo agente emite audio a la vez, a nivel servidor.

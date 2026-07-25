@@ -4,9 +4,10 @@ import express from 'express';
 
 import {
   ALLOWED_ORIGINS,
-  MODEL,
+  MINIMAX_MODEL,
   TELEMETRY_MAX_EVENTS,
   collectApiKeys,
+  companyTemplates,
   rootDir
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
@@ -67,10 +68,82 @@ export function createApp({ store }) {
     res.status(204).end();
   });
 
-  app.get('/api/agents', (_req, res) => {
+  app.get('/api/companies', (_req, res) => {
+    res.json({ companies: store.listCompanies() });
+  });
+
+  app.get('/api/company-templates', (_req, res) => {
     res.json({
-      agents: store.listAgents(),
-      model: MODEL,
+      templates: companyTemplates.templates.map(({ id, name, industry, emoji, color, scenario, employees }) => ({
+        id,
+        name,
+        industry,
+        emoji,
+        color,
+        scenario,
+        teamSize: (employees || []).length,
+        team: (employees || []).map((employee) => ({ name: employee.name, title: employee.title }))
+      }))
+    });
+  });
+
+  app.post('/api/companies', (req, res) => {
+    const body = req.body || {};
+    if (body.templateId) {
+      const template = companyTemplates.templates.find((item) => item.id === body.templateId);
+      if (!template) {
+        return res.status(404).json({ error: 'plantilla no encontrada' });
+      }
+      const overrides = {
+        ...template,
+        name: typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : template.name
+      };
+      const company = store.createCompanyFromTemplate(overrides, 'user');
+      return res.status(201).json({ company });
+    }
+    const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
+    if (!name) {
+      return res.status(400).json({ error: 'la empresa necesita un nombre' });
+    }
+    const company = store.insertCompany({
+      name,
+      industry: typeof body.industry === 'string' ? body.industry.slice(0, 80) : '',
+      emoji: typeof body.emoji === 'string' ? body.emoji.slice(0, 8) : '🏢',
+      color: typeof body.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(body.color) ? body.color : '#4c6ef5',
+      scenario: typeof body.scenario === 'string' ? body.scenario.slice(0, 2000) : ''
+    }, 'user');
+    res.status(201).json({ company });
+  });
+
+  app.patch('/api/companies/:id', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim().slice(0, 80);
+    if (typeof body.industry === 'string') patch.industry = body.industry.slice(0, 80);
+    if (typeof body.emoji === 'string' && body.emoji.trim()) patch.emoji = body.emoji.slice(0, 8);
+    if (typeof body.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(body.color)) patch.color = body.color;
+    if (typeof body.scenario === 'string') patch.scenario = body.scenario.slice(0, 2000);
+    const company = store.updateCompany(req.params.id, patch);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    res.json({ company });
+  });
+
+  app.post('/api/companies/:id/archive', (req, res) => {
+    const company = store.getCompany(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    store.archiveCompany(company.id, 'user');
+    res.json({ ok: true });
+  });
+
+  app.get('/api/agents', (req, res) => {
+    const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
+    res.json({
+      agents: store.listAgents({ companyId }),
+      model: MINIMAX_MODEL,
       hasApiKeys: collectApiKeys().length > 0
     });
   });
@@ -82,18 +155,16 @@ export function createApp({ store }) {
     if (!agent || agent.status !== 'active') {
       return res.status(404).json({ error: 'agente no encontrado' });
     }
-    const meetingId = typeof req.query.meetingId === 'string' ? req.query.meetingId : null;
-    const latest = meetingId ? { id: meetingId } : store.listMeetings(1)[0] || null;
-    const meeting = latest ? store.getMeeting(latest.id) : null;
-    const scenario = meeting
-      ? { name: meeting.scenario_name, text: meeting.scenario_text }
+    const company = agent.companyId ? store.getCompany(agent.companyId) : null;
+    const scenario = company
+      ? { name: `${company.name} (${company.industry})`, text: company.scenario }
       : null;
     const instruction = buildSystemInstruction(agent, {
-      agents: store.listAgents(),
+      agents: store.listAgents({ companyId: agent.companyId }),
       scenario,
       learningsSection: renderLearningsSection(store, agent.id)
     });
-    res.json({ agentId: agent.id, meetingId: meeting?.id || null, systemInstruction: instruction });
+    res.json({ agentId: agent.id, companyId: agent.companyId, systemInstruction: instruction });
   });
 
   // ── Aprendizajes: transparencia y control total del usuario ──────────
@@ -200,8 +271,9 @@ export function createApp({ store }) {
     res.json({ versions: store.listAgentVersions(agent.id) });
   });
 
-  app.get('/api/meetings', (_req, res) => {
-    res.json({ meetings: store.listMeetings(50) });
+  app.get('/api/meetings', (req, res) => {
+    const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
+    res.json({ meetings: store.listMeetings(50, companyId) });
   });
 
   app.get('/api/meetings/:id', (req, res) => {

@@ -1,12 +1,10 @@
-import { ThinkingLevel } from '@google/genai';
-
 import {
-  LEARNING_MODELS,
+  MINIMAX_LEARNING_MODELS,
   REFLECTION_ENABLED,
   ROUTER_AUTO_APPLY_VOCAB,
   ROUTER_TUNING_ENABLED
 } from './config.js';
-import { extractTextFromResponse, generateContentWithRotation, parseJsonFromModel } from './gemini.js';
+import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
 
@@ -24,38 +22,11 @@ const VOCAB_STOPWORDS = new Set([
   'todos', 'reunion', 'equipo', 'sistema', 'empresa'
 ]);
 
-const REFLECTION_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    title: { type: 'STRING', description: 'Título corto de la reunión (máx 8 palabras, español).' },
-    summary: { type: 'STRING', description: 'Resumen en 2-4 oraciones en español: qué se trató y qué quedó pendiente.' },
-    vocab: {
-      type: 'ARRAY',
-      description: 'Términos del negocio que se hablaron mucho y a ningún agente le figuran como dominio.',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          agentId: { type: 'STRING' },
-          term: { type: 'STRING' }
-        },
-        required: ['agentId', 'term']
-      }
-    },
-    styleHints: {
-      type: 'ARRAY',
-      description: 'Sugerencias de ajuste de estilo por agente basadas en fricciones observadas (opcional).',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          agentId: { type: 'STRING' },
-          hint: { type: 'STRING' }
-        },
-        required: ['agentId', 'hint']
-      }
-    }
-  },
-  required: ['title', 'summary']
-};
+const REFLECTION_FORMAT = [
+  'Respondé ÚNICAMENTE con un JSON válido, sin markdown, con esta forma exacta:',
+  '{"title":"título corto en español (máx 8 palabras)","summary":"resumen de 2-4 oraciones en español","vocab":[{"agentId":"<id>","term":"término del negocio"}],"styleHints":[{"agentId":"<id>","hint":"sugerencia de estilo"}]}',
+  'vocab y styleHints pueden ser listas vacías.'
+].join('\n');
 
 // Reflexión post-reunión: resume, sugiere vocabulario para el router y
 // propone ajustes de estilo. Vocabulario aditivo se auto-aplica con
@@ -126,21 +97,16 @@ export class ReflectionRunner {
       transcript.slice(0, 24000)
     ].join('\n');
 
-    const { response } = await generateContentWithRotation(this.keyRing, {
-      models: LEARNING_MODELS,
+    const { text: responseText } = await completeChat(this.keyRing, {
+      models: MINIMAX_LEARNING_MODELS,
       scope: 'reflexion',
-      timeoutMs: 15000,
-      config: {
-        maxOutputTokens: 700,
-        temperature: 0,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        responseMimeType: 'application/json',
-        responseSchema: REFLECTION_SCHEMA
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      timeoutMs: 20000,
+      maxTokens: 800,
+      temperature: 0,
+      messages: [{ role: 'user', content: `${prompt}\n\n${REFLECTION_FORMAT}` }]
     });
 
-    const parsed = parseJsonFromModel(response.text || extractTextFromResponse(response));
+    const parsed = parseJsonFromModel(responseText);
     if (!parsed?.summary) {
       return;
     }

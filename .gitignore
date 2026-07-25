@@ -8,3 +8,4 @@ npm-debug.log*
 .playwright-cli/
 .claude/
 server/data/
+.venv-tts/

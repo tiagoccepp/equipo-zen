@@ -131,6 +131,28 @@ const MIGRATIONS = [
     created_at    TEXT NOT NULL,
     resolved_at   TEXT
   );
+  `,
+  // v2: simulaciones de empresas — cada empresa tiene su equipo de
+  // empleados (agents) y sus reuniones. knowledge = conocimiento propio
+  // del empleado que se inyecta en su prompt.
+  `
+  CREATE TABLE companies (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    industry       TEXT NOT NULL DEFAULT '',
+    emoji          TEXT NOT NULL DEFAULT '🏢',
+    color          TEXT NOT NULL DEFAULT '#4c6ef5',
+    scenario       TEXT NOT NULL DEFAULT '',
+    status         TEXT NOT NULL DEFAULT 'active',
+    created_at     TEXT NOT NULL,
+    last_active_at TEXT NOT NULL
+  );
+
+  ALTER TABLE agents ADD COLUMN company_id TEXT;
+  ALTER TABLE agents ADD COLUMN knowledge TEXT NOT NULL DEFAULT '';
+  ALTER TABLE meetings ADD COLUMN company_id TEXT;
+  CREATE INDEX idx_agents_company ON agents(company_id, status);
+  CREATE INDEX idx_meetings_company ON meetings(company_id, last_active_at);
   `
 ];
 

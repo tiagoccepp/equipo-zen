@@ -2,8 +2,21 @@
 // y cliente (Vite). Única fuente de verdad: todo tipo de mensaje nuevo se
 // declara acá y se valida acá.
 
-export const GEMINI_VOICES = ['Charon', 'Aoede', 'Fenrir', 'Puck', 'Kore'] as const;
-export type GeminiVoice = (typeof GEMINI_VOICES)[number];
+export const VOICES = ['M1', 'M2', 'M3', 'M4', 'M5', 'F1', 'F2', 'F3', 'F4', 'F5'] as const;
+export type VoiceName = (typeof VOICES)[number];
+
+export const VOICE_LABELS: Record<VoiceName, string> = {
+  M1: 'Martín (grave y sereno)',
+  M2: 'Bruno (canchero)',
+  M3: 'Ricardo (maduro)',
+  M4: 'Andrés (neutro)',
+  M5: 'Facundo (enérgico)',
+  F1: 'Tomasa (cálida)',
+  F2: 'Valentina (clara)',
+  F3: 'Carla (vendedora)',
+  F4: 'Sofía (suave)',
+  F5: 'Marta (precisa)'
+};
 
 export const LIMITS = {
   turnText: 4000,
@@ -35,6 +48,7 @@ export interface PublicAgent {
   domains: string[];
   aliases: string[];
   boundaries: string[];
+  knowledge?: string;
   style: string;
   voice: string;
   tasks: AgentTask[];
@@ -46,6 +60,19 @@ export interface PublicAgent {
 export interface MeetingScenario {
   name: string | null;
   text: string | null;
+}
+
+export interface PublicCompany {
+  id: string;
+  name: string;
+  industry: string;
+  emoji: string;
+  color: string;
+  scenario: string;
+  status?: string;
+  teamSize?: number;
+  meetingCount?: number;
+  lastActiveAt?: string;
 }
 
 export interface PublicTurn {
@@ -65,6 +92,7 @@ export interface AgentPatch {
   aliases?: string[];
   domains?: string[];
   boundaries?: string[];
+  knowledge?: string;
 }
 
 export interface RouteTarget {
@@ -100,13 +128,14 @@ export interface SpawnAgentPayload {
   aliases?: string[] | string;
   domains?: string[] | string;
   boundaries?: string[] | string;
+  knowledge?: string;
   style?: string;
   voice?: string;
   initialTasks?: string[];
 }
 
 export type ClientMessage =
-  | { type: 'hello'; meetingId?: string }
+  | { type: 'hello'; meetingId?: string; companyId?: string }
   | { type: 'interrupt'; turnId?: string; agentId?: string; reason: 'barge_in' | 'manual'; playedMs?: number }
   | { type: 'playback_complete'; turnId: string; agentId: string }
   | { type: 'user_turn'; text: string }
@@ -133,6 +162,7 @@ export type ServerMessage =
       id: string;
       meetingId: string;
       resumed: boolean;
+      company: PublicCompany;
       agents: PublicAgent[];
       scenario: MeetingScenario;
       turns: PublicTurn[];
@@ -244,10 +274,11 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
   switch (value.type) {
     case 'hello': {
       const meetingId = optionalCappedString(value.meetingId, 40);
-      if (meetingId === null) {
-        return { ok: false, error: 'meetingId inválido.' };
+      const companyId = optionalCappedString(value.companyId, 40);
+      if (meetingId === null || companyId === null) {
+        return { ok: false, error: 'hello inválido.' };
       }
-      return { ok: true, message: { type: 'hello', meetingId } };
+      return { ok: true, message: { type: 'hello', meetingId, companyId } };
     }
 
     case 'interrupt': {
@@ -294,6 +325,11 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         if (style === null) return { ok: false, error: `El estilo supera ${LIMITS.agentStyle} caracteres.` };
         patch.style = style;
       }
+      if (raw.knowledge !== undefined) {
+        const knowledge = cappedString(raw.knowledge, 2000);
+        if (knowledge === null) return { ok: false, error: 'Los conocimientos superan 2000 caracteres.' };
+        patch.knowledge = knowledge;
+      }
       if (raw.color !== undefined) {
         const color = cappedString(raw.color, 20);
         if (!color || !/^#[0-9a-fA-F]{3,8}$/.test(color)) return { ok: false, error: 'Color inválido.' };
@@ -301,8 +337,8 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       }
       if (raw.voice !== undefined) {
         const voice = cappedString(raw.voice, 30);
-        if (!voice || !(GEMINI_VOICES as readonly string[]).includes(voice)) {
-          return { ok: false, error: `Voz inválida. Opciones: ${GEMINI_VOICES.join(', ')}.` };
+        if (!voice || !(VOICES as readonly string[]).includes(voice)) {
+          return { ok: false, error: `Voz inválida. Opciones: ${VOICES.join(', ')}.` };
         }
         patch.voice = voice;
       }
@@ -404,13 +440,17 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       if (style === null) {
         return { ok: false, error: `El estilo supera ${LIMITS.agentStyle} caracteres.` };
       }
+      const knowledge = optionalCappedString(agent.knowledge, 2000);
+      if (knowledge === null) {
+        return { ok: false, error: 'Los conocimientos superan 2000 caracteres.' };
+      }
       const color = optionalCappedString(agent.color, 20);
       if (color === null || (color !== undefined && !/^#[0-9a-fA-F]{3,8}$/.test(color))) {
         return { ok: false, error: 'Color inválido.' };
       }
       const voice = optionalCappedString(agent.voice, 30);
-      if (voice === null || (voice !== undefined && !(GEMINI_VOICES as readonly string[]).includes(voice))) {
-        return { ok: false, error: `Voz inválida. Opciones: ${GEMINI_VOICES.join(', ')}.` };
+      if (voice === null || (voice !== undefined && !(VOICES as readonly string[]).includes(voice))) {
+        return { ok: false, error: `Voz inválida. Opciones: ${VOICES.join(', ')}.` };
       }
       const aliases = toStringList(agent.aliases, LIMITS.listItems, LIMITS.listItemLength);
       const domains = toStringList(agent.domains, LIMITS.listItems, LIMITS.listItemLength);
@@ -440,7 +480,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         ok: true,
         message: {
           type: 'spawn_agent',
-          agent: { name: name.trim(), title: title.trim(), color, aliases, domains, boundaries, style, voice, initialTasks }
+          agent: { name: name.trim(), title: title.trim(), color, aliases, domains, boundaries, knowledge, style, voice, initialTasks }
         }
       };
     }

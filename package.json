@@ -4,16 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "dev": "concurrently --kill-others-on-fail \"npm:dev:server\" \"npm:dev:client\" \"npm:dev:tts\"",
     "dev:server": "node --watch server/index.js",
     "dev:client": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "dev:tts": "sh -c '.venv-tts/bin/supertonic serve --host 127.0.0.1 --port 7788 || echo \"[tts] Supertonic no instalado (ver README); la reunión corre sin voz\"'"
   },
   "dependencies": {
-    "@google/genai": "^2.8.0",
     "concurrently": "^10.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",

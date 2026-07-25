@@ -1,6 +1,4 @@
-import { LIVE_MAX_SESSIONS_PER_KEY } from './config.js';
 import { getErrorText } from './text.js';
-import { isModelConfigurationError } from './gemini.js';
 
 export class ApiKeyRing {
   constructor(keys) {
@@ -9,39 +7,12 @@ export class ApiKeyRing {
       value,
       cooldownUntil: 0,
       failures: 0,
-      lastError: null,
-      liveSessions: 0
+      lastError: null
     }));
     this.cursor = 0;
     this.telemetry = null;
   }
 
-  // Slot para una sesión Live persistente: clave disponible con menos de
-  // LIVE_MAX_SESSIONS_PER_KEY sesiones abiertas (elige la menos cargada).
-  acquireForLive() {
-    const now = Date.now();
-    const candidates = this.keys
-      .filter((key) => key.cooldownUntil <= now && key.liveSessions < LIVE_MAX_SESSIONS_PER_KEY)
-      .sort((a, b) => a.liveSessions - b.liveSessions);
-    const key = candidates[0] || null;
-    if (key) {
-      key.liveSessions += 1;
-      this.logKey('live_slot_acquired', { keyId: key.id, liveSessions: key.liveSessions });
-    } else {
-      this.logKey('live_slot_unavailable', {
-        keys: this.keys.map((k) => ({ keyId: k.id, liveSessions: k.liveSessions, cooling: k.cooldownUntil > now }))
-      });
-    }
-    return key;
-  }
-
-  releaseLive(key) {
-    if (!key) {
-      return;
-    }
-    key.liveSessions = Math.max(0, key.liveSessions - 1);
-    this.logKey('live_slot_released', { keyId: key.id, liveSessions: key.liveSessions });
-  }
 
   setTelemetry(telemetryInstance) {
     this.telemetry = telemetryInstance;
@@ -98,9 +69,9 @@ export class ApiKeyRing {
     }
 
     const text = getErrorText(error);
-    const modelConfiguration = isModelConfigurationError(text);
-    const quota = /429|RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(text);
-    const permanent = /API_KEY_INVALID|PERMISSION_DENIED|SERVICE_DISABLED|has not been used in project|it is disabled|API has not been used/i.test(text);
+    const modelConfiguration = /model.*(not found|invalid|does not exist)/i.test(text);
+    const quota = /429|rate.?limit|quota|insufficient.?balance|1008/i.test(text);
+    const permanent = /401|invalid api key|api key.*invalid|unauthorized|1004/i.test(text);
     key.failures += 1;
     key.lastError = text.slice(0, 240);
     if (modelConfiguration) {

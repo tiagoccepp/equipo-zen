@@ -2,25 +2,22 @@ import { ThinkingLevel } from '@google/genai';
 import { nanoid } from 'nanoid';
 
 import {
-  AGENT_BACKEND,
   AUDIO_MIME_TYPE,
   MAX_CONTEXTUAL_FOLLOWUPS,
-  MODEL,
-  ROUTER_MODELS,
+  MINIMAX_MODEL,
+  MINIMAX_ROUTER_MODELS,
   ROUTER_TIMEOUT_MS,
-  TELEMETRY_MAX_EVENTS,
-  agentConfig
+  TELEMETRY_MAX_EVENTS
 } from './config.js';
-import { AgentLiveBackend } from './agent-live-backend.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
-import { extractTextFromResponse, generateContentWithRotation, parseJsonFromModel } from './gemini.js';
+import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
 import { ReflectionRunner } from './reflection.js';
 import { AgentRouter } from './router.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
-import { LiveAudioTranscriberRuntime } from './transcriber.js';
+import { HintTranscriberRuntime } from './transcriber.js';
 import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
@@ -58,13 +55,14 @@ export class MeetingSession {
     this.store = store;
 
     // Se inicializan en initMeeting() cuando llega el hello del cliente.
+    this.company = null;
     this.meeting = null;
     this.memory = null;
     this.sessionAgents = [];
     this.router = null;
     this.agents = new Map();
 
-    this.transcriber = new LiveAudioTranscriberRuntime(this.keyRing, null, {
+    this.transcriber = new HintTranscriberRuntime({
       emit: (event) => this.send(event),
       onTranscript: (text) => this.enqueueAudioTranscript(text)
     });
@@ -79,28 +77,29 @@ export class MeetingSession {
     });
     this.learningObserver = new LearningObserver(store, keyRingInstance);
     this.reflection = getReflectionRunner(store, keyRingInstance);
-    this.warmupStarted = false;
   }
 
   createAgentRuntime(agent) {
-    const runtime = new LiveAgentRuntime(agent, this.keyRing, this.memory, this);
-    if (AGENT_BACKEND === 'auto' || AGENT_BACKEND === 'live') {
-      runtime.liveBackend = new AgentLiveBackend(agent, this.keyRing, this.memory, this);
-    }
-    return runtime;
+    return new LiveAgentRuntime(agent, this.keyRing, this.memory, this);
   }
 
-  initMeeting(requestedMeetingId = null) {
-    let meeting = this.store.findResumableMeeting(requestedMeetingId);
+  initMeeting(requestedMeetingId = null, requestedCompanyId = null) {
+    // Resolver la empresa: la pedida, o la más activa como fallback.
+    this.company = (requestedCompanyId ? this.store.getCompany(requestedCompanyId) : null)
+      || this.store.listCompanies()[0]
+      || null;
+    if (!this.company) {
+      this.send({ type: 'error', message: 'No hay empresas creadas todavía.' });
+      return;
+    }
+
+    let meeting = this.store.findResumableMeeting(requestedMeetingId, this.company.id);
     if (meeting && activeSessionsByMeeting.has(meeting.id)) {
       meeting = null;
     }
     const resumed = Boolean(meeting);
     if (!meeting) {
-      meeting = this.store.createMeeting({
-        scenarioName: agentConfig.companySimulation?.name || null,
-        scenarioText: agentConfig.companySimulation?.scenario || null
-      });
+      meeting = this.store.createMeeting({ companyId: this.company.id });
     }
 
     this.meeting = meeting;
@@ -134,6 +133,7 @@ export class MeetingSession {
       });
     }
 
+    this.store.touchCompany(this.company.id);
     this.sessionAgents = this.store.rosterForMeeting(meeting.id).map((agent) => ({
       ...agent,
       tasks: tasksByAgent.get(agent.id) || []
@@ -153,20 +153,17 @@ export class MeetingSession {
         agents: this.sessionAgents.map((agent) => ({ id: agent.id, name: agent.name, title: agent.title }))
       }
     });
-    setTimeout(() => this.warmupLiveSessions(), 250);
-
-    const mode = !this.keyRing.hasKeys() || AGENT_BACKEND === 'mock'
-      ? 'mock'
-      : (AGENT_BACKEND === 'auto' || AGENT_BACKEND === 'live') ? 'live' : 'stream';
+    const mode = this.keyRing.hasKeys() ? 'stream' : 'mock';
     this.send({
       type: 'meeting_ready',
       id: this.id,
       meetingId: meeting.id,
       resumed,
+      company: this.company,
       agents: this.publicAgents(),
-      scenario: { name: meeting.scenario_name, text: meeting.scenario_text },
+      scenario: { name: this.company.name, text: meeting.scenario_text },
       turns: restoredTurns,
-      model: MODEL,
+      model: MINIMAX_MODEL,
       liveMode: this.keyRing.hasKeys(),
       mode,
       agentBackends: Object.fromEntries(this.sessionAgents.map((agent) => [agent.id, mode]))
@@ -193,17 +190,23 @@ export class MeetingSession {
   }
 
   promptContext(agentId = null) {
+    const scenarioText = this.company
+      ? [
+          this.company.scenario,
+          this.meeting?.scenario_text ? `Objetivo de esta reunión: ${this.meeting.scenario_text}` : ''
+        ].filter(Boolean).join('\n')
+      : this.meeting?.scenario_text || '';
     return {
       agents: this.sessionAgents,
-      scenario: this.meeting
-        ? { name: this.meeting.scenario_name, text: this.meeting.scenario_text }
+      scenario: this.company
+        ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
         : null,
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
     };
   }
 
   publicAgents() {
-    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, style, voice, tasks, origin, enabled, learningEnabled }) => ({
+    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, knowledge, style, voice, tasks, origin, enabled, learningEnabled }) => ({
       id,
       name,
       title,
@@ -211,6 +214,7 @@ export class MeetingSession {
       domains,
       aliases,
       boundaries,
+      knowledge,
       style,
       voice,
       tasks: tasks || [],
@@ -226,7 +230,7 @@ export class MeetingSession {
 
     if (message.type === 'hello') {
       if (!this.meeting) {
-        this.initMeeting(message.meetingId || null);
+        this.initMeeting(message.meetingId || null, message.companyId || null);
       }
       return;
     }
@@ -329,9 +333,10 @@ export class MeetingSession {
     if (message.type === 'reset') {
       // "Reiniciar reunión" = cerrar la reunión actual (queda en el
       // historial, reanudable solo por lista) y abrir una nueva.
+      const companyId = this.company?.id || null;
       this.closeCurrentMeeting('user_reset');
       this.send({ type: 'meeting_reset' });
-      this.initMeeting(null);
+      this.initMeeting(null, companyId);
       return;
     }
 
@@ -341,7 +346,7 @@ export class MeetingSession {
     }
 
     if (message.type === 'spawn_agent') {
-      const { name, title, color, aliases, domains, boundaries, style, voice, initialTasks } = message.agent || {};
+      const { name, title, color, aliases, domains, boundaries, style, voice, knowledge, initialTasks } = message.agent || {};
       if (!name || !title) {
         this.send({ type: 'error', message: 'Faltan campos obligatorios para crear el agente.' });
         return;
@@ -359,14 +364,16 @@ export class MeetingSession {
 
       const profile = {
         id,
+        companyId: this.company.id,
         name,
         title,
-        color: color || '#888888',
+        color: color || this.company.color || '#4c6ef5',
         aliases: Array.isArray(aliases) ? aliases : (aliases || '').split(',').map(s => s.trim()).filter(Boolean),
         domains: Array.isArray(domains) ? domains : (domains || '').split(',').map(s => s.trim()).filter(Boolean),
         boundaries: Array.isArray(boundaries) ? boundaries : (boundaries || '').split(',').map(s => s.trim()).filter(Boolean),
+        knowledge: knowledge || '',
         style: style || 'Conversador estándar y profesional.',
-        voice: voice || 'Charon'
+        voice: voice || 'M1'
       };
 
       const lowerName = profile.name.toLowerCase();
@@ -431,13 +438,13 @@ export class MeetingSession {
         aliases: updated.aliases,
         domains: updated.domains,
         boundaries: updated.boundaries,
+        knowledge: updated.knowledge,
         learningEnabled: updated.learningEnabled,
         version: updated.version
       });
       const runtime = this.agents.get(agent.id);
       if (runtime) {
         runtime.name = updated.name;
-        runtime.liveBackend?.scheduleRefresh();
       }
       this.logTelemetry('agent_updated', { agentId: agent.id, fields: Object.keys(message.patch) });
       this.broadcastAgentsUpdated();
@@ -550,24 +557,27 @@ export class MeetingSession {
     let cleanText = text;
     let changed = false;
 
-    // 1. Parsear creaciones con agente explícito: [TAREA_CREAR: agenteId: descripción]
-    const createRegex = /\[TAREA_CREAR:\s*([a-zA-Z0-9_-]+):\s*([^\]]+)\]/g;
+    // 1. Parsear creaciones con destinatario explícito (nombre o id):
+    // [TAREA_CREAR: Tomasa: descripción]
+    const createRegex = /\[TAREA_CREAR:\s*([\p{L}0-9_-]+):\s*([^\]]+)\]/gu;
     let createMatch;
     while ((createMatch = createRegex.exec(text)) !== null) {
-      const targetAgentId = createMatch[1].trim();
+      const targetRef = createMatch[1].trim().toLowerCase();
       const taskText = createMatch[2].trim();
 
-      const targetAgent = this.sessionAgents.find(a => a.id === targetAgentId);
+      const targetAgent = this.sessionAgents.find(
+        (a) => a.id === targetRef || a.name.toLowerCase() === targetRef
+      );
       if (targetAgent && taskText) {
         targetAgent.tasks = targetAgent.tasks || [];
-        const newTaskId = this.store.insertTask(this.meeting.id, targetAgentId, { text: taskText });
+        const newTaskId = this.store.insertTask(this.meeting.id, targetAgent.id, { text: taskText });
         targetAgent.tasks.push({
           id: newTaskId,
           text: taskText,
           completed: false,
           createdAt: new Date().toISOString()
         });
-        this.logTelemetry('task_created_by_agent', { agentId: targetAgentId, createdBy: agentId, taskText, method: 'explicit_target' });
+        this.logTelemetry('task_created_by_agent', { agentId: targetAgent.id, createdBy: agentId, taskText, method: 'explicit_target' });
         changed = true;
       }
     }
@@ -635,28 +645,6 @@ export class MeetingSession {
   }
 
 
-  async warmupLiveSessions() {
-    if (this.warmupStarted || !this.keyRing.hasKeys()) {
-      return;
-    }
-    this.warmupStarted = true;
-    this.send({ type: 'meeting_warmup_start' });
-    this.logTelemetry('meeting_warmup_start', { agentCount: this.agents.size });
-
-    const tasks = [this.transcriber.ensureSession()];
-
-    const results = await Promise.allSettled(tasks);
-    const failures = results.filter((result) => result.status === 'rejected');
-    this.send({
-      type: 'meeting_warmup_complete',
-      ok: failures.length === 0,
-      failures: failures.length
-    });
-    this.logTelemetry('meeting_warmup_complete', {
-      ok: failures.length === 0,
-      failures: failures.length
-    });
-  }
 
   enqueueAudioTranscript(text) {
     const normalized = String(text || '').trim();
@@ -780,21 +768,17 @@ export class MeetingSession {
       `USER MESSAGE: "${text}"`
     ].join('\n');
 
-    const { response } = await generateContentWithRotation(this.keyRing, {
-      models: ROUTER_MODELS,
+    const { text: routerText } = await completeChat(this.keyRing, {
+      models: MINIMAX_ROUTER_MODELS,
       scope: 'orquestador',
       timeoutMs: ROUTER_TIMEOUT_MS,
       emit: (event) => this.send(event),
-      config: {
-        maxOutputTokens: 300,
-        temperature: 0,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        responseMimeType: 'application/json'
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      maxTokens: 300,
+      temperature: 0,
+      messages: [{ role: 'user', content: prompt }]
     });
 
-    const parsed = parseJsonFromModel(response.text || extractTextFromResponse(response));
+    const parsed = parseJsonFromModel(routerText);
     if (!parsed || !Array.isArray(parsed.targets)) {
       return null;
     }
@@ -928,45 +912,7 @@ export class MeetingSession {
       await this.processContextualFollowups(turnId, text, route, signal);
     }
 
-    this.feedContextToIdleLiveSessions(text, route);
-
-    this.learningObserver.observeCycle(
-      this.meeting.id,
-      this.memory,
-      this.sessionAgents,
-      text,
-      (affectedAgentIds) => {
-        // El system prompt de una sesión Live queda fijado al abrir: al
-        // aprender algo nuevo se marca para reconectar con seed fresco.
-        for (const [agentId, runtime] of this.agents) {
-          if (runtime.liveBackend && (affectedAgentIds.includes(agentId) || affectedAgentIds.includes(null))) {
-            runtime.liveBackend.scheduleRefresh();
-          }
-        }
-      }
-    );
-  }
-
-  // Mantiene "context-warm" las sesiones Live de los agentes que NO
-  // hablaron este turno (sendClientContent con turnComplete:false).
-  feedContextToIdleLiveSessions(userText, route) {
-    const spoke = new Set((route.responses || []).map((response) => response.agentId));
-    const lines = [
-      `Usuario: ${userText}`,
-      ...(route.responses || []).map((response) => `${response.name}: ${response.text}`)
-    ];
-    for (const [agentId, runtime] of this.agents) {
-      const backend = runtime.liveBackend;
-      if (!backend) {
-        continue;
-      }
-      const missing = spoke.has(agentId)
-        ? lines.filter((line) => !line.startsWith(`${runtime.name}:`) && !line.startsWith('Usuario:'))
-        : lines;
-      if (missing.length > 0) {
-        backend.feedContext(missing.join('\n'));
-      }
-    }
+    this.learningObserver.observeCycle(this.meeting.id, this.memory, this.sessionAgents, text);
   }
 
   async processContextualFollowups(turnId, originalText, route, signal) {
