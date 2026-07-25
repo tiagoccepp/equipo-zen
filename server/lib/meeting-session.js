@@ -19,6 +19,9 @@ import { CaptureTranscriberRuntime } from './transcriber.js';
 import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
+// Paciencia: cuánto se espera tras el último fragmento antes de rutear.
+const USER_TURN_SETTLE_MS = Number(process.env.USER_TURN_SETTLE_MS || 2600);
+const USER_TURN_SETTLE_EXTENDED_MS = Number(process.env.USER_TURN_SETTLE_EXTENDED_MS || 6000);
 
 // Tipos de telemetría que alimentan el auto-ajuste del router: se persisten
 // en SQLite además del ring en RAM.
@@ -75,6 +78,9 @@ export class MeetingSession {
     });
     this.learningObserver = new LearningObserver(store, keyRingInstance);
     this.reflection = getReflectionRunner(store, keyRingInstance);
+    // Paciencia conversacional: los mensajes seguidos del usuario se juntan
+    // en UN solo turno antes de rutear (el agente espera a que termines la idea).
+    this.pendingUser = null;
   }
 
   createAgentRuntime(agent) {
@@ -242,6 +248,10 @@ export class MeetingSession {
       // Barge-in: abortar el turno en curso, cortar el audio y avisar.
       const speakingAgentId = this.gate.owner?.agentId || message.agentId || null;
       const speakingTurnId = this.gate.owner?.turnId || message.turnId || null;
+      if (this.pendingUser) {
+        clearTimeout(this.pendingUser.timer);
+        this.pendingUser = null;
+      }
       this.turnQueue.interrupt(message.reason === 'barge_in' ? 'barge_in' : 'superseded');
       this.gate.flush();
       this.send({ type: 'agent_interrupted', turnId: speakingTurnId || undefined, agentId: speakingAgentId || undefined });
@@ -331,6 +341,10 @@ export class MeetingSession {
     if (message.type === 'reset') {
       // "Reiniciar reunión" = cerrar la reunión actual (queda en el
       // historial, reanudable solo por lista) y abrir una nueva.
+      if (this.pendingUser) {
+        clearTimeout(this.pendingUser.timer);
+        this.pendingUser = null;
+      }
       const companyId = this.company?.id || null;
       this.closeCurrentMeeting('user_reset');
       this.send({ type: 'meeting_reset' });
@@ -652,7 +666,56 @@ export class MeetingSession {
     this.enqueueUserTurn(normalized, 'audio');
   }
 
+  // ¿El mensaje parece a medio terminar? (termina en conector o coma) →
+  // se espera más tiempo por el resto de la idea.
+  static seemsUnfinished(text) {
+    const trimmed = String(text || '').trim();
+    if (/[,:;(]$/.test(trimmed)) {
+      return true;
+    }
+    if (/\b(y|e|o|u|pero|ademas|además|tambien|también|aparte|primero|luego|despues|después|entonces|osea|o sea|por ejemplo|es decir|que)$/i.test(trimmed)) {
+      return true;
+    }
+    return false;
+  }
+
   enqueueUserTurn(text, source) {
+    const fragmentId = nanoid(8);
+    // Cada fragmento se muestra al instante en el chat…
+    this.memory.add('user', 'Tu', text, null, fragmentId);
+    this.send({ type: 'user_turn_received', turnId: fragmentId, text, source });
+    this.logTelemetry('user_turn_enqueued', { turnId: fragmentId, source, text }, fragmentId);
+
+    // …pero el ruteo espera: si venís escribiendo/hablando de a partes,
+    // se junta todo en un solo turno con el contexto completo.
+    if (this.pendingUser) {
+      clearTimeout(this.pendingUser.timer);
+      this.pendingUser.texts.push(text);
+      this.pendingUser.source = source;
+    } else {
+      this.pendingUser = { texts: [text], source };
+    }
+    const combined = this.pendingUser.texts.join('\n');
+    const settleMs = MeetingSession.seemsUnfinished(combined)
+      ? USER_TURN_SETTLE_EXTENDED_MS
+      : USER_TURN_SETTLE_MS;
+    this.pendingUser.timer = setTimeout(() => this.flushPendingUser(), settleMs);
+  }
+
+  flushPendingUser() {
+    if (!this.pendingUser) {
+      return;
+    }
+    const { texts, source } = this.pendingUser;
+    this.pendingUser = null;
+    const text = texts.join('\n');
+    if (texts.length > 1) {
+      this.logTelemetry('user_turns_aggregated', { fragments: texts.length, chars: text.length });
+    }
+    this.routeCombinedTurn(text, source);
+  }
+
+  routeCombinedTurn(text, source) {
     const turnId = nanoid(8);
     const accepted = this.turnQueue.push(
       turnId,
@@ -678,11 +741,7 @@ export class MeetingSession {
         message: 'Hay demasiados turnos en cola; esperá a que termine la ronda actual.'
       });
       this.logTelemetry('turn_rejected_queue_full', { turnId, source }, turnId);
-      return;
     }
-    this.memory.add('user', 'Tu', text, null, turnId);
-    this.send({ type: 'user_turn_received', turnId, text, source });
-    this.logTelemetry('user_turn_enqueued', { turnId, source, text }, turnId);
   }
 
   async routeUserTurn(turnId, text) {

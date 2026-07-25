@@ -238,3 +238,41 @@ test('set_scenario actualiza el contexto que ven los prompts', async () => {
   assert.ok(session.promptContext().scenario.text.includes('Objetivo de esta reunión: Sprint de migración del sistema de pedidos'));
   assert.ok(session.promptContext().scenario.name.includes('Distribuidora Norte'));
 });
+
+test('paciencia: mensajes seguidos se agregan en UN solo ruteo', async () => {
+  process.env.USER_TURN_SETTLE_MS = '2600';
+  const { socket, session, julioId } = newSession();
+  const julio = session.agents.get(julioId);
+  const received = [];
+  julio.respond = async (turn) => {
+    received.push(turn.text);
+    return { rawText: 'ok', text: 'ok', audioChunks: [], usedMock: true };
+  };
+
+  session.enqueueUserTurn('Julio, tengo que contarte algo del sistema', 'text');
+  await new Promise((r) => setTimeout(r, 120));
+  session.enqueueUserTurn('lavar los platos', 'text');
+
+  // Los dos fragmentos aparecen al instante en el chat…
+  const bubbles = socket.sent.filter((m) => m.type === 'user_turn_received');
+  assert.equal(bubbles.length, 2);
+
+  // …pero todavía no se ruteó nada (está esperando)
+  assert.equal(socket.sent.filter((m) => m.type === 'route_decision').length, 0);
+
+  await new Promise((r) => setTimeout(r, 3200));
+
+  const routes = socket.sent.filter((m) => m.type === 'route_decision');
+  assert.equal(routes.length, 1, 'un solo ruteo para los dos fragmentos');
+  assert.equal(received.length, 1);
+  assert.ok(received[0].includes('contarte algo del sistema'));
+  assert.ok(received[0].includes('lavar los platos'), 'el turno combinado tiene TODO el contexto');
+});
+
+test('paciencia: un conector al final extiende la espera', () => {
+  assert.equal(MeetingSession.seemsUnfinished('quiero que hagas dos cosas: primero'), true);
+  assert.equal(MeetingSession.seemsUnfinished('además,'), true);
+  assert.equal(MeetingSession.seemsUnfinished('lavá los platos y'), true);
+  assert.equal(MeetingSession.seemsUnfinished('lavá los platos.'), false);
+  assert.equal(MeetingSession.seemsUnfinished('¿cómo va el stock?'), false);
+});
