@@ -25,6 +25,8 @@ type StatusAlert = {
   tone: 'working' | 'ok' | 'error';
   message: string;
   timeout?: number;
+  // Toast accionable: un botón que dispara un data-action del delegador.
+  action?: { label: string; action: string; goalId?: string; path?: string };
 };
 
 type MicSettings = {
@@ -90,18 +92,38 @@ type SettingsStatus = {
   stt: { provider: string; localHealthy: boolean; groqConfigured: boolean };
 };
 
-// ── Supervisión del trabajo (organigrama + feed) ────────────────────────
+// ── Supervisión del trabajo (tareas, proyectos, organigrama, actividad) ──
 
-type WorkTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'done';
+type WorkTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'done' | 'noted';
+
+type WorkComment = {
+  id: string;
+  authorId: string;
+  kind: 'nota' | 'aprobacion' | 'cambios' | string;
+  text: string;
+  createdAt: string;
+};
 
 type WorkTask = {
   id: string;
   text: string;
   status: WorkTaskStatus | string;
+  kind?: string;
   agentId: string | null;
+  reviewerId?: string | null;
+  reviewStatus?: 'pendiente' | 'aprobado' | 'cambios' | null;
+  parentTaskId?: string | null;
   resultSummary: string | null;
   blockedReason: string | null;
   runCount: number;
+  comments?: WorkComment[];
+};
+
+// Un archivo del entorno aislado del proyecto (index.html viene primero).
+type WorkFile = {
+  path: string;
+  size: number;
+  url: string;
 };
 
 type WorkGoal = {
@@ -109,6 +131,10 @@ type WorkGoal = {
   title: string;
   description: string;
   status: string;
+  kind?: 'proyecto' | 'acuerdo' | string;
+  slug?: string;
+  url?: string | null;
+  files?: WorkFile[];
   created_at?: string;
   completed_at?: string | null;
   tasks: WorkTask[];
@@ -139,6 +165,7 @@ type WorkData = {
   team: WorkMember[];
   goals: WorkGoal[];
   runs: WorkRun[];
+  comments?: Array<WorkComment & { taskId: string }>;
   workspaceUrl: string;
 };
 
@@ -156,6 +183,43 @@ const TASK_KIND_LABEL: Record<string, string> = {
   revision: 'revisión',
   contratacion: 'contratación'
 };
+
+// ── Secciones del workspace ─────────────────────────────────────────────
+// El área principal está paginada: cada sección es un tabpanel propio y
+// solo se pinta la que está visible.
+
+type WsSection = 'meeting' | 'tasks' | 'projects' | 'org' | 'activity';
+
+const WS_SECTIONS: Array<{ id: WsSection; label: string; tab: string; pane: string }> = [
+  { id: 'meeting', label: 'Reunión', tab: 'tabMeeting', pane: 'meetingView' },
+  { id: 'tasks', label: 'Tareas', tab: 'tabTasks', pane: 'tasksView' },
+  { id: 'projects', label: 'Proyectos', tab: 'tabProjects', pane: 'projectsView' },
+  { id: 'org', label: 'Organigrama', tab: 'tabOrg', pane: 'orgView' },
+  { id: 'activity', label: 'Actividad', tab: 'tabActivity', pane: 'activityView' }
+];
+
+// Columnas del tablero de tareas. `pending`, `in_progress` y `done` se
+// muestran siempre (aunque estén vacías) para que la lectura sea estable;
+// `blocked` y `noted` aparecen solo cuando tienen algo.
+const TASK_COLUMNS: Array<{ status: string; label: string; always: boolean }> = [
+  { status: 'pending', label: 'En cola', always: true },
+  { status: 'in_progress', label: 'En curso', always: true },
+  { status: 'blocked', label: 'Bloqueada', always: false },
+  { status: 'done', label: 'Hecha', always: true },
+  { status: 'noted', label: 'Acuerdo', always: false }
+];
+
+const REVIEW_LABEL: Record<string, string> = {
+  pendiente: 'En revisión',
+  aprobado: 'Aprobado',
+  cambios: 'Cambios pedidos'
+};
+
+const VIEWPORTS: Array<{ id: 'desktop' | 'tablet' | 'mobile'; label: string; icon: string; width: string }> = [
+  { id: 'desktop', label: 'Escritorio', icon: '🖥️', width: '100%' },
+  { id: 'tablet', label: 'Tablet', icon: '📱', width: '820 px' },
+  { id: 'mobile', label: 'Móvil', icon: '📲', width: '390 px' }
+];
 
 type ClosingSummary = {
   producesWork: boolean;
@@ -730,11 +794,22 @@ const state = {
   editingAgentId: null as string | null,
   selectedSpawnColor: AGENT_COLORS[0],
   openTaskPanels: new Set<string>(),
-  wsTab: 'meeting' as 'meeting' | 'work',
+  wsSection: 'meeting' as WsSection,
+  sectionDots: new Set<WsSection>(),
   workData: null as WorkData | null,
   workError: false,
   workActive: false,
   workEvents: [] as WorkFeedItem[],
+  // Tablero de tareas: filtros por empleado y por estado.
+  taskFilterAgent: '',
+  taskFilterStatus: '',
+  // Navegador integrado: proyecto y archivo abiertos + ancho simulado.
+  projectId: '',
+  projectFile: '',
+  projectViewport: 'desktop' as 'desktop' | 'tablet' | 'mobile',
+  projectReloads: 0,
+  // Web recién terminada esperando que el /work confirme dónde vive.
+  pendingPreview: null as { taskId: string; path: string; agentName: string; at: number } | null,
   closingSummary: null as ClosingSummary | null,
   endingMeeting: false,
   settings: null as SettingsData | null,
@@ -900,13 +975,22 @@ function enterCompany(companyId: string, seed?: Company | null) {
   resetMeetingLocalState();
   closeSocketSilently();
   // El estado de supervisión es por empresa: arranca limpio.
-  state.wsTab = 'meeting';
+  state.wsSection = 'meeting';
+  state.sectionDots.clear();
   state.workData = null;
   state.workError = false;
   state.workActive = false;
   state.workEvents = [];
   state.closingSummary = null;
   state.endingMeeting = false;
+  state.taskFilterAgent = '';
+  state.taskFilterStatus = '';
+  state.projectId = '';
+  state.projectFile = '';
+  state.projectReloads = 0;
+  state.pendingPreview = null;
+  projectTextCache.clear();
+  lastFrameKey = '';
   workHtmlCache.clear();
   syncWorkPolling();
   markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'micTuning', 'work');
@@ -1487,19 +1571,33 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   },
   work() {
     syncEndMeetingButton();
-    const isWork = state.wsTab === 'work';
-    const tabMeeting = byId<HTMLButtonElement>('tabMeeting');
-    const tabWork = byId<HTMLButtonElement>('tabWork');
-    tabMeeting.classList.toggle('is-active', !isWork);
-    tabMeeting.setAttribute('aria-selected', String(!isWork));
-    tabWork.classList.toggle('is-active', isWork);
-    tabWork.setAttribute('aria-selected', String(isWork));
-    byId('meetingView').hidden = isWork;
-    byId('workView').hidden = !isWork;
-    byId('workTabDot').hidden = !state.workActive;
-    byId('workNotice').hidden = !(state.workActive && !isWork);
-    if (isWork) {
-      renderWorkView();
+    const active = state.wsSection;
+    // El puntito avisa novedades solo en las secciones que no estás mirando.
+    const dots = new Set(state.sectionDots);
+    if (state.workActive) {
+      dots.add('tasks');
+    }
+    for (const section of WS_SECTIONS) {
+      const isActive = section.id === active;
+      const tab = byId<HTMLButtonElement>(section.tab);
+      tab.classList.toggle('is-active', isActive);
+      tab.setAttribute('aria-selected', String(isActive));
+      tab.tabIndex = isActive ? 0 : -1;
+      byId(section.pane).hidden = !isActive;
+      const dot = document.getElementById(`${section.tab}Dot`);
+      if (dot) {
+        dot.hidden = isActive || !dots.has(section.id);
+      }
+    }
+    byId('workNotice').hidden = !(state.workActive && active === 'meeting');
+    if (active === 'tasks') {
+      renderTasksSection();
+    } else if (active === 'projects') {
+      renderProjectsSection();
+    } else if (active === 'org') {
+      setWorkHtml('orgChart', renderOrgChart());
+    } else if (active === 'activity') {
+      setWorkHtml('workFeedList', renderWorkFeed());
     }
   }
 };
@@ -1680,16 +1778,20 @@ function mountShell() {
           </aside>
 
           <main class="ws-main">
-            <div class="ws-tabs" role="tablist" aria-label="Vista del workspace">
-              <button role="tab" type="button" class="ws-tab is-active" id="tabMeeting" aria-selected="true" aria-controls="meetingView" data-action="ws-tab" data-tab="meeting">Reunión</button>
-              <button role="tab" type="button" class="ws-tab" id="tabWork" aria-selected="false" aria-controls="workView" data-action="ws-tab" data-tab="work">Organigrama<span class="tab-dot" id="workTabDot" hidden aria-hidden="true"></span></button>
+            <div class="ws-tabs" id="wsTabs" role="tablist" aria-label="Secciones del workspace">
+              ${WS_SECTIONS.map((section) => `
+                <button role="tab" type="button" class="ws-tab${section.id === 'meeting' ? ' is-active' : ''}"
+                  id="${section.tab}" aria-selected="${section.id === 'meeting'}" aria-controls="${section.pane}"
+                  tabindex="${section.id === 'meeting' ? '0' : '-1'}"
+                  data-action="ws-tab" data-tab="${section.id}">${section.label}<span class="tab-dot" id="${section.tab}Dot" hidden aria-hidden="true"></span></button>
+              `).join('')}
             </div>
 
             <section class="ws-pane" id="meetingView" role="tabpanel" aria-labelledby="tabMeeting">
               <h2 class="sr-only">Conversación</h2>
               <button class="work-notice" id="workNotice" data-action="open-work-tab" type="button" hidden>
                 <span class="live-dot" aria-hidden="true"></span>
-                <span>El equipo está trabajando en segundo plano — ver Organigrama</span>
+                <span>El equipo está trabajando en segundo plano — ver Tareas</span>
               </button>
               <div class="transcript" id="transcript" tabindex="-1">
                 <div class="transcript-empty" id="transcriptEmpty">
@@ -1712,25 +1814,66 @@ function mountShell() {
               </section>
             </section>
 
-            <section class="ws-pane work-pane" id="workView" role="tabpanel" aria-labelledby="tabWork" hidden>
-              <h2 class="sr-only">Organigrama y trabajo del equipo</h2>
-              <div class="work-layout">
-                <section class="work-col" aria-labelledby="orgTitle">
+            <section class="ws-pane work-pane" id="tasksView" role="tabpanel" aria-labelledby="tabTasks" hidden>
+              <h2 class="sr-only">Tareas por proyecto</h2>
+              <div class="tasks-toolbar">
+                <label class="tfilter" for="taskFilterAgent">
+                  <span>Empleado</span>
+                  <select class="form-control sm" id="taskFilterAgent"><option value="">Todo el equipo</option></select>
+                </label>
+                <label class="tfilter" for="taskFilterStatus">
+                  <span>Estado</span>
+                  <select class="form-control sm" id="taskFilterStatus">
+                    <option value="">Todos los estados</option>
+                    ${TASK_COLUMNS.map((column) => `<option value="${column.status}">${column.label}</option>`).join('')}
+                  </select>
+                </label>
+                <span class="tasks-count" id="tasksCount" role="status"></span>
+              </div>
+              <div id="tasksBoard"></div>
+            </section>
+
+            <section class="ws-pane projects-pane" id="projectsView" role="tabpanel" aria-labelledby="tabProjects" hidden>
+              <h2 class="sr-only">Proyectos y navegador integrado</h2>
+              <div class="projects-layout">
+                <aside class="projects-side" aria-labelledby="projectsSideTitle">
                   <div class="work-col-head">
-                    <h3 id="orgTitle">Organigrama</h3>
-                    <span class="work-col-hint">estado en vivo · cada 5 s</span>
+                    <h3 id="projectsSideTitle">Proyectos</h3>
+                    <a class="btn ghost sm" id="workspaceLink" href="#" target="_blank" rel="noopener" hidden>Carpeta ↗</a>
                   </div>
-                  <div id="orgChart"></div>
-                </section>
-                <section class="work-col" aria-labelledby="workActivityTitle">
-                  <div class="work-col-head">
-                    <h3 id="workActivityTitle">Trabajo</h3>
-                    <a class="btn ghost sm" id="workspaceLink" href="#" target="_blank" rel="noopener" hidden>Abrir workspace ↗</a>
+                  <div id="projectsList" class="projects-list"></div>
+                </aside>
+                <section class="browser" aria-labelledby="browserTitle">
+                  <h3 class="sr-only" id="browserTitle">Navegador integrado</h3>
+                  <div class="browser-chrome" id="browserChrome"></div>
+                  <div class="browser-stage" id="browserStage" data-viewport="desktop">
+                    <iframe class="browser-frame" id="browserFrame" title="Vista previa del proyecto" sandbox="allow-same-origin" hidden></iframe>
+                    <pre class="browser-text" id="browserText" tabindex="0" hidden></pre>
+                    <div class="browser-empty" id="browserEmpty"></div>
                   </div>
-                  <div id="workGoals"></div>
-                  <h4 class="work-feed-title">Actividad</h4>
-                  <div id="workFeedList" class="work-feed"></div>
                 </section>
+              </div>
+            </section>
+
+            <section class="ws-pane work-pane" id="orgView" role="tabpanel" aria-labelledby="tabOrg" hidden>
+              <h2 class="sr-only">Organigrama del equipo</h2>
+              <div class="work-col">
+                <div class="work-col-head">
+                  <h3 id="orgTitle">Organigrama</h3>
+                  <span class="work-col-hint">estado en vivo · cada 5 s</span>
+                </div>
+                <div id="orgChart"></div>
+              </div>
+            </section>
+
+            <section class="ws-pane work-pane" id="activityView" role="tabpanel" aria-labelledby="tabActivity" hidden>
+              <h2 class="sr-only">Actividad de la empresa</h2>
+              <div class="work-col">
+                <div class="work-col-head">
+                  <h3 id="workActivityTitle">Canal de la empresa</h3>
+                  <span class="work-col-hint">quién le dijo qué a quién</span>
+                </div>
+                <div id="workFeedList" class="work-feed"></div>
               </div>
             </section>
           </main>
@@ -1995,6 +2138,8 @@ function mountShell() {
   });
   // Árbol del organigrama: flechas / Home / End mueven el foco entre nodos.
   document.addEventListener('keydown', handleOrgKeydown);
+  // Pestañas del workspace: patrón ARIA de tablist (flechas + Home/End).
+  document.addEventListener('keydown', handleWsTabsKeydown);
   // El polling del panel de trabajo se pausa cuando la pestaña no se ve.
   document.addEventListener('visibilitychange', syncWorkPolling);
   // El estado abierto/cerrado de las tareas por agente sobrevive a los
@@ -2087,22 +2232,52 @@ function handleDelegatedClick(event: Event) {
       send({ type: 'confirm_end_meeting' });
       state.closingSummary = null;
       closeModal('closeMeetingModal');
-      setWsTab('work');
+      setWsSection('tasks');
       upsertAlert('work-start', 'Equipo', 'Cierre confirmado: el equipo ya está trabajando en segundo plano.', 'ok', 4200);
       break;
     case 'close-close-meeting':
       closeModal('closeMeetingModal');
       break;
     case 'ws-tab':
-      setWsTab(target.dataset.tab === 'work' ? 'work' : 'meeting');
+      setWsSection(sectionFromTab(target.dataset.tab));
       break;
     case 'open-work-tab':
-      setWsTab('work');
-      byId('tabWork').focus();
+      setWsSection('tasks');
+      byId('tabTasks').focus();
       break;
     case 'work-retry':
       void refreshWork();
       break;
+
+    // ── Workspace: tareas y proyectos ──
+    case 'clear-task-filters':
+      state.taskFilterAgent = '';
+      state.taskFilterStatus = '';
+      byId<HTMLSelectElement>('taskFilterAgent').value = '';
+      byId<HTMLSelectElement>('taskFilterStatus').value = '';
+      markDirty('work');
+      break;
+    case 'select-project':
+      selectProject(target.dataset.goalId || '', target.dataset.filePath || '');
+      break;
+    case 'open-preview':
+      dismissAlert(target.dataset.alertId || '');
+      selectProject(target.dataset.goalId || '', target.dataset.filePath || '');
+      setWsSection('projects');
+      break;
+    case 'browser-reload':
+      state.projectReloads += 1;
+      projectTextCache.clear();
+      markDirty('work');
+      break;
+    case 'browser-viewport': {
+      const viewport = target.dataset.viewport;
+      if (viewport === 'desktop' || viewport === 'tablet' || viewport === 'mobile') {
+        state.projectViewport = viewport;
+        markDirty('work');
+      }
+      break;
+    }
     case 'health':
       trace('health_clicked');
       send({ type: 'health' });
@@ -2297,6 +2472,21 @@ function handleDelegatedSubmit(event: Event) {
 
 function handleDelegatedChange(event: Event) {
   const checkbox = event.target as HTMLInputElement;
+  if (checkbox.id === 'browserFileSelect') {
+    state.projectFile = (checkbox as unknown as HTMLSelectElement).value;
+    markDirty('work');
+    return;
+  }
+  if (checkbox.id === 'taskFilterAgent' || checkbox.id === 'taskFilterStatus') {
+    const value = (checkbox as unknown as HTMLSelectElement).value;
+    if (checkbox.id === 'taskFilterAgent') {
+      state.taskFilterAgent = value;
+    } else {
+      state.taskFilterStatus = value;
+    }
+    markDirty('work');
+    return;
+  }
   if (checkbox.classList?.contains('task-checkbox')) {
     const agentId = checkbox.dataset.agentId;
     const taskId = checkbox.dataset.taskId;
@@ -3224,8 +3414,15 @@ function renderAlerts() {
 
   return state.alerts.map((alert) => `
     <div class="alert ${alert.tone}" role="status">
-      <strong>${escapeHtml(alert.scope)}</strong>
-      <span>${escapeHtml(alert.message)}</span>
+      <div class="alert-copy">
+        <strong>${escapeHtml(alert.scope)}</strong>
+        <span>${escapeHtml(alert.message)}</span>
+      </div>
+      ${alert.action ? `<button class="alert-action" type="button"
+        data-action="${escapeHtml(alert.action.action)}"
+        data-alert-id="${escapeHtml(alert.id)}"
+        data-goal-id="${escapeHtml(alert.action.goalId || '')}"
+        data-file-path="${escapeHtml(alert.action.path || '')}">${escapeHtml(alert.action.label)}</button>` : ''}
     </div>
   `).join('');
 }
@@ -3349,19 +3546,44 @@ function syncEndMeetingButton() {
   button.textContent = state.endingMeeting ? 'Preparando cierre…' : 'Finalizar reunión';
 }
 
-function setWsTab(tab: 'meeting' | 'work') {
-  if (state.wsTab === tab) return;
-  state.wsTab = tab;
-  trace('ws_tab_changed', { tab });
+function sectionFromTab(tab?: string): WsSection {
+  return WS_SECTIONS.some((section) => section.id === tab) ? (tab as WsSection) : 'meeting';
+}
+
+function setWsSection(section: WsSection) {
+  if (state.wsSection === section) return;
+  state.wsSection = section;
+  state.sectionDots.delete(section);
+  trace('ws_section_changed', { section });
   markDirty('work');
   syncWorkPolling();
 }
 
-// Polling SOLO mientras el panel Organigrama está visible (pestaña activa
-// del workspace + documento visible). Al arrancar hace un fetch inmediato.
+// Patrón ARIA de tablist: flechas mueven el foco y activan la sección.
+function handleWsTabsKeydown(event: KeyboardEvent) {
+  if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+  const origin = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.ws-tab') : null;
+  if (!origin || !document.getElementById('wsTabs')?.contains(origin)) return;
+  event.preventDefault();
+  const index = WS_SECTIONS.findIndex((section) => section.tab === origin.id);
+  if (index < 0) return;
+  const next = event.key === 'ArrowRight'
+    ? (index + 1) % WS_SECTIONS.length
+    : event.key === 'ArrowLeft'
+      ? (index - 1 + WS_SECTIONS.length) % WS_SECTIONS.length
+      : event.key === 'Home'
+        ? 0
+        : WS_SECTIONS.length - 1;
+  setWsSection(WS_SECTIONS[next].id);
+  byId(WS_SECTIONS[next].tab).focus();
+}
+
+// Polling SOLO mientras una sección que lo necesita está visible (Tareas,
+// Proyectos, Organigrama o Actividad + documento visible). Con la Reunión
+// arriba alcanza con los work_event del WS. Al arrancar hace un fetch ya.
 function syncWorkPolling() {
   const shouldPoll = state.view === 'workspace'
-    && state.wsTab === 'work'
+    && state.wsSection !== 'meeting'
     && document.visibilityState === 'visible';
   if (shouldPoll && !workPollTimer) {
     workPollTimer = window.setInterval(() => {
@@ -3385,6 +3607,7 @@ async function refreshWork() {
     state.workError = false;
     state.workActive = data.goals.some((goal) => goal.status === 'active'
       && goal.tasks.some((task) => task.status === 'pending' || task.status === 'in_progress'));
+    resolvePendingPreview();
   } catch {
     if (state.companyId === companyId) {
       state.workError = true;
@@ -3427,15 +3650,19 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
         icon: '📄',
         html: `<strong>${escapeHtml(name)}</strong> escribió ${artifactLinkHtml(path)}`
       };
+      notePreviewCandidate(taskId, [path], name);
       break;
     }
-    case 'task_done':
+    case 'task_done': {
+      const artifacts = Array.isArray(event.artifacts) ? event.artifacts.map(String) : [];
       item = {
         key: `done-${taskId}`,
         icon: '✅',
-        html: `<strong>${escapeHtml(name)}</strong> terminó: ${escapeHtml(clip(text(event.summary), 220))}${artifactLinksHtml(event.artifacts)}`
+        html: `<strong>${escapeHtml(name)}</strong> terminó: ${escapeHtml(clip(text(event.summary), 220))}${artifactLinksHtml(artifacts)}`
       };
+      notePreviewCandidate(taskId, artifacts, name);
       break;
+    }
     case 'task_blocked':
       item = {
         key: `blocked-${taskId}`,
@@ -3471,6 +3698,31 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
       upsertAlert('goal-done', 'Meta cumplida', title || 'El equipo terminó todo lo asignado.', 'ok', 6000);
       break;
     }
+
+    // ── Colaboración entre compañeros ──
+    case 'review_requested':
+      item = {
+        key: `review-req-${text(event.targetTaskId) || taskId}`,
+        icon: '👀',
+        html: `<strong>${escapeHtml(name)}</strong> va a revisar el trabajo de <strong>${escapeHtml(text(event.authorName))}</strong>`
+      };
+      break;
+    case 'review_done': {
+      const approved = text(event.verdict) !== 'cambios';
+      item = {
+        key: `review-${taskId}`,
+        icon: approved ? '👍' : '✋',
+        html: `<strong>${escapeHtml(name)}</strong> ${approved ? 'aprobó' : 'pidió cambios sobre'} el trabajo de <strong>${escapeHtml(text(event.authorName))}</strong>${text(event.comment) ? `: <span class="feed-quote">${escapeHtml(clip(text(event.comment), 240))}</span>` : ''}`
+      };
+      break;
+    }
+    case 'changes_requested':
+      item = {
+        key: `changes-${taskId}`,
+        icon: '🔧',
+        html: `<strong>${escapeHtml(name)}</strong> va a aplicar los cambios que pidió <strong>${escapeHtml(text(event.reviewerName))}</strong>`
+      };
+      break;
   }
 
   if (item) {
@@ -3481,6 +3733,78 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
   }
   markDirty('work');
   scheduleWorkRefresh();
+}
+
+// ── Navegador integrado: abrir la web recién terminada ──────────────────
+// El evento trae la ruta relativa al proyecto pero no el proyecto: se
+// anota como pendiente y se resuelve cuando el /work confirma en qué meta
+// vive esa tarea (llega por el refresh con debounce del propio evento).
+
+function notePreviewCandidate(taskId: string, paths: string[], agentName: string) {
+  const html = paths.map(String).find((path) => /\.html?$/i.test(path));
+  if (!html || !taskId) return;
+  state.pendingPreview = { taskId, path: html.replace(/^\/+/, ''), agentName, at: Date.now() };
+}
+
+function resolvePendingPreview() {
+  const pending = state.pendingPreview;
+  const data = state.workData;
+  if (!pending || !data) return;
+  // Si en 90 s el endpoint nunca ubicó la tarea, dejamos de esperar.
+  if (Date.now() - pending.at > 90000) {
+    state.pendingPreview = null;
+    return;
+  }
+  const goal = data.goals.find((item) => item.tasks.some((task) => task.id === pending.taskId));
+  if (!goal || goal.kind === 'acuerdo') return;
+  const files = goal.files || [];
+  const file = files.find((item) => item.path === pending.path)
+    || files.find((item) => /\.html?$/i.test(item.path));
+  if (!file) return;
+  state.pendingPreview = null;
+  openProjectPreview(goal.id, file.path, pending.agentName);
+}
+
+// No robamos el foco si estás escribiendo (o dictando) en el composer:
+// en ese caso queda el toast accionable + el puntito en la pestaña.
+function composerIsBusy() {
+  return document.activeElement === document.getElementById('turnInput')
+    || state.manualText.trim().length > 0
+    || state.recording;
+}
+
+function openProjectPreview(goalId: string, path: string, agentName: string) {
+  state.projectId = goalId;
+  state.projectFile = path;
+  state.projectReloads += 1;
+  if (composerIsBusy()) {
+    state.sectionDots.add('projects');
+    upsertAlert(
+      'web-ready',
+      'Listo',
+      `${agentName || 'El equipo'} terminó la web.`,
+      'ok',
+      14000,
+      { label: 'Ver', action: 'open-preview', goalId, path }
+    );
+    markDirty('work');
+    return;
+  }
+  setWsSection('projects');
+  markDirty('work');
+}
+
+function selectProject(goalId: string, path: string) {
+  if (goalId) {
+    if (goalId !== state.projectId) {
+      state.projectFile = '';
+    }
+    state.projectId = goalId;
+  }
+  if (path) {
+    state.projectFile = path;
+  }
+  markDirty('work');
 }
 
 function workspaceBaseUrl() {
@@ -3516,27 +3840,47 @@ function buildFeedItems(): WorkFeedItem[] {
 
   const data = state.workData;
   if (data) {
-    const taskText = new Map<string, string>();
+    const taskById = new Map<string, WorkTask>();
     for (const goal of data.goals) {
       for (const task of goal.tasks) {
-        taskText.set(task.id, task.text);
+        taskById.set(task.id, task);
       }
     }
     const memberById = new Map(data.team.map((member) => [member.id, member]));
+    const nameOf = (agentId?: string | null) =>
+      (agentId && memberById.get(agentId)?.name) || 'un compañero';
+
     for (const run of data.runs) {
       const member = memberById.get(run.agent_id);
       const runName = member?.name || run.agent_id;
+      const task = taskById.get(run.task_id);
       const startedAt = Date.parse(run.started_at) || Date.now();
+      const isReview = task?.kind === 'revision';
+      const reviewedName = isReview && task?.parentTaskId
+        ? nameOf(taskById.get(task.parentTaskId)?.agentId)
+        : '';
+
       if (run.ended_at) {
         const endedAt = Date.parse(run.ended_at) || startedAt;
         if (run.status === 'ok') {
-          const hiring = member?.role === 'contratista';
-          addIfAbsent({
-            key: `done-${run.task_id}`,
-            at: endedAt,
-            icon: hiring ? '🧑‍💼' : '✅',
-            html: `<strong>${escapeHtml(runName)}</strong> ${hiring ? '' : 'terminó: '}${escapeHtml(clip(run.summary || 'Tarea completada.', 220))}${artifactLinksHtml(run.artifacts)}`
-          });
+          const hiring = member?.role === 'contratista' || task?.kind === 'contratacion';
+          if (isReview) {
+            // Se fusiona con el review_done del WS (misma clave semántica).
+            const approved = !/cambios/i.test(run.summary || '');
+            addIfAbsent({
+              key: `review-${run.task_id}`,
+              at: endedAt,
+              icon: approved ? '👍' : '✋',
+              html: `<strong>${escapeHtml(runName)}</strong> ${approved ? 'aprobó' : 'pidió cambios sobre'} el trabajo de <strong>${escapeHtml(reviewedName)}</strong>`
+            });
+          } else {
+            addIfAbsent({
+              key: `done-${run.task_id}`,
+              at: endedAt,
+              icon: hiring ? '🧑‍💼' : '✅',
+              html: `<strong>${escapeHtml(runName)}</strong> ${hiring ? '' : 'terminó: '}${escapeHtml(clip(run.summary || 'Tarea completada.', 220))}${artifactLinksHtml(run.artifacts)}`
+            });
+          }
         } else if (run.status === 'blocked') {
           addIfAbsent({
             key: `blocked-${run.task_id}`,
@@ -3556,12 +3900,33 @@ function buildFeedItems(): WorkFeedItem[] {
       addIfAbsent({
         key: `start-${run.task_id}`,
         at: startedAt,
-        icon: '🔨',
-        html: `<strong>${escapeHtml(runName)}</strong> empezó: ${escapeHtml(clip(taskText.get(run.task_id) || 'una tarea', 160))}`
+        icon: isReview ? '👀' : '🔨',
+        html: isReview
+          ? `<strong>${escapeHtml(runName)}</strong> se puso a revisar el trabajo de <strong>${escapeHtml(reviewedName)}</strong>`
+          : `<strong>${escapeHtml(runName)}</strong> empezó: ${escapeHtml(clip(task?.text || 'una tarea', 160))}`
       });
     }
+
+    // Veredictos con su comentario: el ida y vuelta real entre compañeros.
+    for (const comment of data.comments || []) {
+      const task = taskById.get(comment.taskId);
+      const author = nameOf(comment.authorId);
+      const target = nameOf(task?.agentId);
+      const verb = comment.kind === 'aprobacion'
+        ? 'aprobó el trabajo de'
+        : comment.kind === 'cambios'
+          ? 'le pidió cambios a'
+          : 'le comentó a';
+      addIfAbsent({
+        key: `comment-${comment.id}`,
+        at: Date.parse(comment.createdAt) || Date.now(),
+        icon: comment.kind === 'cambios' ? '✋' : comment.kind === 'aprobacion' ? '👍' : '💬',
+        html: `<strong>${escapeHtml(author)}</strong> ${verb} <strong>${escapeHtml(target)}</strong>: <span class="feed-quote">${escapeHtml(clip(comment.text.replace(/\s*\n+\s*/g, ' · '), 260))}</span>`
+      });
+    }
+
     for (const goal of data.goals) {
-      if (goal.status === 'done') {
+      if (goal.status === 'done' && goal.kind !== 'acuerdo') {
         addIfAbsent({
           key: `goal-${goal.id}`,
           at: Date.parse(goal.completed_at || goal.created_at || '') || Date.now(),
@@ -3576,7 +3941,7 @@ function buildFeedItems(): WorkFeedItem[] {
     addIfAbsent(event);
   }
 
-  return [...items.values()].sort((a, b) => b.at - a.at).slice(0, 60);
+  return [...items.values()].sort((a, b) => b.at - a.at).slice(0, 80);
 }
 
 // Pinta cada bloque del panel solo si su HTML cambió (conserva el foco y
@@ -3585,11 +3950,15 @@ function setWorkHtml(id: string, html: string) {
   if (workHtmlCache.get(id) === html) return;
   const el = byId(id);
   const active = document.activeElement;
-  const focusedAgentId = active instanceof HTMLElement && el.contains(active)
-    ? active.getAttribute('data-agent-id')
-    : null;
+  const wasInside = active instanceof HTMLElement && el.contains(active);
+  const focusedAgentId = wasInside ? active.getAttribute('data-agent-id') : null;
+  const focusedId = wasInside && active.id ? active.id : '';
   workHtmlCache.set(id, html);
   el.innerHTML = html;
+  // El foco vuelve al mismo control (el selector de archivos, por ejemplo).
+  if (focusedId) {
+    document.getElementById(focusedId)?.focus();
+  }
   if (id === 'orgChart') {
     const nodes = el.querySelectorAll<HTMLElement>('[data-org-node]');
     nodes.forEach((node) => { node.tabIndex = -1; });
@@ -3606,16 +3975,409 @@ function setWorkHtml(id: string, html: string) {
   }
 }
 
-function renderWorkView() {
+// ── Sección Tareas: tablero por proyecto ────────────────────────────────
+
+function workMember(agentId?: string | null): WorkMember | null {
+  if (!agentId) return null;
+  return state.workData?.team.find((member) => member.id === agentId) || null;
+}
+
+function memberChipHtml(agentId?: string | null, fallback = 'Sin asignar') {
+  const member = workMember(agentId);
+  if (!member) {
+    return `<span class="who who-empty">${escapeHtml(fallback)}</span>`;
+  }
+  return `<span class="who" style="--agent-color: ${escapeHtml(member.color || '#5c5470')}">
+    <span class="who-avatar" aria-hidden="true">${escapeHtml(member.name.slice(0, 1))}</span>${escapeHtml(member.name)}
+  </span>`;
+}
+
+function multiline(value: string) {
+  return escapeHtml(value).replace(/\n/g, '<br>');
+}
+
+function taskMatchesFilters(task: WorkTask) {
+  if (state.taskFilterAgent && task.agentId !== state.taskFilterAgent) return false;
+  if (state.taskFilterStatus && task.status !== state.taskFilterStatus) return false;
+  return true;
+}
+
+// El <select> de empleados vive en el shell: se repuebla solo si cambió el
+// equipo, así cambiar el filtro no le roba el foco al usuario.
+function syncTaskFilterOptions() {
+  const select = byId<HTMLSelectElement>('taskFilterAgent');
+  const team = state.workData?.team || [];
+  const signature = team.map((member) => `${member.id}:${member.name}`).join('|');
+  if (select.dataset.signature !== signature) {
+    select.dataset.signature = signature;
+    select.innerHTML = `<option value="">Todo el equipo</option>${team
+      .map((member) => `<option value="${escapeHtml(member.id)}">${escapeHtml(member.name)}</option>`)
+      .join('')}`;
+  }
+  if (select.value !== state.taskFilterAgent) {
+    select.value = state.taskFilterAgent;
+    // Si el empleado filtrado ya no está en el equipo, volvemos a "todos".
+    if (select.value !== state.taskFilterAgent) {
+      state.taskFilterAgent = '';
+      select.value = '';
+    }
+  }
+  const statusSelect = byId<HTMLSelectElement>('taskFilterStatus');
+  if (statusSelect.value !== state.taskFilterStatus) {
+    statusSelect.value = state.taskFilterStatus;
+  }
+}
+
+function renderTasksSection() {
+  syncTaskFilterOptions();
+  setWorkHtml('tasksBoard', renderTasksBoard());
+  const data = state.workData;
+  const count = data
+    ? data.goals.reduce((total, goal) => total + goal.tasks.filter(taskMatchesFilters).length, 0)
+    : 0;
+  const filtered = Boolean(state.taskFilterAgent || state.taskFilterStatus);
+  byId('tasksCount').textContent = data
+    ? `${count} ${count === 1 ? 'tarea' : 'tareas'}${filtered ? ' con el filtro puesto' : ''}`
+    : '';
+}
+
+function reviewChipHtml(task: WorkTask) {
+  if (!task.reviewStatus) return '';
+  const label = REVIEW_LABEL[task.reviewStatus] || task.reviewStatus;
+  const reviewer = workMember(task.reviewerId);
+  const suffix = reviewer ? ` · ${reviewer.name}` : '';
+  return `<span class="review-chip ${escapeHtml(task.reviewStatus)}">${escapeHtml(label)}${escapeHtml(suffix)}</span>`;
+}
+
+function taskCardHtml(task: WorkTask): string {
+  const member = workMember(task.agentId);
+  const kind = task.kind && task.kind !== 'entregable'
+    ? `<span class="task-kind">${escapeHtml(TASK_KIND_LABEL[task.kind] || task.kind)}</span>`
+    : '';
+  const comments = (task.comments || []).slice(0, 4);
+  return `
+    <article class="tcard" style="--agent-color: ${escapeHtml(member?.color || '#5c5470')}">
+      <p class="tcard-text">${escapeHtml(task.text)}</p>
+      <div class="tcard-meta">
+        ${memberChipHtml(task.agentId)}
+        ${kind}
+        ${reviewChipHtml(task)}
+        ${task.runCount > 1 ? `<span class="tcard-runs" title="Intentos">${task.runCount} intentos</span>` : ''}
+      </div>
+      ${task.status === 'done' && task.resultSummary
+        ? `<p class="tcard-result">${escapeHtml(clip(task.resultSummary, 320))}</p>`
+        : ''}
+      ${task.status === 'blocked' && task.blockedReason
+        ? `<p class="tcard-reason">${escapeHtml(clip(task.blockedReason, 280))}</p>`
+        : ''}
+      ${comments.length ? `<div class="tcard-comments">${comments.map((comment) => `
+        <div class="tcomment ${escapeHtml(comment.kind)}">
+          <span class="tcomment-head">${memberChipHtml(comment.authorId, 'Compañero')}<span class="tcomment-kind">${escapeHtml(
+            comment.kind === 'aprobacion' ? 'aprobó' : comment.kind === 'cambios' ? 'pidió cambios' : 'comentó'
+          )}</span></span>
+          <span class="tcomment-text">${multiline(clip(comment.text, 420))}</span>
+        </div>
+      `).join('')}</div>` : ''}
+    </article>
+  `;
+}
+
+function goalStatusChipHtml(goal: WorkGoal) {
+  if (goal.kind === 'acuerdo') {
+    return '<span class="task-chip noted">Acuerdo</span>';
+  }
+  return `<span class="task-chip ${goal.status === 'done' ? 'done' : 'in_progress'}">${goal.status === 'done' ? 'Cumplido' : 'Activo'}</span>`;
+}
+
+function renderTasksBoard(): string {
+  const data = state.workData;
+  if (!data) {
+    return state.workError
+      ? '<div class="grid-note"><p class="muted">No pude cargar las tareas.</p><button class="btn ghost sm" data-action="work-retry" type="button">Reintentar</button></div>'
+      : '<p class="muted">Cargando el tablero…</p>';
+  }
+  if (data.goals.length === 0) {
+    return `
+      <div class="ws-empty">
+        <span class="ws-empty-icon" aria-hidden="true">🗂️</span>
+        <h3>Todavía no hay tareas</h3>
+        <p>Las tareas salen de las reuniones: charlá con el equipo, repartí trabajo y tocá <strong>Finalizar reunión</strong>. Cuando confirmes el cierre, cada proyecto aparece acá con su tablero.</p>
+        <button class="btn ghost sm" type="button" data-action="ws-tab" data-tab="meeting">Ir a la reunión</button>
+      </div>
+    `;
+  }
+
+  const goals = sortedGoals(data.goals);
+  const cards = goals.map((goal) => {
+    const tasks = goal.tasks.filter(taskMatchesFilters);
+    if (tasks.length === 0) return '';
+    const htmlFile = (goal.files || []).find((file) => /\.html?$/i.test(file.path));
+    const columns = TASK_COLUMNS.map((column) => {
+      const inColumn = tasks.filter((task) => task.status === column.status);
+      if (inColumn.length === 0 && !column.always) return '';
+      return `
+        <section class="tcol" aria-label="${escapeHtml(column.label)} — ${escapeHtml(goal.title)}">
+          <header class="tcol-head">
+            <span class="task-chip ${escapeHtml(column.status)}">${column.status === 'in_progress' ? '<span class="live-dot" aria-hidden="true"></span>' : ''}${escapeHtml(column.label)}</span>
+            <span class="tcol-count">${inColumn.length}</span>
+          </header>
+          <div class="tcol-body">
+            ${inColumn.length
+              ? inColumn.map(taskCardHtml).join('')
+              : '<p class="tcol-empty">Nada por acá.</p>'}
+          </div>
+        </section>
+      `;
+    }).join('');
+
+    return `
+      <article class="project-board">
+        <header class="project-board-head">
+          <span class="goal-icon" aria-hidden="true">${goal.kind === 'acuerdo' ? '🤝' : '🎯'}</span>
+          <div class="goal-card-titles">
+            <strong>${escapeHtml(goal.title)}</strong>
+            ${goal.description ? `<p>${escapeHtml(clip(goal.description, 220))}</p>` : ''}
+          </div>
+          ${goalStatusChipHtml(goal)}
+          ${htmlFile ? `<button class="btn ghost sm" type="button" data-action="open-preview" data-goal-id="${escapeHtml(goal.id)}" data-file-path="${escapeHtml(htmlFile.path)}">Ver el sitio</button>` : ''}
+        </header>
+        <div class="tboard">${columns}</div>
+      </article>
+    `;
+  }).join('');
+
+  if (!cards) {
+    return `
+      <div class="ws-empty">
+        <span class="ws-empty-icon" aria-hidden="true">🔍</span>
+        <h3>Ninguna tarea con ese filtro</h3>
+        <p>Probá con otro empleado u otro estado.</p>
+        <button class="btn ghost sm" type="button" data-action="clear-task-filters">Limpiar filtros</button>
+      </div>
+    `;
+  }
+  return cards;
+}
+
+// ── Sección Proyectos: lista + navegador integrado ──────────────────────
+
+const projectTextCache = new Map<string, string>();
+const projectTextLoading = new Set<string>();
+let lastFrameKey = '';
+
+function sortedGoals(goals: WorkGoal[]): WorkGoal[] {
+  return [...goals].sort((a, b) => {
+    const rank = (goal: WorkGoal) => (goal.kind === 'acuerdo' ? 2 : goal.status === 'active' ? 0 : 1);
+    return rank(a) - rank(b)
+      || (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0);
+  });
+}
+
+function currentGoal(): WorkGoal | null {
+  const goals = state.workData ? sortedGoals(state.workData.goals) : [];
+  if (goals.length === 0) return null;
+  return goals.find((goal) => goal.id === state.projectId) || goals[0];
+}
+
+function currentFile(goal: WorkGoal | null): WorkFile | null {
+  const files = goal?.files || [];
+  if (files.length === 0) return null;
+  return files.find((file) => file.path === state.projectFile) || files[0];
+}
+
+function formatBytes(size: number) {
+  if (!size) return '';
+  return size < 1024 ? `${size} B` : `${Math.round(size / 1024)} kB`;
+}
+
+function renderProjectsSection() {
   const link = byId<HTMLAnchorElement>('workspaceLink');
   const url = state.workData?.workspaceUrl;
   link.hidden = !url;
   if (url) {
     link.href = url;
   }
-  setWorkHtml('orgChart', renderOrgChart());
-  setWorkHtml('workGoals', renderWorkGoals());
-  setWorkHtml('workFeedList', renderWorkFeed());
+  setWorkHtml('projectsList', renderProjectsList());
+  setWorkHtml('browserChrome', renderBrowserChrome());
+  syncBrowserStage();
+}
+
+function renderProjectsList(): string {
+  const data = state.workData;
+  if (!data) {
+    return state.workError
+      ? '<div class="grid-note"><p class="muted">No pude cargar los proyectos.</p><button class="btn ghost sm" data-action="work-retry" type="button">Reintentar</button></div>'
+      : '<p class="muted">Cargando los proyectos…</p>';
+  }
+  const goals = sortedGoals(data.goals);
+  if (goals.length === 0) {
+    return '<p class="muted side-empty">Todavía no hay proyectos. Salen de las reuniones que cerrás con tareas.</p>';
+  }
+  const active = currentGoal();
+  return goals.map((goal) => {
+    const files = goal.files || [];
+    const done = goal.tasks.filter((task) => task.status === 'done').length;
+    const isActive = goal.id === active?.id;
+    return `
+      <button class="project-row${isActive ? ' is-selected' : ''}" type="button"
+        data-action="select-project" data-goal-id="${escapeHtml(goal.id)}"
+        aria-current="${isActive ? 'true' : 'false'}">
+        <span class="project-row-icon" aria-hidden="true">${goal.kind === 'acuerdo' ? '🤝' : '🌐'}</span>
+        <span class="project-row-main">
+          <span class="project-row-title">${escapeHtml(goal.title)}</span>
+          <span class="project-row-sub">${goal.kind === 'acuerdo'
+            ? 'Acuerdo · sin archivos'
+            : `${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} · ${done}/${goal.tasks.length} tareas`}</span>
+        </span>
+        ${goal.status === 'active' && goal.kind !== 'acuerdo' ? '<span class="live-dot" aria-hidden="true"></span>' : ''}
+      </button>
+    `;
+  }).join('');
+}
+
+function renderBrowserChrome(): string {
+  const goal = currentGoal();
+  if (!goal || goal.kind === 'acuerdo') {
+    return '';
+  }
+  const files = goal.files || [];
+  const file = currentFile(goal);
+  const viewportButtons = VIEWPORTS.map((viewport) => `
+    <button class="vp-btn${state.projectViewport === viewport.id ? ' is-active' : ''}" type="button"
+      data-action="browser-viewport" data-viewport="${viewport.id}"
+      aria-pressed="${state.projectViewport === viewport.id}"
+      title="${escapeHtml(viewport.label)} (${escapeHtml(viewport.width)})">
+      <span aria-hidden="true">${viewport.icon}</span><span class="sr-only">${escapeHtml(viewport.label)}</span>
+    </button>
+  `).join('');
+
+  return `
+    <div class="browser-bar">
+      <div class="browser-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+      <span class="browser-url" title="${escapeHtml(file?.url || '')}">${escapeHtml(file ? `${goal.slug || 'general'}/${file.path}` : 'sin archivos todavía')}</span>
+      <button class="icon-btn sm" type="button" data-action="browser-reload" aria-label="Recargar la vista" title="Recargar la vista" ${file ? '' : 'disabled'}>↻</button>
+      <a class="icon-btn sm${file ? '' : ' is-disabled'}" href="${escapeHtml(file?.url || '#')}" target="_blank" rel="noopener" aria-label="Abrir en una pestaña nueva" title="Abrir en una pestaña nueva">↗</a>
+    </div>
+    <div class="browser-tools">
+      ${files.length > 1 ? `
+        <label class="browser-files">
+          <span class="sr-only">Archivo del proyecto</span>
+          <select class="form-control sm" id="browserFileSelect">
+            ${files.map((item) => `<option value="${escapeHtml(item.path)}"${item.path === file?.path ? ' selected' : ''}>${escapeHtml(item.path)}${item.size ? ` · ${escapeHtml(formatBytes(item.size))}` : ''}</option>`).join('')}
+          </select>
+        </label>
+      ` : `<span class="browser-single">${escapeHtml(file ? formatBytes(file.size) || file.path : '')}</span>`}
+      <div class="vp-group" role="group" aria-label="Ancho de la vista">${viewportButtons}</div>
+    </div>
+  `;
+}
+
+// El <iframe> es un nodo estable del shell: solo se le toca el src cuando
+// realmente cambia (recargarlo en cada tick del polling haría parpadear).
+function syncBrowserStage() {
+  const frame = byId<HTMLIFrameElement>('browserFrame');
+  const pre = byId<HTMLPreElement>('browserText');
+  const empty = byId<HTMLDivElement>('browserEmpty');
+  const stage = byId<HTMLDivElement>('browserStage');
+  stage.dataset.viewport = state.projectViewport;
+
+  const goal = currentGoal();
+  const showEmpty = (html: string) => {
+    frame.hidden = true;
+    pre.hidden = true;
+    empty.hidden = false;
+    if (empty.innerHTML !== html) {
+      empty.innerHTML = html;
+    }
+    if (frame.getAttribute('src')) {
+      frame.removeAttribute('src');
+      lastFrameKey = '';
+    }
+  };
+
+  if (!goal) {
+    showEmpty(state.workData
+      ? `<div class="ws-empty">
+          <span class="ws-empty-icon" aria-hidden="true">🌐</span>
+          <h3>Sin proyectos todavía</h3>
+          <p>Cuando el equipo termine una web, se abre acá adentro sin salir de la app.</p>
+        </div>`
+      : '<p class="muted">Cargando…</p>');
+    return;
+  }
+
+  if (goal.kind === 'acuerdo') {
+    const noted = goal.tasks.filter((task) => task.status === 'noted' || task.kind === 'decision');
+    showEmpty(`
+      <article class="acta">
+        <span class="eyebrow">Acta de acuerdo</span>
+        <h3>${escapeHtml(goal.title)}</h3>
+        ${goal.description ? `<p class="acta-desc">${multiline(goal.description)}</p>` : ''}
+        ${(noted.length ? noted : goal.tasks).length ? `<ul class="acta-list">${(noted.length ? noted : goal.tasks)
+          .map((task) => `<li>${escapeHtml(task.text)}${task.agentId ? ` <span class="acta-who">— ${escapeHtml(workMember(task.agentId)?.name || '')}</span>` : ''}</li>`)
+          .join('')}</ul>` : '<p class="muted">Sin puntos anotados.</p>'}
+        <p class="hint">De este acuerdo no sale nada para construir: queda registrado y nadie se pone a producir.</p>
+      </article>
+    `);
+    return;
+  }
+
+  const file = currentFile(goal);
+  if (!file) {
+    showEmpty(`
+      <div class="ws-empty">
+        <span class="ws-empty-icon" aria-hidden="true">⏳</span>
+        <h3>${escapeHtml(goal.title)}</h3>
+        <p>El equipo todavía no escribió ningún archivo en este proyecto. En cuanto lo haga, aparece acá.</p>
+      </div>
+    `);
+    return;
+  }
+
+  const isHtml = /\.html?$/i.test(file.path);
+  // La clave incluye el tamaño y el contador de recargas: si el agente
+  // reescribe el archivo, el iframe vuelve a pedirlo (sin caché vieja).
+  const key = `${file.url}::${file.size}::${state.projectReloads}`;
+
+  if (isHtml) {
+    pre.hidden = true;
+    empty.hidden = true;
+    frame.hidden = false;
+    frame.title = `Vista previa de ${file.path} — ${goal.title}`;
+    if (lastFrameKey !== key) {
+      lastFrameKey = key;
+      const separator = file.url.includes('?') ? '&' : '?';
+      frame.src = `${file.url}${separator}v=${encodeURIComponent(`${file.size}-${state.projectReloads}`)}`;
+    }
+    return;
+  }
+
+  // No-HTML: se muestra el contenido como texto plano, sin iframe.
+  frame.hidden = true;
+  empty.hidden = true;
+  pre.hidden = false;
+  const cached = projectTextCache.get(key);
+  if (cached !== undefined) {
+    if (pre.textContent !== cached) {
+      pre.textContent = cached;
+    }
+    return;
+  }
+  pre.textContent = 'Cargando el archivo…';
+  if (projectTextLoading.has(key)) return;
+  projectTextLoading.add(key);
+  void fetch(file.url)
+    .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+    .then((text) => {
+      projectTextCache.set(key, text.slice(0, 200000));
+    })
+    .catch(() => {
+      projectTextCache.set(key, 'No pude leer este archivo.');
+    })
+    .finally(() => {
+      projectTextLoading.delete(key);
+      markDirty('work');
+    });
 }
 
 function renderOrgChart(): string {
@@ -3696,56 +4458,16 @@ function renderOrgChart(): string {
   return `<ul class="org-tree" role="tree" aria-label="Jerarquía del equipo">${roots.map((root) => renderNode(root, 1)).join('')}</ul>`;
 }
 
-function taskChipHtml(status: string) {
-  const map: Record<string, [string, string]> = {
-    pending: ['pending', 'En cola'],
-    in_progress: ['in_progress', 'En curso'],
-    done: ['done', 'Hecha'],
-    blocked: ['blocked', 'Bloqueada']
-  };
-  const [cls, label] = map[status] || ['pending', status];
-  const dot = cls === 'in_progress' ? '<span class="live-dot" aria-hidden="true"></span>' : '';
-  return `<span class="task-chip ${cls}">${dot}${escapeHtml(label)}</span>`;
-}
-
-function renderWorkGoals(): string {
-  const data = state.workData;
-  if (!data) return '';
-  const goals = [...data.goals]
-    .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active'))
-    .slice(0, 4);
-  if (goals.length === 0) {
-    return '<p class="muted">Todavía no hay metas. Asigná tareas en la reunión y cerrala con “Finalizar reunión” para que el equipo arranque.</p>';
-  }
-  const memberName = (agentId: string | null) =>
-    (agentId && data.team.find((member) => member.id === agentId)?.name) || '';
-
-  return goals.map((goal) => `
-    <article class="goal-card${goal.status === 'done' ? ' is-done' : ''}">
-      <header class="goal-card-head">
-        <span class="goal-icon" aria-hidden="true">🎯</span>
-        <div class="goal-card-titles">
-          <strong>${escapeHtml(goal.title)}</strong>
-          ${goal.description ? `<p>${escapeHtml(clip(goal.description, 180))}</p>` : ''}
-        </div>
-        <span class="task-chip ${goal.status === 'done' ? 'done' : 'in_progress'}">${goal.status === 'done' ? 'Cumplida' : 'Activa'}</span>
-      </header>
-      ${goal.tasks.length ? `<div class="goal-tasks">${goal.tasks.map((task) => `
-        <div class="work-task">
-          ${taskChipHtml(task.status)}
-          <span class="work-task-text">${escapeHtml(task.text)}${memberName(task.agentId) ? ` <span class="work-task-agent">· ${escapeHtml(memberName(task.agentId))}</span>` : ''}
-            ${task.status === 'blocked' && task.blockedReason ? `<span class="work-task-reason">${escapeHtml(clip(task.blockedReason, 160))}</span>` : ''}
-          </span>
-        </div>
-      `).join('')}</div>` : ''}
-    </article>
-  `).join('');
-}
-
 function renderWorkFeed(): string {
   const items = buildFeedItems();
   if (items.length === 0) {
-    return '<p class="muted">Sin actividad todavía. Cuando confirmes el cierre de una reunión con tareas, el trabajo del equipo aparece acá en vivo.</p>';
+    return `
+      <div class="ws-empty">
+        <span class="ws-empty-icon" aria-hidden="true">📣</span>
+        <h3>El canal está en silencio</h3>
+        <p>Acá se ve quién le dijo qué a quién: quién arrancó una tarea, quién revisó el trabajo de quién y con qué comentario, qué archivos se escribieron y a quién se contrató. Empieza cuando confirmás el cierre de una reunión con tareas.</p>
+      </div>
+    `;
   }
   return items.map((item) => `
     <div class="feed-item">
@@ -3924,7 +4646,14 @@ function isSystemicFailure(message: string): boolean {
   return /clave|api key|cuota|quota|rate.?limit|429|401|sin conexion|sin conexión|no configurad/i.test(message || '');
 }
 
-function upsertAlert(id: string, scope: string, message: string, tone: StatusAlert['tone'], timeout?: number) {
+function upsertAlert(
+  id: string,
+  scope: string,
+  message: string,
+  tone: StatusAlert['tone'],
+  timeout?: number,
+  action?: StatusAlert['action']
+) {
   trace('ui_alert', { id, scope, message, tone });
   const existing = state.alerts.find((alert) => alert.id === id);
   if (existing?.timeout) {
@@ -3936,8 +4665,9 @@ function upsertAlert(id: string, scope: string, message: string, tone: StatusAle
     existing.message = message;
     existing.tone = tone;
     existing.timeout = undefined;
+    existing.action = action;
   } else {
-    state.alerts.push({ id, scope, message, tone });
+    state.alerts.push({ id, scope, message, tone, action });
   }
   markDirty('alerts');
 
@@ -3950,6 +4680,17 @@ function upsertAlert(id: string, scope: string, message: string, tone: StatusAle
       }, timeout);
     }
   }
+}
+
+function dismissAlert(id: string) {
+  if (!id) return;
+  const alert = state.alerts.find((item) => item.id === id);
+  if (!alert) return;
+  if (alert.timeout) {
+    window.clearTimeout(alert.timeout);
+  }
+  state.alerts = state.alerts.filter((item) => item.id !== id);
+  markDirty('alerts');
 }
 
 function resolveAlertIfPresent(id: string, scope: string, message: string) {

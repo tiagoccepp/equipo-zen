@@ -202,6 +202,22 @@ test('una tarea clasificada como acuerdo queda anotada, no entra a la cola', asy
   assert.equal(tasks[0].status, 'noted');
 });
 
+test('un pedido explícito de crear algo se construye aunque la CEO dude', async () => {
+  const { session, store, julioId } = newSession();
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'crear la página web institucional' });
+
+  await session.prepareMeetingClose();
+  // Sin claves no hay clasificación del modelo: la red de seguridad tiene que
+  // reconocer sola que "crear la página web" es algo para construir.
+  assert.equal(session.pendingClose.producesWork, true);
+  assert.deepEqual(session.pendingClose.kinds, [[1, 'entregable']]);
+  session.confirmMeetingClose();
+
+  const queue = store.workQueue(session.company.id);
+  assert.equal(queue.length, 1, 'la red de seguridad manda el pedido a la cola igual');
+  assert.equal(queue[0].kind, 'entregable');
+});
+
 test('continuidad: turnos, agente spawneado y tareas sobreviven a otra sesión', async () => {
   const store = newStore();
   const { session: first } = newSession(store);

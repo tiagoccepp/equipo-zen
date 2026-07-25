@@ -172,6 +172,7 @@ export class Workforce {
     const system = [
       `Sos ${agent.name}, ${agent.title} de ${company?.name || 'la empresa'}. AHORA NO estás en una reunión: estás TRABAJANDO, produciendo un entregable real.`,
       agent.knowledge ? `Tu conocimiento: ${agent.knowledge}` : '',
+      agent.craft ? `TU OFICIO (cómo hacés bien tu trabajo): ${agent.craft}` : '',
       `Tus skills: ${agent.domains.join(', ')}.`,
       `Compañeros (pueden haber dejado archivos en el workspace): ${teammates || 'ninguno'}.`,
       '',
@@ -391,6 +392,7 @@ export class Workforce {
     const prompt = [
       `Sos ${reviewer.name}, ${reviewer.title}. Revisás el trabajo de ${author?.name || 'un compañero'} con criterio profesional y honesto.`,
       `Tus skills: ${reviewer.domains.join(', ')}.`,
+      reviewer.craft ? `Tu oficio: ${reviewer.craft}` : '',
       goal ? `Proyecto: ${goal.title} — ${goal.description}` : '',
       `Tarea que se le encargó: ${parent.text}`,
       `Lo que dijo que hizo: ${parent.result_summary || '—'}`,
@@ -489,7 +491,7 @@ export class Workforce {
       `Equipo actual (NO dupliques roles): ${team.map((a) => `${a.name} — ${a.title} [${a.domains.slice(0, 6).join(', ')}]`).join(' | ')}`,
       '',
       'Respondé SOLO un JSON válido:',
-      '{"name":"nombre de pila hispano","title":"puesto","skills":["6-10 skills en minúsculas para el ruteo"],"knowledge":"2-3 oraciones de conocimiento concreto del puesto","style":"personalidad y forma de hablar en 1-2 oraciones","voice":"M1|M2|M3|M4|M5|F1|F2|F3|F4|F5","boundaries":["1-2 límites"],"firstTask":"la tarea concreta que debe ejecutar ya (relacionada a la necesidad)"}'
+      '{"name":"nombre de pila hispano","title":"puesto","skills":["6-10 skills en minúsculas para el ruteo"],"knowledge":"2-3 oraciones de conocimiento concreto del puesto","craft":"3-4 oraciones de OFICIO: el método concreto y el estándar de calidad con el que produce su trabajo (técnicas, criterios, qué revisa antes de dar algo por terminado)","style":"personalidad y forma de hablar en 1-2 oraciones","voice":"M1|M2|M3|M4|M5|F1|F2|F3|F4|F5","boundaries":["1-2 límites"],"firstTask":"la tarea concreta que debe ejecutar ya (relacionada a la necesidad)"}'
     ].filter(Boolean).join('\n');
 
     const { text } = await completeChat(this.keyRing, {
@@ -520,6 +522,7 @@ export class Workforce {
       domains: (profile.skills || []).map(String).slice(0, 12),
       boundaries: (profile.boundaries || []).map(String).slice(0, 4),
       knowledge: String(profile.knowledge || '').slice(0, 2000),
+      craft: String(profile.craft || '').slice(0, 2000),
       role: 'worker',
       managerId: ceo?.id || null
     }, 'custom', 'contratista');

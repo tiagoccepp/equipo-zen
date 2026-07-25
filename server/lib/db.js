@@ -227,6 +227,14 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_task_comments_task ON task_comments(task_id, created_at);
   CREATE INDEX idx_task_comments_company ON task_comments(company_id, created_at);
+  `,
+
+  // v6: el oficio del empleado (cómo hace bien su trabajo). Separado de
+  // 'knowledge' porque este texto alimenta el prompt de TRABAJO, no el de
+  // la conversación: en la reunión el agente habla como persona, no recita
+  // su manual de procedimientos.
+  `
+  ALTER TABLE agents ADD COLUMN craft TEXT;
   `
 ];
 

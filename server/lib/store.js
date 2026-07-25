@@ -43,6 +43,7 @@ function rowToAgent(row) {
     domains: parseJsonColumn(row.domains_json, []),
     boundaries: parseJsonColumn(row.boundaries_json, []),
     knowledge: row.knowledge || '',
+    craft: row.craft || '',
     companyId: row.company_id || null,
     role: row.role || 'worker',
     managerId: row.manager_id || null,
@@ -143,6 +144,7 @@ export class Store {
         domains: employee.skills || [],
         boundaries: employee.boundaries || [],
         knowledge: employee.knowledge || '',
+        craft: employee.craft || '',
         role,
         managerId: role === 'ceo' ? null : ceoId
       }, 'builtin', actor);
@@ -173,6 +175,7 @@ export class Store {
           domains: ['estrategia', 'prioridades', 'planificacion', 'coordinacion', 'objetivos'],
           boundaries: ['No baja a detalles técnicos finos; delega y coordina.', 'No asigna trabajo sin explicar el porqué.'],
           knowledge: `Dirige ${company.name}: sabe qué está haciendo cada integrante del equipo y es la interlocutora directa del dueño (vos).`,
+          craft: 'Traduce un pedido difuso en un objetivo con criterio de éxito y un alcance realista. Reparte según la fortaleza real de cada uno, dice qué NO entra en esta vuelta y explica siempre el porqué antes del qué.',
           role: 'ceo',
           managerId: null
         }, 'builtin', 'migration');
@@ -190,10 +193,23 @@ export class Store {
           domains: ['contratacion', 'perfiles', 'talento', 'reclutamiento', 'equipo nuevo'],
           boundaries: ['No contrata sin una necesidad concreta.', 'No duplica roles existentes.'],
           knowledge: 'Detecta cuando una tarea necesita habilidades que el equipo no tiene y crea al empleado ideal (nombre, rol, skills, conocimientos y personalidad).',
+          craft: 'Identifica la brecha exacta de habilidades: qué tarea no puede hacer nadie y por qué. Diseña perfiles concretos con responsabilidad, skills operativas, oficio y límites, sin superponerse con el equipo, y entrega una primera tarea que ya aporta valor.',
           role: 'contratista',
           managerId: ceo.id
         }, 'builtin', 'migration');
       }
+      // Empresas creadas antes del oficio: se completa desde la plantilla
+      // por coincidencia de nombre (no pisa lo que ya tenga texto).
+      for (const template of companyTemplates?.templates || []) {
+        for (const employee of template.employees || []) {
+          if (employee.craft) {
+            this.db.prepare(
+              "UPDATE agents SET craft = ? WHERE company_id = ? AND name = ? AND (craft IS NULL OR craft = '')"
+            ).run(employee.craft, company.id, employee.name);
+          }
+        }
+      }
+
       // El resto del equipo reporta al CEO si no tiene jefe.
       this.db.prepare("UPDATE agents SET manager_id = ? WHERE company_id = ? AND role != 'ceo' AND (manager_id IS NULL OR manager_id = '')")
         .run(ceo.id, company.id);
@@ -248,8 +264,8 @@ export class Store {
     const at = now();
     this.db.prepare(`
       INSERT INTO agents (id, origin, status, name, title, voice, color, style,
-        aliases_json, domains_json, boundaries_json, knowledge, company_id, role, manager_id, learning_enabled, version, created_at, updated_at)
-      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+        aliases_json, domains_json, boundaries_json, knowledge, craft, company_id, role, manager_id, learning_enabled, version, created_at, updated_at)
+      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
     `).run(
       profile.id,
       origin,
@@ -262,6 +278,7 @@ export class Store {
       JSON.stringify(profile.domains),
       JSON.stringify(profile.boundaries),
       profile.knowledge || '',
+      profile.craft || '',
       profile.companyId || null,
       profile.role || 'worker',
       profile.managerId || null,

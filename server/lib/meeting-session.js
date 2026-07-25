@@ -690,6 +690,17 @@ export class MeetingSession {
     this.enqueueUserTurn(normalized, 'audio');
   }
 
+  // ¿La tarea pide producir algo concreto? Se usa como red de seguridad
+  // contra una clasificación demasiado prudente al cerrar la reunión.
+  static looksLikeDeliverable(text) {
+    const normalized = String(text || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const verb = /\b(crear|cre[aá]|armar|arm[aá]|hacer|hac[eé]|construir|desarrollar|disen(ar|[aá])|escribir|escrib[ií]|redactar|redact[aá]|preparar|prepar[aá]|generar|maquetar|programar|implementar|documentar|montar)\b/;
+    const object = /\b(pagina|web|sitio|landing|portada|html|css|app|prototipo|mockup|documento|informe|reporte|plan|propuesta|presupuesto|guion|articulo|texto|manual|instructivo|checklist|planilla|tablero|dashboard|catalogo|presentacion|borrador|resumen escrito)\b/;
+    return verb.test(normalized) && object.test(normalized);
+  }
+
   // ¿El mensaje parece a medio terminar? (termina en conector o coma) →
   // se espera más tiempo por el resto de la idea.
   static seemsUnfinished(text) {
@@ -1113,7 +1124,10 @@ export class MeetingSession {
       '- "decision" = un acuerdo o definición que ya quedó tomada en la reunión; no hay nada que construir.',
       '- "seguimiento" = algo para retomar más adelante o que depende de terceros; tampoco se construye ahora.',
       '- Si la reunión fue de alineación, presentación, dudas o charla, "producesWork" es false y NO se abre ningún proyecto.',
-      'Marcá "entregable" SOLO si de verdad hay que crear algo. Es perfectamente válido cerrar sin proyecto.',
+      'Ejemplos: "crear la página web institucional" → entregable. "escribir el plan de lanzamiento" → entregable.',
+      '"quedamos en que el foco es retail" → decision. "revisar cómo viene el mercado el mes que viene" → seguimiento.',
+      'Si una tarea pide CREAR, ARMAR, ESCRIBIR o DISEÑAR algo concreto, es entregable y "producesWork" es true. No seas tímida:',
+      'si el equipo se comprometió a producir algo, hay que producirlo.',
       '',
       'Devolvé SOLO un JSON válido:',
       '{"producesWork":true|false,',
@@ -1156,12 +1170,19 @@ export class MeetingSession {
       ...assignment,
       tasks: assignment.tasks.map((text) => {
         cursor += 1;
-        return { text, kind: kindByIndex.get(cursor) || 'entregable' };
+        const proposed = kindByIndex.get(cursor) || 'entregable';
+        // Red de seguridad: si la tarea pide explícitamente CREAR algo, se
+        // construye aunque el modelo la haya rotulado como acuerdo. Negarse a
+        // hacer lo que se pidió es peor que producir de más.
+        const kind = proposed !== 'entregable' && MeetingSession.looksLikeDeliverable(text) ? 'entregable' : proposed;
+        return { text, kind };
       })
     }));
 
+    // Si hay aunque sea una tarea para construir, la reunión produce trabajo:
+    // un "no" del modelo no puede contradecir su propia clasificación.
     const deliverables = classified.flatMap((a) => a.tasks).filter((t) => t.kind === 'entregable').length;
-    const producesWork = plan?.producesWork === false ? false : deliverables > 0;
+    const producesWork = deliverables > 0;
     const hires = producesWork && Array.isArray(plan?.hires) ? plan.hires.filter((h) => h?.need).slice(0, 3) : [];
 
     const fallbackSummary = producesWork
@@ -1174,7 +1195,8 @@ export class MeetingSession {
       producesWork,
       goalTitle: String(plan?.goalTitle || (producesWork ? 'Objetivos de la reunión' : 'Acuerdos de la reunión')).slice(0, 120),
       goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
-      kinds: [...kindByIndex.entries()],
+      // La clasificación YA corregida: es la que se aplica al confirmar.
+      kinds: classified.flatMap((a) => a.tasks).map((task, index) => [index + 1, task.kind]),
       hires
     };
 
