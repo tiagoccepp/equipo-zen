@@ -3906,7 +3906,9 @@ body.is-in-call {
 .call-orbs {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(var(--orb-cols, 3), clamp(72px, 13vmin, 132px));
+  /* El lado lo calcula el cliente con el espacio real (ver fitOrbSize); el
+     clamp queda como valor de arranque antes del primer cálculo. */
+  grid-template-columns: repeat(var(--orb-cols, 3), var(--orb-size, clamp(96px, 18vmin, 200px)));
   justify-content: center;
   align-content: center;
   gap: var(--s-5) var(--s-5);

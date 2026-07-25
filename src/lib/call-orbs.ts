@@ -232,7 +232,7 @@ export function harmonizeOrbColor(hex: string, theme: OrbTheme): string {
 // con la mitad de puntos la nube se lee como un círculo punteado, no como una
 // esfera.
 export function particleCount(radius: number) {
-  return Math.round(Math.min(620, Math.max(150, radius * 7)));
+  return Math.round(Math.min(720, Math.max(150, radius * 6.2)));
 }
 
 export type OrbParticle = {

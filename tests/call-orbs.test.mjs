@@ -142,7 +142,10 @@ test('la misma esfera se reconstruye idéntica (nada de saltos al re-medir)', ()
 test('la densidad acompaña al tamaño, con techo y piso', () => {
   assert.ok(particleCount(20) >= 150, 'una esfera chica no puede quedar vacía');
   assert.ok(particleCount(40) < particleCount(80), 'más grande, más puntos');
-  assert.ok(particleCount(5000) <= 620, 'el techo protege los FPS');
+  // El techo subió con las esferas grandes (medido: 60 fps estables con 8
+  // esferas de 133px; el bucle dibuja por pasadas, no por partícula).
+  assert.ok(particleCount(5000) <= 720, 'el techo protege los FPS');
+  assert.ok(particleCount(130) > 620, 'una esfera grande no puede verse rala');
 });
 
 test('la amplitud sube rápido y baja despacio (sin titileo entre sílabas)', () => {

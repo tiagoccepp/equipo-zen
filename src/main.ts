@@ -1968,6 +1968,50 @@ function ensureOrbField(): OrbField | null {
 }
 
 // Traduce el layout del DOM a coordenadas del canvas.
+// Tamaño de cada esfera a partir del espacio real: se reparten por la
+// pantalla en vez de quedar chicas en el medio, sin desbordar hacia el
+// subtítulo. Manda la dimensión más apretada (ancho o alto).
+const ORB_MIN = 96;
+const ORB_MAX = 340;
+
+function fitOrbSize(stage: HTMLElement, box: DOMRect) {
+  const lista = byId('callOrbs');
+  const total = lista.querySelectorAll('.call-orb').length;
+  if (total === 0) {
+    return;
+  }
+  const estilo = getComputedStyle(lista);
+  const gapX = parseFloat(estilo.columnGap) || 0;
+  const gapY = parseFloat(estilo.rowGap) || 0;
+
+  // Cada esfera carga abajo su nombre: ese alto no es parte del círculo.
+  const primerNombre = lista.querySelector<HTMLElement>('.call-orb-name');
+  const altoNombre = primerNombre ? primerNombre.getBoundingClientRect().height : 18;
+  const primeraOrbe = lista.querySelector<HTMLElement>('.call-orb');
+  const separacion = primeraOrbe ? parseFloat(getComputedStyle(primeraOrbe).rowGap) || 8 : 8;
+
+  // Se prueba cada repartija posible y gana la que deja las esferas MÁS
+  // grandes: en una pantalla ancha y baja conviene una sola fila; en uno
+  // alto, dos. Así ocupan la pantalla en vez de quedar chicas en el centro.
+  let mejorLado = 0;
+  let mejorColumnas = Math.min(total, 4);
+  for (let columnas = 1; columnas <= total; columnas += 1) {
+    const filas = Math.ceil(total / columnas);
+    const porAncho = (box.width - gapX * (columnas - 1)) / columnas;
+    const porAlto = (box.height - (gapY + altoNombre + separacion) * filas) / filas;
+    const lado = Math.min(porAncho, porAlto);
+    // Ante empate, menos columnas: el grupo queda más compacto y parejo.
+    if (lado > mejorLado + 0.5) {
+      mejorLado = lado;
+      mejorColumnas = columnas;
+    }
+  }
+
+  const lado = Math.max(ORB_MIN, Math.min(ORB_MAX, Math.floor(mejorLado)));
+  lista.style.setProperty('--orb-cols', String(mejorColumnas));
+  lista.style.setProperty('--orb-size', `${lado}px`);
+}
+
 function syncOrbSlots() {
   const field = orbField;
   if (!field || !state.callMode) {
@@ -1978,6 +2022,7 @@ function syncOrbSlots() {
   if (box.width < 8 || box.height < 8) {
     return;
   }
+  fitOrbSize(stage, box);
   field.resize(box.width, box.height);
   const slots: OrbSlot[] = [];
   for (const item of stage.querySelectorAll<HTMLElement>('.call-orb')) {
