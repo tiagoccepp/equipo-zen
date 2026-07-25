@@ -128,6 +128,11 @@ export async function streamChat(keyRing, options, onDelta) {
   let lastError = null;
 
   for (const model of models) {
+    if (options.signal?.aborted) {
+      // Barge-in: el usuario ya cortó. No se gasta una llamada ni se reporta
+      // como falla (antes salía "stream vacío" y un toast de error).
+      return { text: '', model, aborted: true };
+    }
     // Con una sola clave igual damos un reintento (p.ej. stream vacío).
     for (let attempt = 0; attempt < Math.max(2, keyRing.size()); attempt += 1) {
       const key = keyRing.acquire();
@@ -154,6 +159,9 @@ export async function streamChat(keyRing, options, onDelta) {
           }
         }
 
+        if (options.signal?.aborted) {
+          return { text: emitted, model, aborted: true };
+        }
         if (!emitted.trim()) {
           // Vacío = el modelo gastó el presupuesto pensando o falló la
           // generación: NO es culpa de la clave (sin cooldown); se

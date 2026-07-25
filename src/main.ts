@@ -9,6 +9,8 @@ import type {
   RouteDecision,
   ServerMessage as MeetingMessage
 } from '../shared/protocol.ts';
+import { evaluateBargeIn, idleBargeInState, trimPreBuffer } from './lib/barge-in.ts';
+import type { BargeInState } from './lib/barge-in.ts';
 
 type TranscriptTurn = {
   id: string;
@@ -17,6 +19,8 @@ type TranscriptTurn = {
   agentId?: string;
   text: string;
   muted?: boolean;
+  // Al agente lo cortaron a mitad de frase (barge-in): la burbuja queda marcada.
+  interrupted?: boolean;
 };
 
 type StatusAlert = {
@@ -235,7 +239,16 @@ let inputTraceTimer = 0;
 let speechTraceTimer = 0;
 let micMeterRenderTimer = 0;
 let voiceStatusTimer = 0;
+let bargeHintTimer = 0;
+let interruptedBadgeTimer = 0;
 let renderQueued = false;
+
+// Cuánto se sostienen las señales visuales del barge-in. La de "te escucho"
+// dura más que un frame para que no titile entre sílabas; la de "cortamos"
+// es un acuse corto.
+const BARGE_HINT_HOLD_MS = 700;
+const BARGE_CUT_HOLD_MS = 1800;
+const INTERRUPTED_BADGE_MS = 4200;
 
 const MIC_SETTINGS_STORAGE_KEY = 'reunion.micSettings.v1';
 const ASR_LOCALE_STORAGE_KEY = 'reunion.asrLocale.v1';
@@ -453,9 +466,11 @@ class LiveMicrophoneStreamer {
   private speechMs = 0;
   private lastMeterAt = 0;
   // Últimos frames previos al arranque del habla: se mandan al detectar voz
-  // para no perder el ataque de la primera palabra.
+  // para no perder el ataque de la primera palabra. Su tamaño lo fija
+  // trimPreBuffer y cubre toda la ventana de confirmación del barge-in, así
+  // la frase que corta al agente llega entera al transcriptor.
   private preBuffer: Array<{ data: string; durationMs: number }> = [];
-  private bargeMs = 0;
+  private bargeState: BargeInState = idleBargeInState();
 
   private sendMessage: (payload: unknown) => void;
   private onState: (label: string) => void;
@@ -529,6 +544,10 @@ class LiveMicrophoneStreamer {
     this.silenceMs = 0;
     this.speechMs = 0;
     this.preBuffer = [];
+    this.bargeState = idleBargeInState();
+    bargeConfirmed = false;
+    clearBargeSignals();
+    state.audio.restoreGain();
     this.onMeter({ level: 0, startThreshold: micThresholds(state.micSettings).startThreshold, speaking: false });
     this.onState('');
   }
@@ -548,42 +567,51 @@ class LiveMicrophoneStreamer {
       this.onMeter({ level: chunk.rms, startThreshold, speaking: this.speaking });
     }
 
-    // Barge-in: mientras un agente habla, el micro sigue vivo. Al detectar
-    // voz se baja el volumen del agente (duck, latencia cero) y si la voz
-    // se sostiene ≥250 ms por encima de 1.4× el umbral, se interrumpe.
-    if (!this.speaking && (state.audio.isPlaying || state.audioSegment)) {
-      if (chunk.rms >= startThreshold) {
-        state.audio.duck();
-        if (chunk.rms >= startThreshold * 1.4) {
-          this.bargeMs += chunk.durationMs;
-        }
-        if (this.bargeMs < 250) {
-          this.preBuffer.push(payload);
-          this.preBuffer = this.preBuffer.slice(-4);
-          return;
-        }
-        // Confirmado: cortar al agente y dejar que el flujo normal de
-        // inicio de habla procese este mismo chunk.
-        this.bargeMs = 0;
-        this.sendMessage({
-          type: 'interrupt',
-          reason: 'barge_in',
-          turnId: state.audioSegment?.turnId,
-          agentId: state.audioSegment?.agentId
-        });
-        state.audio.flush();
-        state.audio.restoreGain();
-        trace('barge_in_confirmed', { agentId: state.audioSegment?.agentId || null });
-      } else if (this.bargeMs > 0) {
-        // Falso positivo: restaurar volumen y seguir escuchando al agente.
-        this.bargeMs = 0;
-        state.audio.restoreGain();
-      }
+    // Barge-in: mientras un agente habla, el micro SIGUE VIVO (no hay ningún
+    // gate que lo apague). La decisión de bajarle el volumen o cortarlo vive
+    // en src/lib/barge-in.ts, que se prueba sin navegador; acá solo se
+    // ejecuta lo que esa función decide.
+    const barge = evaluateBargeIn(this.bargeState, {
+      rms: chunk.rms,
+      durationMs: chunk.durationMs,
+      startThreshold,
+      agentSpeaking: state.audio.isPlaying || Boolean(state.audioSegment),
+      userSpeaking: this.speaking
+    });
+    this.bargeState = barge.state;
+
+    if (barge.interrupt) {
+      const segment = state.audioSegment;
+      const interruptedAgentId = segment?.agentId || state.speakingAgentId;
+      this.sendMessage({
+        type: 'interrupt',
+        reason: 'barge_in',
+        turnId: segment?.turnId,
+        agentId: segment?.agentId
+      });
+      state.audio.flush();
+      state.audio.restoreGain();
+      trace('barge_in_confirmed', { agentId: interruptedAgentId || null });
+      bargeConfirmed = true;
+      // La UI no espera el ida y vuelta con el servidor: el corte se ve ya.
+      markAgentInterrupted(interruptedAgentId, segment ? `${segment.turnId}-${segment.agentId}` : '');
+      // Y sigue el flujo normal: este mismo chunk abre el turno de la persona.
+    } else if (barge.duck) {
+      state.audio.duck();
+      signalBargeListening();
+      // Todavía no es un turno: guardamos el audio y esperamos a confirmar.
+      this.preBuffer.push(payload);
+      this.preBuffer = trimPreBuffer(this.preBuffer);
+      return;
+    } else if (barge.reset) {
+      // Falso positivo (o el agente ya terminó): devolver el volumen.
+      state.audio.restoreGain();
+      clearBargeListening();
     }
 
     if (!this.speaking) {
       this.preBuffer.push(payload);
-      this.preBuffer = this.preBuffer.slice(-4);
+      this.preBuffer = trimPreBuffer(this.preBuffer);
       if (chunk.rms >= startThreshold) {
         this.speaking = true;
         this.silenceMs = 0;
@@ -620,6 +648,7 @@ class LiveMicrophoneStreamer {
       this.silenceMs = 0;
       this.onMeter({ level: chunk.rms, startThreshold, speaking: false });
       const transcriptHint = state.browserSpeech?.latestUtterance() || state.clientSpeechText;
+      bargeConfirmed = false;
       const speechMs = Math.round(this.speechMs);
       this.speechMs = 0;
       if (!transcriptHint && speechMs < settings.minSpeechMs) {
@@ -731,6 +760,13 @@ class BrowserSpeechRecognizer {
   }
 
   private handleResult(event: any) {
+    // Con parlantes, el reconocedor del navegador oye al propio agente por el
+    // micrófono del sistema y lo entrega como si lo hubieras dicho vos.
+    // Mientras el agente suena y todavía no cortaste, su texto se descarta:
+    // el barge-in se decide por energía del micro, no por este texto.
+    if (agentAudioIsPlaying() && !bargeConfirmed) {
+      return;
+    }
     if (event.results.length <= this.utteranceStartIndex && event.resultIndex === 0) {
       this.utteranceStartIndex = 0;
       this.segments.clear();
@@ -748,6 +784,16 @@ class BrowserSpeechRecognizer {
     this.onTranscript(this.latestUtterance());
   }
 }
+
+// ¿Está sonando la voz de un agente ahora mismo? (lo consulta el reconocedor
+// del navegador para no transcribir el eco del propio agente como si fueras vos)
+function agentAudioIsPlaying(): boolean {
+  return Boolean(state?.audio?.isPlaying || state?.audioSegment);
+}
+
+// Se prende al confirmar un barge-in y se apaga cuando el turno de la persona
+// se cierra: desde el corte en adelante, lo que se oye SÍ sos vos.
+let bargeConfirmed = false;
 
 const initialMicSettings = loadMicSettings();
 
@@ -787,6 +833,10 @@ const state = {
   clientSpeechText: '',
   micSettings: initialMicSettings,
   micMeter: { level: 0, startThreshold: micThresholds(initialMicSettings).startThreshold, speaking: false } as MicMeter,
+  // Señal visible del barge-in: 'listening' mientras pisás al agente y le
+  // bajamos el volumen, 'cut' el acuse de que lo cortamos.
+  bargePhase: 'idle' as 'idle' | 'listening' | 'cut',
+  interruptedAgentId: '',
   turnStartedAt: new Map<string, number>(),
   agentStartedAt: new Map<string, number>(),
   audio: new PcmAudioQueue(),
@@ -955,6 +1005,9 @@ function resetMeetingLocalState() {
   state.activeAudioTranscript = '';
   state.clientSpeechText = '';
   state.audioSegment = null;
+  state.interruptedAgentId = '';
+  window.clearTimeout(interruptedBadgeTimer);
+  clearBargeSignals();
   state.turnStartedAt.clear();
   state.agentStartedAt.clear();
   state.openTaskPanels.clear();
@@ -1171,6 +1224,9 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'agent_audio_start':
+      // Arranca voz de agente: la pizarra queda limpia (lo que se oiga de acá
+      // en más es el agente, no vos, hasta que lo cortes).
+      bargeConfirmed = false;
       state.audioSegment = { turnId: message.turnId, agentId: message.agentId, endReceived: false };
       state.speakingAgentId = message.agentId;
       state.audio.onDrained = () => {
@@ -1204,14 +1260,12 @@ async function handleServerMessage(message: MeetingMessage) {
     case 'agent_interrupted': {
       state.audio.flush();
       state.audio.restoreGain();
-      if (message.turnId && message.agentId) {
-        const id = `${message.turnId}-${message.agentId}`;
-        const turn = state.turns.find((item) => item.id === id);
-        if (turn && turn.text) {
-          turn.text += ' …(interrumpido)';
-          transcriptSetText(id, turn.text);
-        }
-      }
+      // Idempotente: si el corte lo disparó el barge-in local, esto solo
+      // confirma lo que la UI ya está mostrando.
+      markAgentInterrupted(
+        message.agentId || state.speakingAgentId,
+        message.turnId && message.agentId ? `${message.turnId}-${message.agentId}` : ''
+      );
       state.audioSegment = null;
       state.speakingAgentId = '';
       markDirty('agents', 'voice');
@@ -1537,6 +1591,7 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   voice() {
     const mic = byId<HTMLButtonElement>('micButton');
     mic.classList.toggle('is-recording', state.recording);
+    mic.classList.toggle('is-barge', state.bargePhase === 'listening');
     mic.setAttribute('aria-pressed', String(state.recording));
     const label = state.recording ? 'Apagar el micrófono' : 'Hablar con el equipo (activar micrófono)';
     mic.title = label;
@@ -1547,6 +1602,13 @@ const REGION_RENDERERS: Record<Region, () => void> = {
       ? `“${state.activeAudioTranscript}”`
       : state.voiceStatus;
     status.classList.toggle('is-live', Boolean(state.activeAudioTranscript));
+    // Barge-in: el aviso de que le estamos pisando la voz al agente.
+    const hint = byId('bargeHint');
+    hint.hidden = state.bargePhase === 'idle';
+    hint.classList.toggle('is-cut', state.bargePhase === 'cut');
+    hint.textContent = state.bargePhase === 'cut'
+      ? 'Listo, lo cortamos. Seguí vos.'
+      : 'Te escucho… le bajo la voz al equipo.';
     byId<HTMLButtonElement>('sendButton').disabled = !state.connected;
   },
   micTuning() {
@@ -1558,9 +1620,10 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     const thresholds = micThresholds(state.micSettings);
     meter.style.setProperty('--level', `${Math.round(Math.min(1, state.micMeter.level / 0.16) * 100)}%`);
     meter.style.setProperty('--gate', `${Math.round(Math.min(1, thresholds.startThreshold / 0.16) * 100)}%`);
+    meter.classList.toggle('is-barge', state.bargePhase !== 'idle');
     const headLabel = document.querySelector<HTMLElement>('#micTuning .audio-tuning-head span');
     if (headLabel) {
-      headLabel.textContent = state.micMeter.speaking ? 'voz activa' : 'en espera';
+      headLabel.textContent = micMeterLabel();
     }
   },
   scenario() {
@@ -1632,6 +1695,9 @@ function transcriptAppend(turn: TranscriptTurn) {
   article.append(speaker, text);
   list.append(article);
   transcriptNodes.set(turn.id, { article, text });
+  if (turn.interrupted) {
+    transcriptMarkInterrupted(turn.id);
+  }
   syncTranscriptEmpty();
   if (stick) {
     container.scrollTop = container.scrollHeight;
@@ -1653,6 +1719,21 @@ function transcriptRemove(id: string) {
   transcriptNodes.get(id)?.article.remove();
   transcriptNodes.delete(id);
   syncTranscriptEmpty();
+}
+
+// Marca la burbuja de un agente al que cortaron a mitad de frase. Es una
+// clase + un sello aparte, no texto pegado al mensaje: así el
+// agent_turn_complete que llega después (con el texto parcial) no se lo come.
+function transcriptMarkInterrupted(id: string) {
+  const node = transcriptNodes.get(id);
+  if (!node || node.article.classList.contains('is-interrupted')) {
+    return;
+  }
+  node.article.classList.add('is-interrupted');
+  const flag = document.createElement('span');
+  flag.className = 'turn-flag';
+  flag.textContent = 'interrumpido';
+  node.article.append(flag);
 }
 
 // Reconstruye el DOM del transcript desde state.turns (reset / resume).
@@ -1801,6 +1882,7 @@ function mountShell() {
                 <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
               </div>
               <section class="composer" aria-label="Mandar un mensaje al equipo">
+                <p class="barge-hint" id="bargeHint" role="status" hidden></p>
                 <p class="speech-status" id="speechStatus"></p>
                 <form id="turnForm" class="turn-form">
                   <button class="mic-btn" id="micButton" data-action="toggle-mic" type="button" aria-pressed="false" aria-label="Hablar con el equipo (activar micrófono)" title="Hablar con el equipo (activar micrófono)">${micIcon()}</button>
@@ -3335,6 +3417,7 @@ function toggleSecretVisibility(button: HTMLElement) {
 
 function renderAgent(agent: Agent) {
   const speaking = state.speakingAgentId === agent.id;
+  const interrupted = state.interruptedAgentId === agent.id;
   const disabled = agent.enabled === false;
   const tasks = agent.tasks || [];
   const total = tasks.length;
@@ -3345,7 +3428,7 @@ function renderAgent(agent: Agent) {
   const tasksOpen = state.openTaskPanels.has(agent.id);
 
   return `
-    <article class="agent ${speaking ? 'is-speaking' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
+    <article class="agent ${speaking ? 'is-speaking' : ''} ${interrupted ? 'is-interrupted' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
       <div class="agent-top">
         <span class="agent-avatar" aria-hidden="true">${escapeHtml(agent.name.slice(0, 1))}</span>
         <div class="agent-id">
@@ -3354,9 +3437,11 @@ function renderAgent(agent: Agent) {
         </div>
         ${disabled
           ? '<span class="agent-state paused">En pausa</span>'
-          : speaking
-            ? '<span class="agent-state speaking"><span class="pulse-dot" aria-hidden="true"></span>Hablando…</span>'
-            : ''}
+          : interrupted
+            ? '<span class="agent-state interrupted">Interrumpido</span>'
+            : speaking
+              ? '<span class="agent-state speaking"><span class="pulse-dot" aria-hidden="true"></span>Hablando…</span>'
+              : ''}
       </div>
       <div class="agent-chips">
         ${skills.map((skill) => `<span class="chip">${escapeHtml(skill)}</span>`).join('')}
@@ -3434,11 +3519,13 @@ function renderAudioTuning() {
   const gateRatio = Math.min(1, thresholds.startThreshold / 0.16);
   const activePreset = activeMicPreset(settings);
 
+  const meterState = state.bargePhase !== 'idle' ? ' is-barge' : '';
+
   return `
     <section class="audio-tuning" aria-label="Ajustes de micrófono">
       <div class="audio-tuning-head">
         <h3>Micrófono</h3>
-        <span>${state.micMeter.speaking ? 'voz activa' : 'en espera'}</span>
+        <span>${escapeHtml(micMeterLabel())}</span>
       </div>
       <div class="mic-presets" role="group" aria-label="Perfil de micrófono">
         ${Object.keys(MIC_PRESETS).map((preset) => `
@@ -3447,7 +3534,7 @@ function renderAudioTuning() {
           </button>
         `).join('')}
       </div>
-      <div class="meter" style="--level: ${Math.round(levelRatio * 100)}%; --gate: ${Math.round(gateRatio * 100)}%" aria-hidden="true">
+      <div class="meter${meterState}" style="--level: ${Math.round(levelRatio * 100)}%; --gate: ${Math.round(gateRatio * 100)}%" aria-hidden="true">
         <div></div>
         <span></span>
       </div>
@@ -4704,6 +4791,75 @@ function resolveAlertIfPresent(id: string, scope: string, message: string) {
   upsertAlert(id, scope, message, 'ok', 1400);
 }
 
+// ── Señales visibles del barge-in ───────────────────────────────────────
+// Cuando pisás a un agente hay dos momentos que la persona tiene que ver:
+// "te escuché y le bajé el volumen" (inmediato, reversible) y "lo corté"
+// (confirmado). Cada uno se sostiene un rato para que no titile.
+
+function signalBargeListening() {
+  window.clearTimeout(bargeHintTimer);
+  bargeHintTimer = window.setTimeout(clearBargeListening, BARGE_HINT_HOLD_MS);
+  if (state.bargePhase === 'listening') {
+    return;
+  }
+  state.bargePhase = 'listening';
+  markDirty('voice', 'micMeter');
+}
+
+// Falso positivo: se apaga el aviso de "te escucho", pero NO el acuse de
+// "lo cortamos" (ese tiene que quedar visible su ratito).
+function clearBargeListening() {
+  if (state.bargePhase !== 'listening') {
+    return;
+  }
+  clearBargeSignals();
+}
+
+// Apaga cualquier señal del barge-in (al soltar el micrófono o cambiar de reunión).
+function clearBargeSignals() {
+  window.clearTimeout(bargeHintTimer);
+  bargeHintTimer = 0;
+  if (state.bargePhase === 'idle') {
+    return;
+  }
+  state.bargePhase = 'idle';
+  markDirty('voice', 'micMeter');
+}
+
+// Corte confirmado: acuse en el compositor, badge en la tarjeta del empleado
+// y marca en la burbuja que quedó a medio decir.
+function markAgentInterrupted(agentId: string, turnKey: string) {
+  window.clearTimeout(bargeHintTimer);
+  state.bargePhase = 'cut';
+  bargeHintTimer = window.setTimeout(() => {
+    bargeHintTimer = 0;
+    if (state.bargePhase === 'cut') {
+      state.bargePhase = 'idle';
+      markDirty('voice', 'micMeter');
+    }
+  }, BARGE_CUT_HOLD_MS);
+
+  if (agentId) {
+    state.interruptedAgentId = agentId;
+    window.clearTimeout(interruptedBadgeTimer);
+    interruptedBadgeTimer = window.setTimeout(() => {
+      interruptedBadgeTimer = 0;
+      state.interruptedAgentId = '';
+      markDirty('agents');
+    }, INTERRUPTED_BADGE_MS);
+  }
+
+  if (turnKey) {
+    const turn = state.turns.find((item) => item.id === turnKey);
+    if (turn) {
+      turn.interrupted = true;
+    }
+    transcriptMarkInterrupted(turnKey);
+  }
+
+  markDirty('voice', 'micMeter', 'agents');
+}
+
 // ── Captura de voz ──────────────────────────────────────────────────────
 
 function stopVoiceCapture() {
@@ -4824,6 +4980,18 @@ function setVoiceStatus(message: string, timeoutMs = 0) {
       markDirty('voice');
     }, timeoutMs);
   }
+}
+
+// Etiqueta del medidor: durante el barge-in dice lo que está pasando de
+// verdad (le estamos pisando la voz al agente), no solo si hay voz.
+function micMeterLabel() {
+  if (state.bargePhase === 'listening') {
+    return 'te escucho…';
+  }
+  if (state.bargePhase === 'cut') {
+    return 'agente cortado';
+  }
+  return state.micMeter.speaking ? 'voz activa' : 'en espera';
 }
 
 function micThresholds(settings: MicSettings) {

@@ -827,6 +827,23 @@ details[open] > summary .chevron {
   letter-spacing: 0.05em;
 }
 
+/* Tarjeta del empleado al que acabás de cortar. Va scopeada al panel del
+   equipo a propósito: `.agent` sin scope también matchea las burbujas
+   `.turn.agent` del transcript. */
+.agents .agent.is-interrupted {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+
+/* Lo cortaste vos a mitad de frase (barge-in). */
+.agent-state.interrupted {
+  padding: 2px var(--s-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: var(--r-full);
+  color: var(--danger);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .pulse-dot {
   width: 8px;
   height: 8px;
@@ -1131,6 +1148,31 @@ details[open] > summary .chevron {
   border-radius: var(--r-s) var(--r-m) var(--r-m) var(--r-m);
 }
 
+/* Burbuja de un agente al que cortaron a mitad de frase: el borde se corta
+   con una línea punteada y queda el sello "interrumpido". */
+.turn.agent.is-interrupted {
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+/* OJO: las burbujas del agente son `.turn.agent`, así que también matchean
+   `.agent` (la tarjeta del empleado), que es display:grid. Por eso el sello
+   necesita justify-self: sin eso se estira a lo ancho de la burbuja. */
+.turn-flag {
+  display: inline-block;
+  justify-self: start;
+  width: fit-content;
+  margin-top: var(--s-2);
+  padding: 1px var(--s-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--line));
+  border-radius: var(--r-full);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .turn.system {
   align-self: center;
   max-width: min(72ch, 100%);
@@ -1219,6 +1261,47 @@ details[open] > summary .chevron {
 @keyframes mic-halo {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 42%, transparent); }
   75%, 100% { box-shadow: 0 0 0 14px transparent; }
+}
+
+/* Barge-in: mientras la persona le pisa la voz al agente, el botón del
+   micrófono queda con el anillo del acento (se ve aunque los ajustes de
+   micrófono estén plegados). */
+.mic-btn.is-barge {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.barge-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: var(--r-m);
+  background: var(--accent-tint);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 750;
+}
+
+.barge-hint::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.barge-hint.is-cut {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+.barge-hint.is-cut::before {
+  background: var(--danger);
+  animation: none;
 }
 
 #turnInput {
@@ -1381,6 +1464,16 @@ details[open] > summary .chevron {
   width: 2px;
   height: calc(100% + 4px);
   background: var(--ink);
+}
+
+/* Barge-in en curso: el medidor cambia de estado, no solo de nivel. */
+.meter.is-barge {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.meter.is-barge div {
+  background: linear-gradient(90deg, var(--accent), var(--ok));
 }
 
 .tuning-grid {

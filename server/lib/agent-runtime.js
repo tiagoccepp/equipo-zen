@@ -140,6 +140,11 @@ export class LiveAgentRuntime {
         ]
       }, handleDelta);
     } catch (error) {
+      if (signal?.aborted) {
+        // El usuario interrumpió: no es una falla, no se muestra nada.
+        emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+        return { ...emptyAgentResponse(), backend: 'stream', interrupted: true };
+      }
       emit({
         type: 'api_rotation_failed',
         scope: this.name,
