@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { Store } from '../server/lib/store.js';
-import { extractFileContent, safeWorkspacePath, Workforce } from '../server/lib/workforce.js';
+import { extractFileContent, readProjectState, safeWorkspacePath, Workforce } from '../server/lib/workforce.js';
 
 const companyTemplates = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
@@ -111,4 +113,69 @@ test('cada proyecto tiene su carpeta aunque se repita el título', () => {
   assert.equal(a.slug, 'sitio-web');
   assert.equal(b.slug, 'sitio-web-2');
   assert.equal(c.slug, 'sitio-web-3');
+});
+
+test('quien entra a un proyecto ya empezado ve el contenido y su identidad visual', async () => {
+  // El caso real: Bruno hizo la web y Delia entró después. Sin esto, Delia
+  // regeneraba index.html con su propio estilo y borraba el trabajo.
+  const dir = mkdtempSync(path.join(tmpdir(), 'equipo-proy-'));
+  writeFileSync(path.join(dir, 'index.html'), [
+    '<!doctype html><html lang="es"><head><style>',
+    ':root { --tinta: #1c1b19; --acento: #31655a; --papel: #f4f1ea; }',
+    'body { font-family: "Inter", system-ui, sans-serif; }',
+    '</style></head><body>',
+    '<header class="hero"><h1 class="titulo">NovaTech</h1></header>',
+    '<section id="servicios" class="bloque"><h2>Nuestras soluciones</h2></section>',
+    '<footer id="contacto" class="pie"></footer>',
+    '</body></html>'
+  ].join('\n'));
+
+  const estado = await readProjectState(dir, ['index.html']);
+  assert.equal(estado.principal, 'index.html');
+  assert.ok(estado.contenido.includes('NovaTech'), 'el contenido real viaja al prompt');
+
+  const identidad = estado.identidad.join('\n');
+  assert.match(identidad, /--acento: #31655a/, 'la paleta existente se le muestra');
+  assert.match(identidad, /Inter/, 'la tipografía existente se le muestra');
+  assert.match(identidad, /hero|titulo|bloque/, 'las clases existentes, para reusarlas');
+  assert.match(identidad, /servicios|contacto/, 'las secciones ya armadas');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('un proyecto vacío no arrastra identidad de nadie', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'equipo-vacio-'));
+  assert.equal(await readProjectState(dir, []), null);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('dos empleados no trabajan a la vez sobre el mismo proyecto', async () => {
+  // Bruno y Delia escribiendo index.html en paralelo se sobreescribían.
+  const { store, company, workforce } = newCompany();
+  const team = store.listAgents({ companyId: company.id });
+  const meeting = store.createMeeting({ companyId: company.id });
+  const goal = store.createGoal({ companyId: company.id, meetingId: meeting.id, title: 'Web nueva' });
+
+  for (const nombre of ['Bruno', 'Sofía']) {
+    const agente = team.find((a) => a.name === nombre);
+    const id = store.insertTask(meeting.id, agente.id, { text: `parte de ${nombre}` });
+    store.assignTaskToGoal(id, goal.id, { kind: 'entregable' });
+  }
+
+  // Se intercepta la ejecución: interesa el arbitraje, no el trabajo real.
+  const arrancadas = [];
+  workforce.executeTask = async (companyId, agent) => {
+    arrancadas.push(agent.name);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+  workforce.keyRing = { hasKeys: () => true };
+
+  await workforce.tick();
+  assert.equal(arrancadas.length, 1, 'entra uno solo; el otro espera su turno');
+
+  // Liberado el proyecto, entra el segundo.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  await workforce.tick();
+  assert.equal(arrancadas.length, 2);
+  assert.notEqual(arrancadas[0], arrancadas[1]);
 });

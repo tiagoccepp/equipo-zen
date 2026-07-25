@@ -136,12 +136,52 @@ export function renderWorkSection(store, companyId) {
   ].join('\n');
 }
 
+// Lo que ya existe en el proyecto, listo para meter en el prompt: el archivo
+// principal completo y las señas de su identidad visual. Sin esto, cada
+// empleado regeneraba index.html con su propio estilo y el sitio cambiaba de
+// cara en cada vuelta.
+export async function readProjectState(dir, files) {
+  if (files.length === 0) {
+    return null;
+  }
+  const principal = files.find((f) => /(^|\/)index\.html?$/i.test(f)) || files[0];
+  const contenido = await fs.readFile(path.join(dir, principal), 'utf-8').catch(() => '');
+  if (!contenido) {
+    return { principal, contenido: '', identidad: [] };
+  }
+
+  const identidad = [];
+  const root = contenido.match(/:root\s*\{[^}]{0,1200}\}/i);
+  if (root) {
+    identidad.push(`Variables de diseño ya definidas:\n${root[0]}`);
+  }
+  const fuentes = [...contenido.matchAll(/font-family\s*:\s*([^;]{3,90});/gi)].map((m) => m[1].trim());
+  if (fuentes.length) {
+    identidad.push(`Tipografías en uso: ${[...new Set(fuentes)].slice(0, 3).join(' | ')}`);
+  }
+  const clases = [...contenido.matchAll(/class="([^"]{1,120})"/g)]
+    .flatMap((m) => m[1].split(/\s+/))
+    .filter(Boolean);
+  const frecuentes = [...new Set(clases)].slice(0, 24);
+  if (frecuentes.length) {
+    identidad.push(`Clases CSS existentes (reusalas, no inventes otras en paralelo): ${frecuentes.join(', ')}`);
+  }
+  const secciones = [...contenido.matchAll(/<(?:section|header|footer|main|nav)[^>]*\bid="([^"]+)"/gi)].map((m) => m[1]);
+  if (secciones.length) {
+    identidad.push(`Secciones ya armadas: ${[...new Set(secciones)].join(', ')}`);
+  }
+  return { principal, contenido, identidad };
+}
+
 export class Workforce {
   constructor(store, keyRing, { onEvent } = {}) {
     this.store = store;
     this.keyRing = keyRing;
     this.onEvent = onEvent;
     this.busyAgents = new Set();
+    // Proyectos con una corrida en curso: nadie más toca sus archivos hasta
+    // que termine (evita que dos empleados se pisen el mismo entregable).
+    this.busyGoals = new Set();
     this.timer = null;
   }
 
@@ -226,16 +266,26 @@ export class Workforce {
         if (!agent || agent.status !== 'active' || this.busyAgents.has(agent.id)) {
           continue;
         }
+        // Trabajo en fila por proyecto: el que entra ve lo que dejó el anterior.
+        if (task.goal_id && this.busyGoals.has(task.goal_id)) {
+          continue;
+        }
         if (!this.store.checkoutTask(task.id)) {
           continue;
         }
         this.busyAgents.add(agent.id);
+        if (task.goal_id) {
+          this.busyGoals.add(task.goal_id);
+        }
         void this.executeTask(companyId, agent, task)
           .catch((error) => {
             this.store.finishTask(task.id, { status: 'blocked', blockedReason: String(error?.message || error).slice(0, 300) });
           })
           .finally(() => {
             this.busyAgents.delete(agent.id);
+            if (task.goal_id) {
+              this.busyGoals.delete(task.goal_id);
+            }
             if (task.goal_id && this.store.completeGoalIfDone(task.goal_id)) {
               const goal = this.store.getGoal(task.goal_id);
               this.emitEvent(companyId, { kind: 'goal_done', goalId: task.goal_id, title: goal?.title });
@@ -305,13 +355,23 @@ export class Workforce {
       '<<<CONTENIDO',
       '…el archivo COMPLETO acá, tal cual…',
       'CONTENIDO>>>',
+      '- Para CAMBIAR una parte de un archivo que ya existe (preferí esto antes que reescribirlo entero):',
+      '{"action":"edit_file","path":"ruta/relativa"}',
+      '<<<BUSCAR',
+      'el texto exacto que hay que reemplazar, tal cual está en el archivo',
+      'BUSCAR>>>',
+      '<<<REEMPLAZAR',
+      'el texto nuevo',
+      'REEMPLAZAR>>>',
       '- Otras acciones (solo el JSON, nada más):',
       '{"action":"read_file","path":"ruta/relativa"}',
       '{"action":"list_files"}',
       '{"action":"finish","summary":"qué hiciste en 1-3 oraciones en español","artifacts":["archivos","principales"]}',
       '{"action":"block","reason":"qué te falta para poder avanzar"}',
       '',
-      'Reglas: contenido completo en cada write_file (no parches). NO listes archivos más de una vez. Andá directo a producir: en el paso 1 ya podés escribir. Terminá con finish cuando el entregable esté REALMENTE completo y usable. Máximo ' + MAX_STEPS_PER_RUN + ' pasos.',
+      'Reglas: en write_file va el archivo COMPLETO (no parches); para tocar una parte usá edit_file. NO listes archivos más de una vez.',
+      'Si el proyecto ya tiene archivos, tu trabajo es CONTINUARLOS: editá lo que existe y respetá su estilo. Empezar de cero borra el trabajo de un compañero.',
+      'Si el proyecto está vacío, andá directo a producir: en el paso 1 ya podés escribir. Terminá con finish cuando el entregable esté REALMENTE completo y usable. Máximo ' + MAX_STEPS_PER_RUN + ' pasos.',
       '',
       'ESTÁNDAR DE CALIDAD (te van a revisar, y una revisión negativa te devuelve el trabajo):',
       '- Contenido REAL y específico de esta empresa: nada de "Lorem ipsum", "Texto de ejemplo", "Servicio 1" ni placeholders.',
@@ -329,12 +389,38 @@ export class Workforce {
 
     // El contexto de la tarea viaja SIEMPRE; cada paso suma la historia de
     // acciones + la última observación (nunca se pierde el "qué" ni el "porqué").
+    const archivosIniciales = await listFiles();
+    const estado = await readProjectState(workspaceDir, archivosIniciales);
+    const yaExiste = new Set(archivosIniciales);
+    const leidos = new Set();
+
+    const bloqueContinuidad = estado
+      ? [
+          '',
+          '━━ ESTO YA EXISTE EN EL PROYECTO. NO EMPIECES DE CERO ━━',
+          `El trabajo ya arrancó: alguien del equipo dejó ${archivosIniciales.length === 1 ? 'este archivo' : 'estos archivos'}: ${archivosIniciales.join(', ')}.`,
+          'Tu trabajo es CONTINUARLO, no reemplazarlo. Reglas, en serio:',
+          `- Si tu tarea toca algo que ya está en ${estado.principal}, EDITÁ ese archivo (usá edit_file). No creés uno nuevo al lado.`,
+          '- Respetá la identidad visual que ya tiene: mismos colores, misma tipografía, mismas clases, mismo tono de los textos.',
+          '- No rehagas secciones que ya están bien solo porque las harías distinto.',
+          '- Si de verdad hay que rehacer el archivo completo, primero leelo y después escribilo MANTENIENDO su estilo.',
+          ...(estado.identidad.length ? ['', 'IDENTIDAD DEL PROYECTO (respetala):', ...estado.identidad] : []),
+          '',
+          `CONTENIDO ACTUAL DE ${estado.principal}:`,
+          estado.contenido.slice(0, 24000),
+          '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+        ].join('\n')
+      : '';
+
     const header = [
       goal ? `META DE LA EMPRESA (el porqué): ${goal.title} — ${goal.description}` : '',
       `TU TAREA (el qué): ${task.text}`,
-      `Archivos al empezar: ${JSON.stringify(await listFiles())}`
+      archivosIniciales.length ? '' : 'El proyecto está vacío: sos el primero, definí vos el estilo.',
+      bloqueContinuidad
     ].filter(Boolean).join('\n');
-    let lastObservation = 'Todavía no hiciste ninguna acción.';
+    let lastObservation = estado
+      ? `Ya leíste arriba el contenido de ${estado.principal}. Continuá sobre eso.`
+      : 'Todavía no hiciste ninguna acción.';
 
     for (let step = 1; step <= MAX_STEPS_PER_RUN; step += 1) {
       let action = null;
@@ -384,14 +470,50 @@ export class Workforce {
       } else if (action.action === 'read_file') {
         try {
           const content = await fs.readFile(safeWorkspacePath(companyId, slug, action.path), 'utf-8');
+          leidos.add(String(action.path));
           log.push({ step, action: 'read_file', path: action.path, ok: true });
           lastObservation = `Contenido de ${action.path}:\n${content.slice(0, 20000)}`;
         } catch (error) {
           log.push({ step, action: 'read_file', path: action.path, ok: false });
           lastObservation = `No pude leer ${action.path}: ${String(error?.message).slice(0, 120)}`;
         }
+      } else if (action.action === 'edit_file') {
+        try {
+          const target = safeWorkspacePath(companyId, slug, action.path);
+          const actual = await fs.readFile(target, 'utf-8');
+          const buscar = rawText.match(/<<<BUSCAR\n?([\s\S]*?)\n?BUSCAR>>>/);
+          const reemplazar = rawText.match(/<<<REEMPLAZAR\n?([\s\S]*?)\n?REEMPLAZAR>>>/);
+          if (!buscar) {
+            throw new Error('falta el bloque <<<BUSCAR … BUSCAR>>>');
+          }
+          const desde = buscar[1];
+          const hacia = reemplazar ? reemplazar[1] : '';
+          const ocurrencias = actual.split(desde).length - 1;
+          if (ocurrencias === 0) {
+            throw new Error('el texto a reemplazar no está en el archivo, tal cual lo escribiste');
+          }
+          if (ocurrencias > 1) {
+            throw new Error(`el texto a reemplazar aparece ${ocurrencias} veces: incluí más contexto alrededor para que sea único`);
+          }
+          const nuevo = actual.replace(desde, hacia);
+          await fs.writeFile(target, nuevo, 'utf-8');
+          leidos.add(String(action.path));
+          artifacts.add(String(action.path));
+          log.push({ step, action: 'edit_file', path: action.path, bytes: Buffer.byteLength(nuevo), ok: true });
+          lastObservation = `Edité ${action.path} (ahora tiene ${Buffer.byteLength(nuevo)} bytes). El resto del archivo quedó intacto.`;
+          this.emitEvent(companyId, { kind: 'file_written', taskId: task.id, agentId: agent.id, agentName: agent.name, path: String(action.path), edited: true });
+        } catch (error) {
+          log.push({ step, action: 'edit_file', path: action.path, ok: false, note: String(error?.message).slice(0, 140) });
+          lastObservation = `No pude editar ${action.path}: ${String(error?.message).slice(0, 200)}. Si necesitás verlo de nuevo, usá read_file.`;
+        }
       } else if (action.action === 'write_file') {
         try {
+          // Barrera anti-pisada: un archivo que ya existía no se sobreescribe
+          // sin haberlo leído en esta corrida (así se rompía el trabajo previo).
+          if (yaExiste.has(String(action.path)) && !leidos.has(String(action.path))
+              && !(estado && estado.principal === String(action.path))) {
+            throw new Error('ese archivo ya existe y no lo leíste todavía en esta corrida: leelo con read_file (o usá edit_file para cambiar solo una parte)');
+          }
           // El contenido viene crudo entre marcadores (robusto para HTML/CSS),
           // o inline en el JSON como fallback.
           const content = extractFileContent(rawText, action);
