@@ -90,6 +90,72 @@ type SettingsStatus = {
   stt: { provider: string; localHealthy: boolean; groqConfigured: boolean };
 };
 
+// ── Supervisión del trabajo (organigrama + feed) ────────────────────────
+
+type WorkTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'done';
+
+type WorkTask = {
+  id: string;
+  text: string;
+  status: WorkTaskStatus | string;
+  agentId: string | null;
+  resultSummary: string | null;
+  blockedReason: string | null;
+  runCount: number;
+};
+
+type WorkGoal = {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  created_at?: string;
+  completed_at?: string | null;
+  tasks: WorkTask[];
+};
+
+type WorkMember = {
+  id: string;
+  name: string;
+  title: string;
+  color: string;
+  role?: 'ceo' | 'contratista' | 'worker' | null;
+  managerId?: string | null;
+};
+
+type WorkRun = {
+  id: number;
+  task_id: string;
+  agent_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  summary: string | null;
+  artifacts: string[];
+};
+
+type WorkData = {
+  company: { id: string; name: string };
+  team: WorkMember[];
+  goals: WorkGoal[];
+  runs: WorkRun[];
+  workspaceUrl: string;
+};
+
+type WorkFeedItem = {
+  key: string;
+  at: number;
+  icon: string;
+  html: string;
+};
+
+type ClosingSummary = {
+  goalTitle: string;
+  goalDescription: string;
+  assignments: Array<{ agentId: string; agentName: string; tasks: string[] }>;
+  hires: Array<{ need: string }>;
+};
+
 const telemetryClientId = crypto.randomUUID();
 let telemetrySeq = 0;
 let inputTraceTimer = 0;
@@ -655,6 +721,13 @@ const state = {
   editingAgentId: null as string | null,
   selectedSpawnColor: AGENT_COLORS[0],
   openTaskPanels: new Set<string>(),
+  wsTab: 'meeting' as 'meeting' | 'work',
+  workData: null as WorkData | null,
+  workError: false,
+  workActive: false,
+  workEvents: [] as WorkFeedItem[],
+  closingSummary: null as ClosingSummary | null,
+  endingMeeting: false,
   settings: null as SettingsData | null,
   settingsStatus: null as SettingsStatus | null,
   settingsSaving: false
@@ -817,7 +890,17 @@ function enterCompany(companyId: string, seed?: Company | null) {
   saveLastCompanyId(companyId);
   resetMeetingLocalState();
   closeSocketSilently();
-  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'micTuning');
+  // El estado de supervisión es por empresa: arranca limpio.
+  state.wsTab = 'meeting';
+  state.workData = null;
+  state.workError = false;
+  state.workActive = false;
+  state.workEvents = [];
+  state.closingSummary = null;
+  state.endingMeeting = false;
+  workHtmlCache.clear();
+  syncWorkPolling();
+  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'micTuning', 'work');
   trace('company_entered', { companyId });
   connect();
 }
@@ -828,7 +911,9 @@ function leaveToHome() {
   }
   state.audio.stop();
   closeSocketSilently();
+  closeModal('closeMeetingModal');
   state.view = 'home';
+  syncWorkPolling();
   markDirty('view', 'connection', 'home');
   trace('back_to_home');
   void loadCompanies();
@@ -893,7 +978,14 @@ async function handleServerMessage(message: MeetingMessage) {
           ? 'Reunión nueva en modo demo: los agentes responden simulados (sin claves API).'
           : 'Reunión nueva: el equipo está en la mesa.';
       upsertAlert('meeting-status', state.company.name, statusText, 'ok', 4000);
-      markDirty('view', 'company', 'agents', 'scenario', 'keys', 'voice', 'route');
+      // Un cierre pendiente no sobrevive a una sesión nueva del servidor.
+      state.endingMeeting = false;
+      state.closingSummary = null;
+      closeModal('closeMeetingModal');
+      // Sondeo del trabajo: si hay metas activas, se muestra el aviso
+      // "El equipo está trabajando" y el organigrama queda precargado.
+      void refreshWork();
+      markDirty('view', 'company', 'agents', 'scenario', 'keys', 'voice', 'route', 'work');
       break;
     }
 
@@ -913,6 +1005,23 @@ async function handleServerMessage(message: MeetingMessage) {
       state.audio.stop();
       transcriptReset();
       markDirty('route', 'voice');
+      break;
+
+    case 'meeting_closing_summary':
+      state.endingMeeting = false;
+      state.closingSummary = {
+        goalTitle: message.goalTitle,
+        goalDescription: message.goalDescription,
+        assignments: message.assignments || [],
+        hires: message.hires || []
+      };
+      resolveAlertIfPresent('closing', 'Cierre de reunión', 'Repaso listo: revisalo y confirmá.');
+      openClosingModal();
+      markDirty('work');
+      break;
+
+    case 'work_event':
+      handleWorkEvent(message);
       break;
 
     case 'user_turn_received': {
@@ -1110,6 +1219,10 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'api_rotation_resolved':
+      systemicScopes.delete(message.scope);
+      if (systemicScopes.size === 0) {
+        resolveAlertIfPresent('llm-systemic', 'Modelo', 'Conexión con el modelo recuperada.');
+      }
       resolveAlertIfPresent(
         `rotation-${message.scope}`,
         message.scope,
@@ -1118,7 +1231,22 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'api_rotation_failed':
-      upsertAlert(`rotation-${message.scope}`, message.scope, `No se pudo recuperar ${message.scope}: ${message.message}`, 'error');
+      // Un problema de infraestructura (clave, cuota, servicio caído) golpea a
+      // TODO el equipo a la vez: se muestra una sola alerta con el conteo, no
+      // una pared de rojos idénticos, uno por empleado.
+      if (isSystemicFailure(message.message)) {
+        systemicScopes.add(message.scope);
+        state.alerts = state.alerts.filter((alert) => !alert.id.startsWith('rotation-'));
+        const affected = systemicScopes.size;
+        upsertAlert(
+          'llm-systemic',
+          'Modelo',
+          `${message.message}${affected > 1 ? ` (afecta a ${affected} empleados)` : ''}`,
+          'error'
+        );
+      } else {
+        upsertAlert(`rotation-${message.scope}`, message.scope, `No se pudo recuperar ${message.scope}: ${message.message}`, 'error');
+      }
       break;
 
     case 'health':
@@ -1127,6 +1255,10 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'error': {
+      if (state.endingMeeting) {
+        state.endingMeeting = false;
+        markDirty('work');
+      }
       const turn: TranscriptTurn = {
         id: crypto.randomUUID(),
         kind: 'system',
@@ -1231,7 +1363,8 @@ type Region =
   | 'voice'
   | 'micTuning'
   | 'micMeter'
-  | 'scenario';
+  | 'scenario'
+  | 'work';
 
 const dirtyRegions = new Set<Region>();
 
@@ -1246,7 +1379,7 @@ function markDirty(...regions: Region[]) {
 
 // Compat con los caminos que re-renderizan toda la app.
 function render() {
-  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario');
+  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario', 'work');
 }
 
 function flushRender() {
@@ -1290,6 +1423,7 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     const el = byId<HTMLDivElement>('connectionStatus');
     el.className = `status ${state.connected ? 'is-on' : ''}`;
     el.innerHTML = `<span aria-hidden="true"></span>${state.connected ? 'Conectado' : 'Conectando…'}`;
+    syncEndMeetingButton();
   },
   alerts() {
     byId('alerts').innerHTML = renderAlerts();
@@ -1339,6 +1473,23 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     const input = byId<HTMLInputElement>('scenarioInput');
     if (document.activeElement !== input) {
       input.value = state.scenario?.text || '';
+    }
+  },
+  work() {
+    syncEndMeetingButton();
+    const isWork = state.wsTab === 'work';
+    const tabMeeting = byId<HTMLButtonElement>('tabMeeting');
+    const tabWork = byId<HTMLButtonElement>('tabWork');
+    tabMeeting.classList.toggle('is-active', !isWork);
+    tabMeeting.setAttribute('aria-selected', String(!isWork));
+    tabWork.classList.toggle('is-active', isWork);
+    tabWork.setAttribute('aria-selected', String(isWork));
+    byId('meetingView').hidden = isWork;
+    byId('workView').hidden = !isWork;
+    byId('workTabDot').hidden = !state.workActive;
+    byId('workNotice').hidden = !(state.workActive && !isWork);
+    if (isWork) {
+      renderWorkView();
     }
   }
 };
@@ -1493,6 +1644,7 @@ function mountShell() {
             <button class="btn ghost sm" type="submit">Guardar</button>
           </form>
           <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
+          <button class="btn primary sm end-meeting-btn" id="endMeetingBtn" data-action="end-meeting" type="button" disabled title="La CEO repasa lo asignado y, si confirmás, el equipo se pone a trabajar de verdad">Finalizar reunión</button>
         </div>
 
         <div class="ws-layout">
@@ -1518,25 +1670,58 @@ function mountShell() {
           </aside>
 
           <main class="ws-main">
-            <h2 class="sr-only">Conversación</h2>
-            <div class="transcript" id="transcript" tabindex="-1">
-              <div class="transcript-empty" id="transcriptEmpty">
-                <p class="empty-title">La mesa está lista</p>
-                <p>Escribí abajo o activá el micrófono para arrancar la reunión. Podés nombrar a un empleado para dirigirte a esa persona.</p>
-              </div>
-              <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
+            <div class="ws-tabs" role="tablist" aria-label="Vista del workspace">
+              <button role="tab" type="button" class="ws-tab is-active" id="tabMeeting" aria-selected="true" aria-controls="meetingView" data-action="ws-tab" data-tab="meeting">Reunión</button>
+              <button role="tab" type="button" class="ws-tab" id="tabWork" aria-selected="false" aria-controls="workView" data-action="ws-tab" data-tab="work">Organigrama<span class="tab-dot" id="workTabDot" hidden aria-hidden="true"></span></button>
             </div>
-            <section class="composer" aria-label="Mandar un mensaje al equipo">
-              <p class="speech-status" id="speechStatus"></p>
-              <form id="turnForm" class="turn-form">
-                <button class="mic-btn" id="micButton" data-action="toggle-mic" type="button" aria-pressed="false" aria-label="Hablar con el equipo (activar micrófono)" title="Hablar con el equipo (activar micrófono)">${micIcon()}</button>
-                <textarea id="turnInput" rows="1" placeholder="Escribile al equipo… (Enter envía · Shift+Enter, salto de línea)" aria-label="Mensaje para el equipo"></textarea>
-                <button class="send-btn" id="sendButton" type="submit" disabled>${sendIcon()}<span>Enviar</span></button>
-              </form>
-              <details class="mic-details" id="micDetails">
-                <summary>Ajustes de micrófono ${chevronIcon()}</summary>
-                <div id="micTuning"></div>
-              </details>
+
+            <section class="ws-pane" id="meetingView" role="tabpanel" aria-labelledby="tabMeeting">
+              <h2 class="sr-only">Conversación</h2>
+              <button class="work-notice" id="workNotice" data-action="open-work-tab" type="button" hidden>
+                <span class="live-dot" aria-hidden="true"></span>
+                <span>El equipo está trabajando en segundo plano — ver Organigrama</span>
+              </button>
+              <div class="transcript" id="transcript" tabindex="-1">
+                <div class="transcript-empty" id="transcriptEmpty">
+                  <p class="empty-title">La mesa está lista</p>
+                  <p>Escribí abajo o activá el micrófono para arrancar la reunión. Podés nombrar a un empleado para dirigirte a esa persona.</p>
+                </div>
+                <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
+              </div>
+              <section class="composer" aria-label="Mandar un mensaje al equipo">
+                <p class="speech-status" id="speechStatus"></p>
+                <form id="turnForm" class="turn-form">
+                  <button class="mic-btn" id="micButton" data-action="toggle-mic" type="button" aria-pressed="false" aria-label="Hablar con el equipo (activar micrófono)" title="Hablar con el equipo (activar micrófono)">${micIcon()}</button>
+                  <textarea id="turnInput" rows="1" placeholder="Escribile al equipo… (Enter envía · Shift+Enter, salto de línea)" aria-label="Mensaje para el equipo"></textarea>
+                  <button class="send-btn" id="sendButton" type="submit" disabled>${sendIcon()}<span>Enviar</span></button>
+                </form>
+                <details class="mic-details" id="micDetails">
+                  <summary>Ajustes de micrófono ${chevronIcon()}</summary>
+                  <div id="micTuning"></div>
+                </details>
+              </section>
+            </section>
+
+            <section class="ws-pane work-pane" id="workView" role="tabpanel" aria-labelledby="tabWork" hidden>
+              <h2 class="sr-only">Organigrama y trabajo del equipo</h2>
+              <div class="work-layout">
+                <section class="work-col" aria-labelledby="orgTitle">
+                  <div class="work-col-head">
+                    <h3 id="orgTitle">Organigrama</h3>
+                    <span class="work-col-hint">estado en vivo · cada 5 s</span>
+                  </div>
+                  <div id="orgChart"></div>
+                </section>
+                <section class="work-col" aria-labelledby="workActivityTitle">
+                  <div class="work-col-head">
+                    <h3 id="workActivityTitle">Trabajo</h3>
+                    <a class="btn ghost sm" id="workspaceLink" href="#" target="_blank" rel="noopener" hidden>Abrir workspace ↗</a>
+                  </div>
+                  <div id="workGoals"></div>
+                  <h4 class="work-feed-title">Actividad</h4>
+                  <div id="workFeedList" class="work-feed"></div>
+                </section>
+              </div>
             </section>
           </main>
         </div>
@@ -1646,6 +1831,7 @@ function mountShell() {
         </header>
         <form id="spawnForm" class="modal-form">
           <div class="modal-body">
+            <p class="role-note" id="spawnRoleNote" hidden></p>
             <div class="form-field">
               <label for="spawnName">Nombre</label>
               <input type="text" id="spawnName" class="form-control" maxlength="40" placeholder="Ej. Carlos" required />
@@ -1700,6 +1886,21 @@ function mountShell() {
             <button type="submit" class="btn primary" id="spawnSubmitLabel">Sumar al equipo</button>
           </footer>
         </form>
+      </section>
+    </div>
+
+    <div class="modal center" id="closeMeetingModal">
+      <div class="modal-backdrop" data-action="close-close-meeting"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="closeMeetingTitle">
+        <header class="modal-head">
+          <h2 id="closeMeetingTitle">Cerrar la reunión</h2>
+          <button class="icon-btn" data-action="close-close-meeting" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="modal-body" id="closeMeetingBody"></div>
+        <footer class="modal-foot">
+          <button type="button" class="btn ghost" data-action="close-close-meeting">Seguir conversando</button>
+          <button type="button" class="btn primary" data-action="confirm-end-meeting">Confirmar y ponerlos a trabajar</button>
+        </footer>
       </section>
     </div>
 
@@ -1782,6 +1983,10 @@ function mountShell() {
       closeTopModal();
     }
   });
+  // Árbol del organigrama: flechas / Home / End mueven el foco entre nodos.
+  document.addEventListener('keydown', handleOrgKeydown);
+  // El polling del panel de trabajo se pausa cuando la pestaña no se ve.
+  document.addEventListener('visibilitychange', syncWorkPolling);
   // El estado abierto/cerrado de las tareas por agente sobrevive a los
   // re-render de la región (toggle no burbujea: se captura).
   document.addEventListener('toggle', (event) => {
@@ -1858,6 +2063,35 @@ function handleDelegatedClick(event: Event) {
     case 'reset':
       trace('reset_clicked');
       send({ type: 'reset' });
+      break;
+    case 'end-meeting':
+      if (!state.connected || state.endingMeeting) break;
+      state.endingMeeting = true;
+      trace('end_meeting_clicked');
+      send({ type: 'end_meeting' });
+      upsertAlert('closing', 'Cierre de reunión', 'La CEO está preparando el repaso de lo asignado…', 'working');
+      markDirty('work');
+      break;
+    case 'confirm-end-meeting':
+      trace('end_meeting_confirmed');
+      send({ type: 'confirm_end_meeting' });
+      state.closingSummary = null;
+      closeModal('closeMeetingModal');
+      setWsTab('work');
+      upsertAlert('work-start', 'Equipo', 'Cierre confirmado: el equipo ya está trabajando en segundo plano.', 'ok', 4200);
+      break;
+    case 'close-close-meeting':
+      closeModal('closeMeetingModal');
+      break;
+    case 'ws-tab':
+      setWsTab(target.dataset.tab === 'work' ? 'work' : 'meeting');
+      break;
+    case 'open-work-tab':
+      setWsTab('work');
+      byId('tabWork').focus();
+      break;
+    case 'work-retry':
+      void refreshWork();
       break;
     case 'health':
       trace('health_clicked');
@@ -2309,6 +2543,17 @@ function openAgentDialog(agentId: string | null) {
 
   byId('spawnDialogTitle').textContent = agent ? `Editar a ${agent.name}` : 'Sumar al equipo';
   byId('spawnSubmitLabel').textContent = agent ? 'Guardar cambios' : 'Sumar al equipo';
+  const roleNote = byId('spawnRoleNote');
+  if (agent?.role === 'ceo') {
+    roleNote.hidden = false;
+    roleNote.innerHTML = '<span aria-hidden="true">👑</span> <strong>CEO</strong> — dirige la empresa, reparte el trabajo y cierra las reuniones con el repaso final.';
+  } else if (agent?.role === 'contratista') {
+    roleNote.hidden = false;
+    roleNote.innerHTML = '<span aria-hidden="true">🤝</span> <strong>Contratista de talento</strong> — cuando falta una habilidad en el equipo, contrata a la persona ideal y le asigna su primera tarea.';
+  } else {
+    roleNote.hidden = true;
+    roleNote.textContent = '';
+  }
   byId<HTMLInputElement>('spawnName').value = agent?.name || '';
   byId<HTMLInputElement>('spawnTitle').value = agent?.title || '';
   byId<HTMLInputElement>('spawnSkills').value = agent ? agent.domains.join(', ') : '';
@@ -2904,7 +3149,7 @@ function renderAgent(agent: Agent) {
       <div class="agent-top">
         <span class="agent-avatar" aria-hidden="true">${escapeHtml(agent.name.slice(0, 1))}</span>
         <div class="agent-id">
-          <h3>${escapeHtml(agent.name)}</h3>
+          <h3>${escapeHtml(agent.name)}${roleBadgeHtml(agent.role)}</h3>
           <p class="agent-role">${escapeHtml(agent.title)}</p>
         </div>
         ${disabled
@@ -3066,6 +3311,509 @@ function renderKeys() {
   `;
 }
 
+// ── Supervisión: organigrama, feed de trabajo y cierre de reunión ───────
+// Fuente de verdad durable: GET /api/companies/:id/work (polling cada 5 s
+// mientras el panel está visible). Los work_event del WS dan la inmediatez:
+// pintan un ítem efímero en el feed y disparan un refresh corto. Al fusionar,
+// lo derivado del endpoint pisa lo efímero (misma clave semántica).
+
+let workPollTimer = 0;
+let workEventRefreshTimer = 0;
+let workRefreshInFlight = false;
+const workHtmlCache = new Map<string, string>();
+
+function roleBadgeHtml(role?: string | null) {
+  if (role === 'ceo') {
+    return ' <span class="role-badge ceo" title="Dirige la empresa y reparte el trabajo"><span aria-hidden="true">👑</span>CEO</span>';
+  }
+  if (role === 'contratista') {
+    return ' <span class="role-badge contratista" title="Suma gente nueva cuando falta una habilidad"><span aria-hidden="true">🤝</span>Contratista</span>';
+  }
+  return '';
+}
+
+function syncEndMeetingButton() {
+  const button = document.getElementById('endMeetingBtn') as HTMLButtonElement | null;
+  if (!button) return;
+  button.disabled = !state.connected || state.endingMeeting;
+  button.textContent = state.endingMeeting ? 'Preparando cierre…' : 'Finalizar reunión';
+}
+
+function setWsTab(tab: 'meeting' | 'work') {
+  if (state.wsTab === tab) return;
+  state.wsTab = tab;
+  trace('ws_tab_changed', { tab });
+  markDirty('work');
+  syncWorkPolling();
+}
+
+// Polling SOLO mientras el panel Organigrama está visible (pestaña activa
+// del workspace + documento visible). Al arrancar hace un fetch inmediato.
+function syncWorkPolling() {
+  const shouldPoll = state.view === 'workspace'
+    && state.wsTab === 'work'
+    && document.visibilityState === 'visible';
+  if (shouldPoll && !workPollTimer) {
+    workPollTimer = window.setInterval(() => {
+      void refreshWork();
+    }, 5000);
+    void refreshWork();
+  } else if (!shouldPoll && workPollTimer) {
+    window.clearInterval(workPollTimer);
+    workPollTimer = 0;
+  }
+}
+
+async function refreshWork() {
+  const companyId = state.companyId;
+  if (!companyId || workRefreshInFlight) return;
+  workRefreshInFlight = true;
+  try {
+    const data = await apiJson<WorkData>(`/api/companies/${encodeURIComponent(companyId)}/work`);
+    if (state.companyId !== companyId) return;
+    state.workData = data;
+    state.workError = false;
+    state.workActive = data.goals.some((goal) => goal.status === 'active'
+      && goal.tasks.some((task) => task.status === 'pending' || task.status === 'in_progress'));
+  } catch {
+    if (state.companyId === companyId) {
+      state.workError = true;
+    }
+  } finally {
+    workRefreshInFlight = false;
+  }
+  markDirty('work');
+}
+
+// Debounce corto tras cada work_event: el endpoint confirma lo que el WS
+// anticipó (y trae lo que el WS no cuenta, como el estado de las metas).
+function scheduleWorkRefresh() {
+  window.clearTimeout(workEventRefreshTimer);
+  workEventRefreshTimer = window.setTimeout(() => {
+    if (state.view === 'workspace') {
+      void refreshWork();
+    }
+  }, 450);
+}
+
+function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  const name = text(event.agentName);
+  const taskId = text(event.taskId) || String(event.taskId ?? '');
+  let item: Omit<WorkFeedItem, 'at'> | null = null;
+
+  switch (event.kind) {
+    case 'task_started':
+      item = {
+        key: `start-${taskId}`,
+        icon: '🔨',
+        html: `<strong>${escapeHtml(name)}</strong> empezó: ${escapeHtml(clip(text(event.text), 160))}`
+      };
+      break;
+    case 'file_written': {
+      const path = text(event.path);
+      item = {
+        key: `file-${taskId}-${path}`,
+        icon: '📄',
+        html: `<strong>${escapeHtml(name)}</strong> escribió ${artifactLinkHtml(path)}`
+      };
+      break;
+    }
+    case 'task_done':
+      item = {
+        key: `done-${taskId}`,
+        icon: '✅',
+        html: `<strong>${escapeHtml(name)}</strong> terminó: ${escapeHtml(clip(text(event.summary), 220))}${artifactLinksHtml(event.artifacts)}`
+      };
+      break;
+    case 'task_blocked':
+      item = {
+        key: `blocked-${taskId}`,
+        icon: '⛔',
+        html: `<strong>${escapeHtml(name)}</strong> quedó bloqueado: ${escapeHtml(clip(text(event.reason), 200))}`
+      };
+      break;
+    case 'task_retry':
+      item = {
+        key: `retry-${taskId}`,
+        icon: '🔁',
+        html: `A <strong>${escapeHtml(name)}</strong> le falló un intento; la tarea vuelve a la cola.`
+      };
+      break;
+    case 'agent_hired': {
+      const by = text(event.by);
+      const title = text(event.title);
+      item = {
+        key: `done-${taskId}`,
+        icon: '🧑‍💼',
+        html: `<strong>${escapeHtml(by)}</strong> contrató a <strong>${escapeHtml(name)}</strong> (${escapeHtml(title)})`
+      };
+      upsertAlert(`hired-${text(event.agentId)}`, 'Contratación', `${by} contrató a ${name} (${title}).`, 'ok', 5200);
+      break;
+    }
+    case 'goal_done': {
+      const title = text(event.title);
+      item = {
+        key: `goal-${text(event.goalId)}`,
+        icon: '🎯',
+        html: `Meta cumplida: <strong>${escapeHtml(title)}</strong>`
+      };
+      upsertAlert('goal-done', 'Meta cumplida', title || 'El equipo terminó todo lo asignado.', 'ok', 6000);
+      break;
+    }
+  }
+
+  if (item) {
+    state.workEvents = [{ ...item, at: Date.now() }, ...state.workEvents].slice(0, 120);
+  }
+  if (event.kind === 'task_started' || event.kind === 'file_written') {
+    state.workActive = true;
+  }
+  markDirty('work');
+  scheduleWorkRefresh();
+}
+
+function workspaceBaseUrl() {
+  return state.workData?.workspaceUrl || (state.companyId ? `/workspace/${encodeURIComponent(state.companyId)}/` : '');
+}
+
+function artifactLinkHtml(path: string) {
+  const base = workspaceBaseUrl();
+  const clean = String(path || '').replace(/^\/+/, '');
+  if (!base || !clean) {
+    return escapeHtml(clean || path);
+  }
+  return `<a class="artifact-link" href="${escapeHtml(base + encodeURI(clean))}" target="_blank" rel="noopener">${escapeHtml(clean)}</a>`;
+}
+
+function artifactLinksHtml(artifacts: unknown) {
+  const list = Array.isArray(artifacts) ? artifacts.map(String).filter(Boolean).slice(0, 6) : [];
+  if (list.length === 0) return '';
+  return `<span class="feed-artifacts">${list.map((path) => artifactLinkHtml(path)).join('')}</span>`;
+}
+
+// Fusión del feed: primero lo derivado de /work (runs + metas cumplidas,
+// durable y con resúmenes autoritativos), después los eventos efímeros del
+// WS que todavía no aparecieron en el endpoint. Claves semánticas evitan
+// duplicados; el orden final es cronológico descendente.
+function buildFeedItems(): WorkFeedItem[] {
+  const items = new Map<string, WorkFeedItem>();
+  const addIfAbsent = (entry: WorkFeedItem) => {
+    if (!items.has(entry.key)) {
+      items.set(entry.key, entry);
+    }
+  };
+
+  const data = state.workData;
+  if (data) {
+    const taskText = new Map<string, string>();
+    for (const goal of data.goals) {
+      for (const task of goal.tasks) {
+        taskText.set(task.id, task.text);
+      }
+    }
+    const memberById = new Map(data.team.map((member) => [member.id, member]));
+    for (const run of data.runs) {
+      const member = memberById.get(run.agent_id);
+      const runName = member?.name || run.agent_id;
+      const startedAt = Date.parse(run.started_at) || Date.now();
+      if (run.ended_at) {
+        const endedAt = Date.parse(run.ended_at) || startedAt;
+        if (run.status === 'ok') {
+          const hiring = member?.role === 'contratista';
+          addIfAbsent({
+            key: `done-${run.task_id}`,
+            at: endedAt,
+            icon: hiring ? '🧑‍💼' : '✅',
+            html: `<strong>${escapeHtml(runName)}</strong> ${hiring ? '' : 'terminó: '}${escapeHtml(clip(run.summary || 'Tarea completada.', 220))}${artifactLinksHtml(run.artifacts)}`
+          });
+        } else if (run.status === 'blocked') {
+          addIfAbsent({
+            key: `blocked-${run.task_id}`,
+            at: endedAt,
+            icon: '⛔',
+            html: `<strong>${escapeHtml(runName)}</strong> quedó bloqueado: ${escapeHtml(clip(run.summary || 'sin detalle', 200))}`
+          });
+        } else {
+          addIfAbsent({
+            key: `retry-${run.task_id}`,
+            at: endedAt,
+            icon: '🔁',
+            html: `A <strong>${escapeHtml(runName)}</strong> le falló un intento; la tarea vuelve a la cola.`
+          });
+        }
+      }
+      addIfAbsent({
+        key: `start-${run.task_id}`,
+        at: startedAt,
+        icon: '🔨',
+        html: `<strong>${escapeHtml(runName)}</strong> empezó: ${escapeHtml(clip(taskText.get(run.task_id) || 'una tarea', 160))}`
+      });
+    }
+    for (const goal of data.goals) {
+      if (goal.status === 'done') {
+        addIfAbsent({
+          key: `goal-${goal.id}`,
+          at: Date.parse(goal.completed_at || goal.created_at || '') || Date.now(),
+          icon: '🎯',
+          html: `Meta cumplida: <strong>${escapeHtml(goal.title)}</strong>`
+        });
+      }
+    }
+  }
+
+  for (const event of state.workEvents) {
+    addIfAbsent(event);
+  }
+
+  return [...items.values()].sort((a, b) => b.at - a.at).slice(0, 60);
+}
+
+// Pinta cada bloque del panel solo si su HTML cambió (conserva el foco y
+// evita reconstruir DOM en cada tick del polling).
+function setWorkHtml(id: string, html: string) {
+  if (workHtmlCache.get(id) === html) return;
+  const el = byId(id);
+  const active = document.activeElement;
+  const focusedAgentId = active instanceof HTMLElement && el.contains(active)
+    ? active.getAttribute('data-agent-id')
+    : null;
+  workHtmlCache.set(id, html);
+  el.innerHTML = html;
+  if (id === 'orgChart') {
+    const nodes = el.querySelectorAll<HTMLElement>('[data-org-node]');
+    nodes.forEach((node) => { node.tabIndex = -1; });
+    const restored = focusedAgentId
+      ? el.querySelector<HTMLElement>(`[data-org-node][data-agent-id="${CSS.escape(focusedAgentId)}"]`)
+      : null;
+    const roving = restored || nodes[0] || null;
+    if (roving) {
+      roving.tabIndex = 0;
+    }
+    if (restored) {
+      restored.focus();
+    }
+  }
+}
+
+function renderWorkView() {
+  const link = byId<HTMLAnchorElement>('workspaceLink');
+  const url = state.workData?.workspaceUrl;
+  link.hidden = !url;
+  if (url) {
+    link.href = url;
+  }
+  setWorkHtml('orgChart', renderOrgChart());
+  setWorkHtml('workGoals', renderWorkGoals());
+  setWorkHtml('workFeedList', renderWorkFeed());
+}
+
+function renderOrgChart(): string {
+  const data = state.workData;
+  if (!data) {
+    return state.workError
+      ? '<div class="grid-note"><p class="muted">No pude cargar el organigrama.</p><button class="btn ghost sm" data-action="work-retry" type="button">Reintentar</button></div>'
+      : '<p class="muted">Cargando el organigrama…</p>';
+  }
+  if (data.team.length === 0) {
+    return '<p class="muted">Sin equipo todavía.</p>';
+  }
+
+  const ids = new Set(data.team.map((member) => member.id));
+  const rank = (member: WorkMember) => (member.role === 'ceo' ? 0 : member.role === 'contratista' ? 1 : 2);
+  const sorted = [...data.team].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const children = new Map<string, WorkMember[]>();
+  const roots: WorkMember[] = [];
+  for (const member of sorted) {
+    if (member.managerId && member.managerId !== member.id && ids.has(member.managerId)) {
+      children.set(member.managerId, [...(children.get(member.managerId) || []), member]);
+    } else {
+      roots.push(member);
+    }
+  }
+
+  const activeTasks = data.goals.filter((goal) => goal.status === 'active').flatMap((goal) => goal.tasks);
+  const allTasks = data.goals.flatMap((goal) => goal.tasks);
+  const seen = new Set<string>();
+
+  const renderNode = (member: WorkMember, level: number): string => {
+    if (seen.has(member.id)) return '';
+    seen.add(member.id);
+    const kids = children.get(member.id) || [];
+    const working = activeTasks.find((task) => task.agentId === member.id && task.status === 'in_progress');
+    const blocked = activeTasks.find((task) => task.agentId === member.id && task.status === 'blocked');
+    const queued = activeTasks.filter((task) => task.agentId === member.id && task.status === 'pending').length;
+    const doneCount = allTasks.filter((task) => task.agentId === member.id && task.status === 'done').length;
+
+    let statusHtml: string;
+    let statusLabel: string;
+    if (working) {
+      statusLabel = `Trabajando: ${working.text}`;
+      statusHtml = `<span class="org-status working"><span class="live-dot" aria-hidden="true"></span>Trabajando: ${escapeHtml(clip(working.text, 76))}</span>`;
+    } else if (blocked) {
+      statusLabel = `Bloqueado${blocked.blockedReason ? `: ${blocked.blockedReason}` : ''}`;
+      statusHtml = `<span class="org-status blocked" title="${escapeHtml(blocked.blockedReason || '')}">Bloqueado${blocked.blockedReason ? `: ${escapeHtml(clip(blocked.blockedReason, 64))}` : ''}</span>`;
+    } else {
+      statusLabel = 'En reunión';
+      statusHtml = '<span class="org-status idle">En reunión</span>';
+    }
+    if (queued > 0) {
+      statusHtml += `<span class="org-queue">${queued} en cola</span>`;
+      statusLabel += ` · ${queued} en cola`;
+    }
+
+    const roleLabel = member.role === 'ceo' ? 'CEO' : member.role === 'contratista' ? 'Contratista' : '';
+    const aria = `${member.name}, ${member.title}${roleLabel ? ` (${roleLabel})` : ''}. ${statusLabel}. ${doneCount} tareas completadas.`;
+
+    return `
+      <li role="treeitem" aria-level="${level}"${kids.length ? ' aria-expanded="true"' : ''}>
+        <div class="org-node${working ? ' is-working' : ''}${!working && blocked ? ' is-blocked' : ''}"
+          data-org-node data-agent-id="${escapeHtml(member.id)}" tabindex="-1"
+          style="--agent-color: ${escapeHtml(member.color || '#5c5470')}" aria-label="${escapeHtml(aria)}">
+          <span class="org-avatar" aria-hidden="true">${escapeHtml(member.name.slice(0, 1))}</span>
+          <span class="org-node-main">
+            <span class="org-name">${escapeHtml(member.name)}${roleBadgeHtml(member.role)}</span>
+            <span class="org-title">${escapeHtml(member.title)}</span>
+            <span class="org-status-line">${statusHtml}</span>
+          </span>
+          ${doneCount > 0 ? `<span class="org-done" title="Tareas completadas">✓ ${doneCount}</span>` : ''}
+        </div>
+        ${kids.length ? `<ul role="group">${kids.map((kid) => renderNode(kid, level + 1)).join('')}</ul>` : ''}
+      </li>
+    `;
+  };
+
+  return `<ul class="org-tree" role="tree" aria-label="Jerarquía del equipo">${roots.map((root) => renderNode(root, 1)).join('')}</ul>`;
+}
+
+function taskChipHtml(status: string) {
+  const map: Record<string, [string, string]> = {
+    pending: ['pending', 'En cola'],
+    in_progress: ['in_progress', 'En curso'],
+    done: ['done', 'Hecha'],
+    blocked: ['blocked', 'Bloqueada']
+  };
+  const [cls, label] = map[status] || ['pending', status];
+  const dot = cls === 'in_progress' ? '<span class="live-dot" aria-hidden="true"></span>' : '';
+  return `<span class="task-chip ${cls}">${dot}${escapeHtml(label)}</span>`;
+}
+
+function renderWorkGoals(): string {
+  const data = state.workData;
+  if (!data) return '';
+  const goals = [...data.goals]
+    .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active'))
+    .slice(0, 4);
+  if (goals.length === 0) {
+    return '<p class="muted">Todavía no hay metas. Asigná tareas en la reunión y cerrala con “Finalizar reunión” para que el equipo arranque.</p>';
+  }
+  const memberName = (agentId: string | null) =>
+    (agentId && data.team.find((member) => member.id === agentId)?.name) || '';
+
+  return goals.map((goal) => `
+    <article class="goal-card${goal.status === 'done' ? ' is-done' : ''}">
+      <header class="goal-card-head">
+        <span class="goal-icon" aria-hidden="true">🎯</span>
+        <div class="goal-card-titles">
+          <strong>${escapeHtml(goal.title)}</strong>
+          ${goal.description ? `<p>${escapeHtml(clip(goal.description, 180))}</p>` : ''}
+        </div>
+        <span class="task-chip ${goal.status === 'done' ? 'done' : 'in_progress'}">${goal.status === 'done' ? 'Cumplida' : 'Activa'}</span>
+      </header>
+      ${goal.tasks.length ? `<div class="goal-tasks">${goal.tasks.map((task) => `
+        <div class="work-task">
+          ${taskChipHtml(task.status)}
+          <span class="work-task-text">${escapeHtml(task.text)}${memberName(task.agentId) ? ` <span class="work-task-agent">· ${escapeHtml(memberName(task.agentId))}</span>` : ''}
+            ${task.status === 'blocked' && task.blockedReason ? `<span class="work-task-reason">${escapeHtml(clip(task.blockedReason, 160))}</span>` : ''}
+          </span>
+        </div>
+      `).join('')}</div>` : ''}
+    </article>
+  `).join('');
+}
+
+function renderWorkFeed(): string {
+  const items = buildFeedItems();
+  if (items.length === 0) {
+    return '<p class="muted">Sin actividad todavía. Cuando confirmes el cierre de una reunión con tareas, el trabajo del equipo aparece acá en vivo.</p>';
+  }
+  return items.map((item) => `
+    <div class="feed-item">
+      <span class="feed-icon" aria-hidden="true">${item.icon}</span>
+      <span class="feed-text">${item.html}</span>
+      <time class="feed-time" datetime="${new Date(item.at).toISOString()}">${shortTime(item.at)}</time>
+    </div>
+  `).join('');
+}
+
+function handleOrgKeydown(event: KeyboardEvent) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const origin = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-org-node]') : null;
+  const chart = document.getElementById('orgChart');
+  if (!origin || !chart?.contains(origin)) return;
+  const nodes = [...chart.querySelectorAll<HTMLElement>('[data-org-node]')];
+  const index = nodes.indexOf(origin);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = event.key === 'ArrowDown'
+    ? nodes[Math.min(nodes.length - 1, index + 1)]
+    : event.key === 'ArrowUp'
+      ? nodes[Math.max(0, index - 1)]
+      : event.key === 'Home'
+        ? nodes[0]
+        : nodes[nodes.length - 1];
+  if (next && next !== origin) {
+    origin.tabIndex = -1;
+    next.tabIndex = 0;
+    next.focus();
+  }
+}
+
+// Modal de validación del cierre: la meta, quién hace qué y qué se va a
+// contratar. Confirmar manda confirm_end_meeting; "Seguir conversando"
+// solo cierra el modal.
+function openClosingModal() {
+  const summary = state.closingSummary;
+  if (!summary) return;
+  const agentById = (id: string) => state.agents.find((agent) => agent.id === id);
+  byId('closeMeetingBody').innerHTML = `
+    <p class="close-intro">Esto es lo que el equipo entendió de la reunión. Si está bien, confirmá y se ponen a trabajar en segundo plano; si falta algo, seguí conversando.</p>
+    <section class="close-goal" aria-label="Meta de la reunión">
+      <span class="eyebrow">Meta</span>
+      <h3>${escapeHtml(summary.goalTitle)}</h3>
+      ${summary.goalDescription ? `<p>${escapeHtml(summary.goalDescription)}</p>` : ''}
+    </section>
+    <section class="close-assignments" aria-label="Asignaciones por empleado">
+      <span class="eyebrow">Quién hace qué</span>
+      ${summary.assignments.length ? summary.assignments.map((assignment) => `
+        <article class="assign-card" style="--agent-color: ${escapeHtml(agentById(assignment.agentId)?.color || state.company?.color || '#31655a')}">
+          <span class="org-avatar" aria-hidden="true">${escapeHtml(assignment.agentName.slice(0, 1))}</span>
+          <div class="assign-info">
+            <strong>${escapeHtml(assignment.agentName)}${roleBadgeHtml(agentById(assignment.agentId)?.role)}</strong>
+            <ul>${assignment.tasks.map((task) => `<li>${escapeHtml(task)}</li>`).join('')}</ul>
+          </div>
+        </article>
+      `).join('') : '<p class="muted">No quedaron tareas pendientes asignadas. Podés confirmar igual (la reunión se archiva) o volver y repartir trabajo.</p>'}
+    </section>
+    ${summary.hires.length ? `
+      <section class="close-hires" aria-label="Contrataciones detectadas">
+        <span class="eyebrow">Se va a contratar</span>
+        ${summary.hires.map((hire) => `<div class="hire-row"><span aria-hidden="true">🧑‍💼</span><span>${escapeHtml(hire.need)}</span></div>`).join('')}
+        <p class="hint">El contratista va a crear a la persona ideal para cada necesidad y le va a asignar su primera tarea.</p>
+      </section>
+    ` : ''}
+  `;
+  openModal('closeMeetingModal');
+}
+
+function clip(value: string, max: number) {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function shortTime(at: number) {
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 // ── Acciones del composer ───────────────────────────────────────────────
 
 function submitTurn() {
@@ -3152,6 +3900,13 @@ function traceOutgoingPayload(payload: unknown) {
   }
 
   trace('client_ws_send', { ...message });
+}
+
+// Empleados afectados por la falla sistémica en curso (se limpia al recuperarse).
+const systemicScopes = new Set<string>();
+
+function isSystemicFailure(message: string): boolean {
+  return /clave|api key|cuota|quota|rate.?limit|429|401|sin conexion|sin conexión|no configurad/i.test(message || '');
 }
 
 function upsertAlert(id: string, scope: string, message: string, tone: StatusAlert['tone'], timeout?: number) {

@@ -7,7 +7,8 @@ export class ApiKeyRing {
       value,
       cooldownUntil: 0,
       failures: 0,
-      lastError: null
+      lastError: null,
+      disabled: false
     }));
     this.cursor = 0;
     this.telemetry = null;
@@ -21,7 +22,8 @@ export class ApiKeyRing {
       value,
       cooldownUntil: 0,
       failures: 0,
-      lastError: null
+      lastError: null,
+      disabled: false
     }));
     this.cursor = 0;
     this.logKey('api_keys_replaced', { count: keys.length });
@@ -73,7 +75,23 @@ export class ApiKeyRing {
       cooldownSeconds: Math.max(0, Math.ceil((k.cooldownUntil - now) / 1000)),
       failures: k.failures
     }));
-    this.logKey('api_key_all_cooldown', { keys: cooldowns });
+
+    // Modo degradado: una clave en enfriamiento transitorio (timeout, 5xx,
+    // rate limit puntual) NO puede dejar la app muerta — con una sola clave
+    // eso significaba que TODOS los agentes fallaban a la vez. Solo las
+    // claves rechazadas de raíz (401) quedan realmente fuera de juego.
+    const usable = this.keys.filter((key) => !key.disabled);
+    if (usable.length > 0) {
+      const candidate = usable.reduce((best, key) => (key.cooldownUntil < best.cooldownUntil ? key : best));
+      this.logKey('api_key_degraded_use', {
+        keyId: candidate.id,
+        waitingSeconds: Math.max(0, Math.ceil((candidate.cooldownUntil - now) / 1000)),
+        keys: cooldowns
+      });
+      return candidate;
+    }
+
+    this.logKey('api_key_all_cooldown', { keys: cooldowns, disabled: true });
     return null;
   }
 
@@ -92,8 +110,18 @@ export class ApiKeyRing {
       this.logKey('api_key_model_error', { keyId: key.id, error: text.slice(0, 200), modelConfig: true });
       return;
     }
-    const cooldownMs = permanent ? 24 * 60 * 60 * 1000 : quota ? 60 * 60 * 1000 : 45 * 1000;
+    // Enfriamientos cortos y escalonados: los 429 de MiniMax suelen ser por
+    // concurrencia (una reunión + el equipo trabajando), no por cuota agotada;
+    // castigarlos con una hora dejaba la empresa muda. Solo un 401 inhabilita
+    // la clave de verdad (esa sí hay que cambiarla en Ajustes).
+    const quotaLadder = [20 * 1000, 45 * 1000, 90 * 1000, 5 * 60 * 1000];
+    const cooldownMs = permanent
+      ? 24 * 60 * 60 * 1000
+      : quota
+        ? quotaLadder[Math.min(key.failures - 1, quotaLadder.length - 1)]
+        : 8 * 1000;
     key.cooldownUntil = Date.now() + cooldownMs;
+    key.disabled = permanent;
 
     this.logKey('api_key_failure', {
       keyId: key.id,
@@ -112,6 +140,8 @@ export class ApiKeyRing {
     }
     key.failures = 0;
     key.lastError = null;
+    key.disabled = false;
+    key.cooldownUntil = 0;
     this.logKey('api_key_success', { keyId: key.id });
   }
 
@@ -120,6 +150,7 @@ export class ApiKeyRing {
     return this.keys.map((key) => ({
       id: key.id,
       available: key.cooldownUntil <= now,
+      disabled: Boolean(key.disabled),
       cooldownSeconds: Math.max(0, Math.ceil((key.cooldownUntil - now) / 1000)),
       failures: key.failures,
       lastError: key.lastError

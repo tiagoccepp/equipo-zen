@@ -200,7 +200,7 @@ export async function streamChat(keyRing, options, onDelta) {
       break;
     }
   }
-  throw lastError || new Error(`No hay claves disponibles para ${options.scope}.`);
+  throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 
 // Llamada no-streaming (router/observador/reflexión). Devuelve texto limpio.
@@ -259,7 +259,7 @@ export async function completeChat(keyRing, options) {
       break;
     }
   }
-  throw lastError || new Error(`No hay claves disponibles para ${options.scope}.`);
+  throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 
 function isModelNotFound(error) {
