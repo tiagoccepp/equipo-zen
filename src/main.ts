@@ -1912,6 +1912,11 @@ let callCanvasLabel = '';
 let callFpsTimer = 0;
 
 // Los empleados en pausa no están en la llamada.
+// Corona mínima para la CEO: 1em (el alto del nombre), trazo del mismo color
+// que el texto. Es informativa, no decorativa: sirve para saber con quién
+// estás hablando de un vistazo.
+const ICONO_CEO = `<svg class="call-orb-crown" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.6 18.4 3 9.4l4.4 3.1L12 5.6l4.6 6.9L21 9.4l-1.6 9z"/></svg>`;
+
 function callAgents(): Agent[] {
   return state.agents.filter((agent) => agent.enabled !== false);
 }
@@ -2053,9 +2058,10 @@ function fitOrbSize(stage: HTMLElement, box: DOMRect) {
   const gapX = parseFloat(estilo.columnGap) || 0;
   const gapY = parseFloat(estilo.rowGap) || 0;
 
-  // Cada esfera carga abajo su nombre: ese alto no es parte del círculo.
-  const primerNombre = lista.querySelector<HTMLElement>('.call-orb-name');
-  const altoNombre = primerNombre ? primerNombre.getBoundingClientRect().height : 18;
+  // Cada esfera carga abajo su nombre y su puesto: ese alto no es parte del
+  // círculo y hay que descontarlo para que la grilla no desborde.
+  const primeraEtiqueta = lista.querySelector<HTMLElement>('.call-orb-label');
+  const altoNombre = primeraEtiqueta ? primeraEtiqueta.getBoundingClientRect().height : 34;
   const primeraOrbe = lista.querySelector<HTMLElement>('.call-orb');
   const separacion = primeraOrbe ? parseFloat(getComputedStyle(primeraOrbe).rowGap) || 8 : 8;
 
@@ -2131,7 +2137,7 @@ function syncCallView() {
   const agents = callAgents();
 
   // El elenco se repinta solo si cambió (nombre, color o quién está en la mesa).
-  const signature = agents.map((agent) => `${agent.id}:${agent.color}:${agent.name}`).join('|');
+  const signature = agents.map((agent) => `${agent.id}:${agent.color}:${agent.name}:${agent.title}:${agent.role}`).join('|');
   if (signature !== callOrbsSignature) {
     callOrbsSignature = signature;
     // Las columnas las decide el elenco: 6 empleados quedan 3×2 y 8 quedan
@@ -2141,7 +2147,10 @@ function syncCallView() {
       ? agents.map((agent) => `
         <li class="call-orb" data-orb-id="${escapeHtml(agent.id)}">
           <span class="call-orb-slot" aria-hidden="true"></span>
-          <span class="call-orb-name">${escapeHtml(agent.name)}</span>
+          <span class="call-orb-label">
+            <span class="call-orb-name">${escapeHtml(agent.name)}${agent.role === 'ceo' ? ICONO_CEO : ''}</span>
+            ${agent.title ? `<span class="call-orb-role">${escapeHtml(agent.title)}</span>` : ''}
+          </span>
         </li>
       `).join('')
       : '';
