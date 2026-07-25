@@ -85,4 +85,16 @@ test('un log roto nunca tumba la conversación', async () => {
   await flushLog();
 });
 
+
+test('el payload no puede pisar el tipo de la entrada', async () => {
+  // Los eventos de trabajo traen su propio "kind" adentro; sin protección,
+  // el diario terminaba clasificando mal sus propias entradas.
+  logEvent('trabajo_file_written', { kind: 'file_written', path: 'index.html', agentName: 'Bruno' });
+  await flushLog();
+
+  const entries = await readLog({ kind: 'trabajo_file_written' });
+  assert.equal(entries.at(-1).kind, 'trabajo_file_written');
+  assert.equal(entries.at(-1).path, 'index.html');
+});
+
 process.on('exit', () => rmSync(dir, { recursive: true, force: true }));

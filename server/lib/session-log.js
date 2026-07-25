@@ -91,8 +91,10 @@ export function logEvent(kind, payload = {}) {
   }
   const entry = {
     at: new Date().toISOString(),
-    kind,
-    ...redactDeep(payload)
+    ...redactDeep(payload),
+    // El tipo explícito manda: si el payload trae su propio 'kind' (los
+    // eventos de trabajo lo hacen) no puede pisar el del diario.
+    kind
   };
   queue = queue
     .then(async () => {
