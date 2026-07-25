@@ -23,6 +23,16 @@ Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:87
 
 Scripts: `npm test` (suite `node:test`), `npm run typecheck`, `npm run build`.
 
+## La empresa digital (estilo [Paperclip](https://github.com/paperclipai/paperclip))
+
+Cada simulación es una **empresa que trabaja de verdad**:
+
+- **Jerarquía**: toda empresa tiene una **CEO** (interlocutora directa: si nadie tiene el dominio, ella toma el punto) y un **contratista de talento**; el resto del equipo le reporta a la CEO. Árbol observable en el panel Organigrama.
+- **Paciencia conversacional**: si escribís/decís tu idea en varias partes, los agentes esperan (2.6s, más si la frase quedó abierta) y responden UNA vez con todo el contexto.
+- **Reunión → trabajo**: en la reunión exponés qué querés lograr y se reparten tareas. Al tocar **Finalizar reunión**, la CEO repasa en voz alta quién quedó con qué (validación conversacional) y, cuando confirmás, se crea la **meta** y el equipo se pone a trabajar en segundo plano.
+- **Trabajo real**: un motor de heartbeats (checkout atómico, máx. 2 corridas en paralelo, pasos acotados con herramientas de archivos sandboxeadas) hace que cada empleado PRODUZCA entregables reales en `workspace/<empresa>/` — una página web pedida en reunión termina siendo un `index.html` navegable en `/workspace/<empresa>/`. Todo con log durable por corrida.
+- **Contratación automática**: si una tarea necesita habilidades que nadie tiene, el contratista diseña al empleado ideal (perfil completo, voz incluida), lo suma al equipo reportando a la CEO y le delega el trabajo.
+
 ## Cómo funciona
 
 - **Simulaciones**: el home es una galería de empresas. Creá una desde plantilla (equipo pre-armado con skills y conocimientos) o desde cero. Cada empresa tiene su escenario, su equipo y su historial de reuniones, todo persistido en SQLite (`node:sqlite`, WAL — sobrevive a `kill -9`).
