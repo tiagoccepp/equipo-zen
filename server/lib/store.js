@@ -253,16 +253,26 @@ export class Store {
     if (!company) {
       return null;
     }
-    this.db.prepare('UPDATE companies SET name = ?, industry = ?, emoji = ?, color = ?, scenario = ? WHERE id = ?').run(
+    this.db.prepare('UPDATE companies SET name = ?, industry = ?, emoji = ?, color = ?, scenario = ?, status = ? WHERE id = ?').run(
       patch.name ?? company.name,
       patch.industry ?? company.industry,
       patch.emoji ?? company.emoji,
       patch.color ?? company.color,
       patch.scenario ?? company.scenario,
+      patch.status ?? company.status,
       companyId
     );
     this.logChange(actor, 'company', companyId, 'update', { patch });
     return this.getCompany(companyId);
+  }
+
+  listCompaniesByStatus(status) {
+    if (status === 'all') {
+      return this.db.prepare('SELECT * FROM companies ORDER BY last_active_at DESC').all().map(rowToCompany);
+    }
+    return this.db.prepare('SELECT * FROM companies WHERE status = ? ORDER BY last_active_at DESC')
+      .all(status)
+      .map(rowToCompany);
   }
 
   archiveCompany(companyId, actor = 'user') {

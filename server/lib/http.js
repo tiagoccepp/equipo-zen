@@ -146,7 +146,12 @@ export function createApp({ store }) {
     res.json({ directory: logDirectory(), days: await listLogDays(), entries });
   });
 
-  app.get('/api/companies', (_req, res) => {
+  app.get('/api/companies', (req, res) => {
+    // Por defecto solo las activas; ?status=archived|all para ver el resto.
+    const status = req.query.status;
+    if (status === 'archived' || status === 'all') {
+      return res.json({ companies: store.listCompaniesByStatus(status) });
+    }
     res.json({ companies: store.listCompanies() });
   });
 
@@ -263,6 +268,9 @@ export function createApp({ store }) {
     if (typeof body.emoji === 'string' && body.emoji.trim()) patch.emoji = body.emoji.slice(0, 8);
     if (typeof body.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(body.color)) patch.color = body.color;
     if (typeof body.scenario === 'string') patch.scenario = body.scenario.slice(0, 2000);
+    // Restaurar una empresa archivada (y volver a archivarla) es un cambio de
+    // estado más: sin esto, archivar era un viaje de ida sin vuelta.
+    if (body.status === 'active' || body.status === 'archived') patch.status = body.status;
     const company = store.updateCompany(req.params.id, patch);
     if (!company) {
       return res.status(404).json({ error: 'empresa no encontrada' });

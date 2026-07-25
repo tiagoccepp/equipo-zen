@@ -32,7 +32,17 @@ type StatusAlert = {
   message: string;
   timeout?: number;
   // Toast accionable: un botón que dispara un data-action del delegador.
-  action?: { label: string; action: string; goalId?: string; path?: string };
+  action?: { label: string; action: string; goalId?: string; path?: string; companyId?: string };
+};
+
+// Una empresa archivada, reconstruida para el panel "Archivadas" del home.
+// `teamSize`/`meetingCount` llegan en el segundo paso (al desplegar) y son
+// la prueba visible de que archivar no borró nada.
+type ArchivedCompany = {
+  id: string;
+  name: string;
+  teamSize: number | null;
+  meetingCount: number | null;
 };
 
 type MicSettings = {
@@ -256,7 +266,19 @@ const MIC_SETTINGS_STORAGE_KEY = 'reunion.micSettings.v1';
 const ASR_LOCALE_STORAGE_KEY = 'reunion.asrLocale.v1';
 const LAST_COMPANY_STORAGE_KEY = 'sim.companyId.v1';
 const MEETING_STORAGE_PREFIX = 'sim.meetingId.';
+const SETUP_NOTICE_STORAGE_KEY = 'sim.setupNotice.dismissed.v1';
 const ASR_LOCALES = ['es-ES', 'es-AR', 'es-MX', 'en-US'];
+
+// Archivar no viaja al servidor hasta que se agota esta ventana: mientras
+// tanto "Deshacer" no necesita restaurar nada, simplemente cancela. Es la
+// única forma de que deshacer funcione siempre, incluso sin backend.
+const ARCHIVE_UNDO_MS = 9000;
+
+// El mismo comando que imprime `npm run doctor` cuando falta el entorno de
+// Python: crea el venv si no está e instala voz y transcripción de una. Es
+// seguro correrlo aunque el venv ya exista. (Si cambia en scripts/doctor.mjs,
+// cambiarlo acá también.)
+const SETUP_INSTALL_CMD = "python3 -m venv .venv-tts && .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn";
 
 const DEFAULT_VOICE = 'M4';
 const AGENT_COLORS = ['#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#5c5470', '#15618a', '#c2255c', '#f08c00'];
@@ -306,6 +328,24 @@ function clearLastCompanyId(companyId: string) {
     window.localStorage.removeItem(`${MEETING_STORAGE_PREFIX}${companyId}`);
   } catch {
     // Best effort.
+  }
+}
+
+// El aviso de "falta la voz" se descarta una vez y no vuelve: es información,
+// no una alarma. (El estado completo sigue estando en ⚙ Ajustes.)
+function loadSetupDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(SETUP_NOTICE_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveSetupDismissed() {
+  try {
+    window.localStorage.setItem(SETUP_NOTICE_STORAGE_KEY, '1');
+  } catch {
+    // Sin persistencia el aviso se descarta igual, pero solo por esta sesión.
   }
 }
 
@@ -861,6 +901,13 @@ const state = {
   companies: [] as Company[],
   companiesLoading: false,
   companiesError: false,
+  // Archivado en curso: la empresa ya salió del listado pero todavía NO se
+  // archivó en el servidor. Si el usuario deshace, nunca pasó nada.
+  pendingArchive: null as { company: Company; timer: number } | null,
+  archived: [] as ArchivedCompany[],
+  archivedDetailed: false,
+  archivedError: false,
+  restoringId: '',
   templates: [] as CompanyTemplate[],
   templatesLoaded: false,
   selectedTemplateId: '',
@@ -934,7 +981,9 @@ const state = {
   endingMeeting: false,
   settings: null as SettingsData | null,
   settingsStatus: null as SettingsStatus | null,
-  settingsSaving: false
+  settingsSaving: false,
+  // Aviso de instalación incompleta (voz / clave del modelo) en el workspace.
+  setupDismissed: loadSetupDismissed()
 };
 
 // Dirty tracking de Ajustes: clave del backend → valor que eligió el usuario
@@ -1118,8 +1167,10 @@ function enterCompany(companyId: string, seed?: Company | null) {
   lastFrameKey = '';
   workHtmlCache.clear();
   syncWorkPolling();
-  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work');
+  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work', 'setup');
   trace('company_entered', { companyId });
+  // Puede haber levantado (o caído) la voz desde la última vez.
+  void refreshSetupStatus();
   connect();
 }
 
@@ -1144,7 +1195,10 @@ async function loadCompanies() {
   markDirty('home');
   try {
     const data = await apiJson<{ companies: Company[] }>('/api/companies');
-    state.companies = data.companies || [];
+    // La que está en la ventana de deshacer sigue activa en el servidor, pero
+    // para el usuario ya salió del listado: no puede reaparecer sola.
+    const pendingId = state.pendingArchive?.company.id;
+    state.companies = (data.companies || []).filter((company) => company.id !== pendingId);
   } catch {
     state.companiesError = true;
   }
@@ -1584,6 +1638,8 @@ function traceIncomingMessage(message: MeetingMessage) {
 type Region =
   | 'view'
   | 'home'
+  | 'archived'
+  | 'setup'
   | 'company'
   | 'connection'
   | 'alerts'
@@ -1610,7 +1666,7 @@ function markDirty(...regions: Region[]) {
 
 // Compat con los caminos que re-renderizan toda la app.
 function render() {
-  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'micMeter', 'scenario', 'work');
+  markDirty('view', 'home', 'archived', 'setup', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'micMeter', 'scenario', 'work');
 }
 
 function flushRender() {
@@ -1640,6 +1696,19 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   },
   home() {
     byId('companiesGrid').innerHTML = renderCompanies();
+  },
+  archived() {
+    // El <details> es estático: solo se repinta su cuerpo, así abrirlo/cerrarlo
+    // no depende de un re-render ni pierde el foco.
+    const panel = byId<HTMLDetailsElement>('archivedPanel');
+    panel.hidden = state.archived.length === 0 && !state.archivedError;
+    byId('archivedCount').textContent = state.archivedError
+      ? ''
+      : `(${state.archived.length})`;
+    byId('archivedList').innerHTML = renderArchived();
+  },
+  setup() {
+    renderSetupNotice();
   },
   company() {
     const company = state.company;
@@ -2214,6 +2283,16 @@ function mountShell() {
           <p class="lead">Cada empresa es un mundo aparte: su equipo, sus reuniones y su memoria. Entrá a una para conversar por voz o texto con sus empleados.</p>
         </header>
         <section id="companiesGrid" class="companies" aria-label="Tus simulaciones"></section>
+        <details class="archived-panel" id="archivedPanel" hidden>
+          <summary>
+            <span class="archived-summary-label">Archivadas <span id="archivedCount"></span></span>
+            ${chevronIcon()}
+          </summary>
+          <div class="archived-body">
+            <p class="hint">Siguen enteras en tu máquina: su equipo, sus reuniones y su trabajo. Restaurarlas las devuelve al listado tal como estaban.</p>
+            <div id="archivedList" class="archived-list"></div>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -2237,6 +2316,8 @@ function mountShell() {
             <button class="icon-btn danger" data-action="archive-company" type="button" aria-label="Archivar empresa" title="Archivar empresa">${archiveIcon()}</button>
           </div>
         </header>
+
+        <div class="setup-notice" id="setupNotice" role="status" hidden></div>
 
         <div class="goalbar">
           <form id="scenarioForm" class="goal-form">
@@ -2502,6 +2583,28 @@ function mountShell() {
       </section>
     </div>
 
+    <div class="modal center" id="archiveCompanyModal">
+      <div class="modal-backdrop" data-action="close-archive-company"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="archiveCompanyTitle" aria-describedby="archiveCompanyBody">
+        <header class="modal-head">
+          <h2 id="archiveCompanyTitle">Archivar la empresa</h2>
+          <button class="icon-btn" data-action="close-archive-company" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="modal-body" id="archiveCompanyBody">
+          <p class="archive-lead">Vas a archivar <strong id="archiveCompanyName"></strong>.</p>
+          <ul class="archive-points">
+            <li><span class="archive-point-icon" aria-hidden="true">📦</span><span>Sale del listado de Simulaciones y se cierra la reunión abierta.</span></li>
+            <li><span class="archive-point-icon" aria-hidden="true">🗂️</span><span><strong>No se borra nada</strong>: su equipo, sus reuniones y sus proyectos quedan intactos en tu máquina.</span></li>
+            <li><span class="archive-point-icon" aria-hidden="true">↩️</span><span>La vas a encontrar en <strong>Simulaciones → Archivadas</strong> para restaurarla cuando quieras.</span></li>
+          </ul>
+        </div>
+        <footer class="modal-foot">
+          <button type="button" class="btn ghost" data-action="close-archive-company">Cancelar</button>
+          <button type="button" class="btn danger" data-action="confirm-archive-company">Archivar</button>
+        </footer>
+      </section>
+    </div>
+
     <div class="modal drawer" id="agentModal">
       <div class="modal-backdrop" data-action="close-spawn"></div>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="spawnDialogTitle">
@@ -2689,6 +2792,12 @@ function mountShell() {
   // re-render de la región (toggle no burbujea: se captura).
   document.addEventListener('toggle', (event) => {
     const details = event.target as HTMLDetailsElement | null;
+    // Las archivadas se detallan recién al desplegarlas (2 pedidos por empresa).
+    if (details?.id === 'archivedPanel' && details.open) {
+      trace('archived_panel_opened', { count: state.archived.length });
+      void loadArchivedDetails();
+      return;
+    }
     const agentId = details?.dataset?.agentTasks;
     if (details && agentId) {
       if (details.open) {
@@ -2698,6 +2807,10 @@ function mountShell() {
       }
     }
   }, true);
+
+  // Si la página se cierra durante la ventana de deshacer, el archivado se
+  // confirma (con keepalive): "archivar y cerrar" tiene que archivar.
+  window.addEventListener('pagehide', () => commitPendingArchive());
 }
 
 function handleDelegatedClick(event: Event) {
@@ -2716,6 +2829,13 @@ function handleDelegatedClick(event: Event) {
     }
     case 'retry-companies':
       void loadCompanies();
+      void loadArchivedCompanies();
+      break;
+    case 'retry-archived':
+      void loadArchivedCompanies({ detailed: true });
+      break;
+    case 'restore-company':
+      void restoreCompany(target.dataset.companyId || '');
       break;
     case 'open-new-company':
       void openNewCompanyModal();
@@ -2751,7 +2871,27 @@ function handleDelegatedClick(event: Event) {
       closeModal('companyEditModal');
       break;
     case 'archive-company':
-      void archiveCurrentCompany();
+      openArchiveCompanyModal();
+      break;
+    case 'close-archive-company':
+      closeModal('archiveCompanyModal');
+      break;
+    case 'confirm-archive-company':
+      archiveCurrentCompany();
+      break;
+    case 'undo-archive':
+      undoPendingArchive();
+      break;
+
+    // ── Instalación incompleta (voz / clave del modelo) ──
+    case 'dismiss-setup-notice':
+      state.setupDismissed = true;
+      saveSetupDismissed();
+      trace('setup_notice_dismissed', {});
+      markDirty('setup');
+      break;
+    case 'copy-setup-cmd':
+      void copyCommand(target, target.dataset.cmd || '');
       break;
 
     // ── Workspace: reunión ──
@@ -3271,20 +3411,325 @@ async function submitCompanyEdit(form: HTMLFormElement) {
   }
 }
 
-async function archiveCurrentCompany() {
+// ── Archivar: confirmación + ventana para deshacer ──────────────────────
+// Archivar una empresa entera con un clic era una trampa. Ahora hay tres
+// redes, en este orden: se pide confirmación diciendo qué implica; el
+// archivado real NO viaja al servidor hasta que se agota la ventana de
+// deshacer (así "Deshacer" siempre funciona, no depende de restaurar nada);
+// y lo archivado sigue visible y recuperable desde el home.
+
+function openArchiveCompanyModal() {
   const company = state.company;
   if (!company) return;
-  const confirmed = window.confirm(`¿Archivar "${company.name}"? La simulación sale del listado (sus datos se conservan).`);
-  if (!confirmed) return;
-  try {
-    await apiJson(`/api/companies/${encodeURIComponent(company.id)}/archive`, { method: 'POST' });
-    clearLastCompanyId(company.id);
-    upsertAlert('company-archive', company.name, 'Simulación archivada.', 'ok', 2600);
-    trace('company_archived', { companyId: company.id });
-    leaveToHome();
-  } catch (error) {
-    upsertAlert('company-archive', 'Empresa', `No pude archivar: ${getClientError(error)}`, 'error', 4200);
+  byId('archiveCompanyName').textContent = company.name;
+  openModal('archiveCompanyModal');
+  trace('archive_confirm_opened', { companyId: company.id });
+}
+
+function archiveCurrentCompany() {
+  const company = state.company;
+  if (!company) return;
+  closeModal('archiveCompanyModal');
+  // Solo hay un archivado en vuelo: si quedaba otro, se confirma ya.
+  commitPendingArchive();
+
+  state.pendingArchive = {
+    company,
+    timer: window.setTimeout(() => commitPendingArchive(), ARCHIVE_UNDO_MS)
+  };
+  // El listado se actualiza en el acto; el servidor todavía no sabe nada.
+  state.companies = state.companies.filter((item) => item.id !== company.id);
+  trace('company_archive_pending', { companyId: company.id });
+  leaveToHome();
+  upsertAlert(
+    'company-archive',
+    company.name,
+    'Archivada. No se borró nada: podés recuperarla acá abajo, en “Archivadas”.',
+    'ok',
+    ARCHIVE_UNDO_MS,
+    { label: 'Deshacer', action: 'undo-archive' }
+  );
+}
+
+// Manda el archivado de verdad. Idempotente: si no hay nada pendiente, no hace
+// nada (lo llaman el temporizador, un archivado nuevo y el cierre de la página).
+function commitPendingArchive() {
+  const pending = state.pendingArchive;
+  if (!pending) return;
+  window.clearTimeout(pending.timer);
+  state.pendingArchive = null;
+  const company = pending.company;
+  clearLastCompanyId(company.id);
+  trace('company_archived', { companyId: company.id });
+
+  void apiJson(`/api/companies/${encodeURIComponent(company.id)}/archive`, { method: 'POST', keepalive: true })
+    .then(() => {
+      void loadArchivedCompanies({ detailed: state.archivedDetailed });
+    })
+    .catch((error) => {
+      // No se archivó: la empresa sigue activa, así que vuelve al listado.
+      upsertAlert('company-archive', company.name, `No pude archivar: ${getClientError(error)}`, 'error', 5200);
+      void loadCompanies();
+    });
+}
+
+function undoPendingArchive() {
+  const pending = state.pendingArchive;
+  if (!pending) return;
+  window.clearTimeout(pending.timer);
+  state.pendingArchive = null;
+  // Nunca llegó a archivarse: alcanza con devolverla al listado.
+  if (!state.companies.some((item) => item.id === pending.company.id)) {
+    state.companies = [pending.company, ...state.companies];
   }
+  trace('company_archive_undone', { companyId: pending.company.id });
+  upsertAlert('company-archive', pending.company.name, 'Listo, sigue en el listado.', 'ok', 2600);
+  markDirty('home');
+  // La tarjeta vuelve al instante con lo que había en memoria; el listado del
+  // servidor repone después el equipo y las reuniones que cuenta la tarjeta.
+  void loadCompanies();
+}
+
+// ── Archivadas: verlas y recuperarlas desde el home ─────────────────────
+// El backend no expone "listar archivadas": se reconstruye desde el diario de
+// cambios (/api/changelog), que sí registra cada archivado. Los datos de cada
+// una (nombre real, equipo, reuniones) se piden recién al desplegar el panel.
+
+async function loadArchivedCompanies({ detailed = false } = {}) {
+  try {
+    // El servidor las lista de verdad: antes esto se deducía del changelog y
+    // se perdían las que se archivaron a mano o quedaban fuera del límite.
+    const { companies } = await apiJson<{ companies: Company[] }>('/api/companies?status=archived');
+    const previo = new Map(state.archived.map((company) => [company.id, company]));
+    state.archived = companies.map((company) => {
+      const antes = previo.get(company.id);
+      return {
+        ...company,
+        teamSize: antes?.teamSize ?? company.teamSize ?? null,
+        meetingCount: antes?.meetingCount ?? company.meetingCount ?? null
+      };
+    });
+    state.archivedError = false;
+  } catch {
+    state.archivedError = true;
+  }
+  markDirty('archived');
+  if (detailed && !state.archivedError) {
+    await loadArchivedDetails();
+  }
+}
+
+// Segundo paso: el nombre real y cuánto sobrevive de cada empresa. Es la
+// prueba de que archivar no borró nada.
+async function loadArchivedDetails() {
+  state.archivedDetailed = true;
+  const pending = state.archived.filter((company) => company.teamSize === null);
+  if (pending.length === 0) return;
+  await Promise.all(pending.map(async (company) => {
+    try {
+      const [work, meetings] = await Promise.all([
+        apiJson<WorkData>(`/api/companies/${encodeURIComponent(company.id)}/work`),
+        apiJson<{ meetings: MeetingListItem[] }>(`/api/meetings?companyId=${encodeURIComponent(company.id)}`)
+      ]);
+      company.name = work.company?.name || company.name;
+      company.teamSize = work.team?.length ?? 0;
+      company.meetingCount = meetings.meetings?.length ?? 0;
+    } catch {
+      // Sin detalle la fila igual sirve: nombre + botón de restaurar.
+      company.teamSize = -1;
+      company.meetingCount = -1;
+    }
+  }));
+  markDirty('archived');
+}
+
+function renderArchived() {
+  if (state.archivedError) {
+    return `
+      <div class="grid-note">
+        <p class="muted">No pude leer las empresas archivadas.</p>
+        <button class="btn ghost sm" data-action="retry-archived" type="button">Reintentar</button>
+      </div>
+    `;
+  }
+  if (state.archived.length === 0) {
+    return '<p class="muted">No hay ninguna empresa archivada.</p>';
+  }
+  return state.archived.map((company) => {
+    const known = company.teamSize !== null && company.teamSize >= 0;
+    const team = company.teamSize ?? 0;
+    const meetings = company.meetingCount ?? 0;
+    const meta = known
+      ? `${team} ${team === 1 ? 'empleado' : 'empleados'} · ${meetings} ${meetings === 1 ? 'reunión' : 'reuniones'}`
+      : 'Guardada entera';
+    const restoring = state.restoringId === company.id;
+    return `
+      <div class="archived-row">
+        <span class="archived-tile" aria-hidden="true">${archiveIcon()}</span>
+        <span class="archived-info">
+          <span class="archived-name">${escapeHtml(company.name)}</span>
+          <span class="archived-meta">${escapeHtml(meta)}</span>
+        </span>
+        <button class="btn ghost sm" type="button" data-action="restore-company"
+          data-company-id="${escapeHtml(company.id)}" ${restoring ? 'disabled' : ''}>${restoring ? 'Restaurando…' : 'Restaurar'}</button>
+      </div>
+    `;
+  }).join('');
+}
+
+// Restaurar según el contrato acordado: PATCH con status active. Se verifica
+// contra la respuesta en vez de dar por hecho que funcionó — hoy el backend
+// devuelve 200 pero ignora `status`, y un éxito falso sería exactamente el
+// mismo error que estamos arreglando.
+async function restoreCompany(companyId: string) {
+  const company = state.archived.find((item) => item.id === companyId);
+  if (!companyId || !company || state.restoringId) return;
+  state.restoringId = companyId;
+  markDirty('archived');
+  try {
+    const data = await apiJson<{ company: Company }>(`/api/companies/${encodeURIComponent(companyId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active' })
+    });
+    const restored = data.company?.status === 'active'
+      // Sin `status` en la respuesta, la prueba es el listado de activas.
+      || (await apiJson<{ companies: Company[] }>('/api/companies')).companies.some((item) => item.id === companyId);
+    if (!restored) {
+      throw new Error('el servidor aceptó el pedido pero la empresa sigue archivada');
+    }
+    trace('company_restored', { companyId });
+    upsertAlert('company-restore', company.name, 'Restaurada: volvió al listado con su equipo y sus reuniones.', 'ok', 3600);
+    await loadCompanies();
+    await loadArchivedCompanies({ detailed: state.archivedDetailed });
+  } catch (error) {
+    trace('company_restore_failed', { companyId, error: getClientError(error) });
+    upsertAlert(
+      'company-restore',
+      company.name,
+      `No pude restaurarla: ${getClientError(error)}. Nada se perdió: sigue completa en la base.`,
+      'error',
+      7000
+    );
+  } finally {
+    state.restoringId = '';
+    markDirty('archived');
+  }
+}
+
+// ── Instalación incompleta: decirlo donde se necesita ───────────────────
+// La voz (Supertonic) y la transcripción local (Whisper) son opcionales y
+// viven en un venv de Python. Si faltan, la app degrada sola y eso antes solo
+// se veía como una línea en el log. Acá se avisa en la app, con el comando
+// exacto, sin alarmismo: falta la voz = el equipo responde por texto; falta la
+// clave del modelo = eso sí es bloqueante y lleva derecho a Ajustes.
+
+async function refreshSetupStatus() {
+  try {
+    state.settingsStatus = await apiJson<SettingsStatus>('/api/settings/status');
+  } catch {
+    // Si el backend no responde ya hay otros avisos; no se inventa un estado.
+    state.settingsStatus = null;
+  }
+  markDirty('setup');
+}
+
+function renderSetupNotice() {
+  const notice = byId('setupNotice');
+  const status = state.settingsStatus;
+  if (!status) {
+    notice.hidden = true;
+    return;
+  }
+
+  // Sin clave no hay empleados pensando: primero lo que bloquea.
+  if (!status.llm.configured) {
+    notice.hidden = false;
+    notice.className = 'setup-notice is-blocking';
+    notice.innerHTML = `
+      <span class="setup-icon" aria-hidden="true">🔑</span>
+      <div class="setup-copy">
+        <p><strong>Falta la clave del modelo.</strong> Sin ella los empleados responden en modo simulación: contestan, pero no piensan de verdad.</p>
+      </div>
+      <button class="btn primary sm" type="button" data-action="open-settings">Abrir Ajustes</button>
+    `;
+    return;
+  }
+
+  if (!status.tts.healthy && !state.setupDismissed) {
+    notice.hidden = false;
+    notice.className = 'setup-notice';
+    notice.innerHTML = `
+      <span class="setup-icon" aria-hidden="true">💬</span>
+      <div class="setup-copy">
+        <p><strong>El equipo va a responder por texto.</strong> La voz (Supertonic) no está instalada o no responde. La reunión funciona igual; si la querés con voz, corré esto y volvé a levantar el servidor:</p>
+        ${renderSetupCommand(SETUP_INSTALL_CMD, 'voz')}
+      </div>
+      <button class="icon-btn sm" type="button" data-action="dismiss-setup-notice" aria-label="Entendido, no mostrar más este aviso" title="Entendido, no mostrar más">${closeIcon()}</button>
+    `;
+    return;
+  }
+
+  notice.hidden = true;
+}
+
+// Bloque "qué falta y cómo se arregla" para una sección de Ajustes.
+function renderSetupFix(description: string, command: string, id: string) {
+  return `
+    <div class="setup-fix">
+      <p>${escapeHtml(description)}</p>
+      ${renderSetupCommand(command, id)}
+    </div>
+  `;
+}
+
+function renderSetupCommand(command: string, id: string) {
+  return `
+    <div class="setup-cmd">
+      <code>${escapeHtml(command)}</code>
+      <button class="btn ghost sm" type="button" data-action="copy-setup-cmd" data-cmd="${escapeHtml(command)}" data-cmd-id="${escapeHtml(id)}">Copiar</button>
+    </div>
+  `;
+}
+
+async function copyCommand(button: HTMLElement, command: string) {
+  if (!command) return;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(command);
+    copied = true;
+  } catch {
+    // Sin permiso de portapapeles (o sin contexto seguro): copia manual.
+    copied = legacyCopy(command);
+  }
+  trace('setup_cmd_copied', { id: button.dataset.cmdId || '', copied });
+  if (copied) {
+    const original = button.textContent || 'Copiar';
+    button.textContent = 'Copiado ✓';
+    window.setTimeout(() => {
+      if (button.isConnected) button.textContent = original;
+    }, 1800);
+  } else {
+    upsertAlert('setup-copy', 'Instalación', 'No pude copiar: seleccioná el comando y copialo a mano.', 'error', 3600);
+  }
+}
+
+function legacyCopy(text: string) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
 }
 
 // ── Drawer de empleado (crear/editar) ───────────────────────────────────
@@ -3527,6 +3972,8 @@ async function refreshSettings() {
     state.settings = settingsData.settings;
     state.settingsStatus = statusData;
     renderSettingsBody();
+    // El aviso del workspace vive del mismo estado.
+    markDirty('setup');
   } catch (error) {
     byId('settingsBody').innerHTML = `
       <div class="grid-note">
@@ -3617,7 +4064,7 @@ function renderSettingsBody() {
         </div>
         ${llmConfigured
           ? '<span class="status-chip ok">Configurado ✓</span>'
-          : '<span class="status-chip warn">Falta la clave — los empleados responden en modo simulación</span>'}
+          : '<span class="status-chip err">Falta la clave — los empleados responden en modo simulación</span>'}
       </header>
       <div class="settings-fields">
         <div class="form-field">
@@ -3664,6 +4111,11 @@ function renderSettingsBody() {
           </select>
           <p class="hint">Más grande = más preciso y más lento. “small” es un buen equilibrio.</p>
         </div>
+        ${provider === 'local' && status && !status.stt.localHealthy ? renderSetupFix(
+          'Whisper local no está instalado o no responde. Mientras tanto se usa el reconocimiento del navegador, que es menos preciso.',
+          SETUP_INSTALL_CMD,
+          'stt'
+        ) : ''}
         <div class="form-field" id="sttGroqExtra" ${provider === 'groq' ? '' : 'hidden'}>
           <label for="setGroqKey">Clave de API de Groq</label>
           <div class="secret-row">
@@ -3697,6 +4149,11 @@ function renderSettingsBody() {
           : '<span class="status-chip err">Supertonic no responde</span>'}
       </header>
       <div class="settings-fields">
+        ${status && !status.tts.healthy ? renderSetupFix(
+          'Sin Supertonic los empleados responden por texto: la reunión funciona igual, pero nadie habla. Instalalo y volvé a levantar el servidor.',
+          SETUP_INSTALL_CMD,
+          'voz'
+        ) : ''}
         <div class="form-field">
           <label for="setTtsLang">Idioma de las voces</label>
           <select id="setTtsLang" class="form-control" data-setting-key="tts.language">
@@ -3977,6 +4434,7 @@ function renderAlerts() {
         data-action="${escapeHtml(alert.action.action)}"
         data-alert-id="${escapeHtml(alert.id)}"
         data-goal-id="${escapeHtml(alert.action.goalId || '')}"
+        data-company-id="${escapeHtml(alert.action.companyId || '')}"
         data-file-path="${escapeHtml(alert.action.path || '')}">${escapeHtml(alert.action.label)}</button>` : ''}
     </div>
   `).join('');
@@ -5739,6 +6197,10 @@ function chevronIcon() {
 mountShell();
 render();
 void loadCompanies();
+// Para que "Archivadas (N)" ya tenga su número al abrir el home.
+void loadArchivedCompanies();
+// Y para saber si falta la voz o la clave antes de entrar a una empresa.
+void refreshSetupStatus();
 trace('page_loaded', {
   userAgent: navigator.userAgent,
   viewport: { width: window.innerWidth, height: window.innerHeight }
