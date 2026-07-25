@@ -102,3 +102,13 @@ test('no se revisa lo que no produjo archivos ni las correcciones (evita el ida 
 
   assert.equal(store.tasksForGoal(goal.id).filter((t) => t.kind === 'revision').length, 0);
 });
+
+test('cada proyecto tiene su carpeta aunque se repita el título', () => {
+  const { store, company } = newCompany();
+  const a = store.createGoal({ companyId: company.id, title: 'Sitio web' });
+  const b = store.createGoal({ companyId: company.id, title: 'Sitio web' });
+  const c = store.createGoal({ companyId: company.id, title: 'Sitio web' });
+  assert.equal(a.slug, 'sitio-web');
+  assert.equal(b.slug, 'sitio-web-2');
+  assert.equal(c.slug, 'sitio-web-3');
+});

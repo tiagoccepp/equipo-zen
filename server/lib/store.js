@@ -158,6 +158,10 @@ export class Store {
   // Metas sin carpeta (creadas antes de los proyectos, o por una migración
   // que corrió antes de este relleno): quedan en 'general', que es donde se
   // mudan sus archivos al arrancar. Idempotente.
+  slugTaken(companyId, slug) {
+    return Boolean(this.db.prepare('SELECT 1 FROM goals WHERE company_id = ? AND slug = ? LIMIT 1').get(companyId, slug));
+  }
+
   ensureGoalSlugs() {
     const result = this.db.prepare(
       "UPDATE goals SET slug = 'general' WHERE slug IS NULL OR slug = ''"
@@ -565,7 +569,13 @@ export class Store {
 
   createGoal({ companyId, meetingId = null, title, description = '', kind = 'proyecto', slug = null }) {
     const id = 'goal-' + nanoid(8);
-    const folder = slug || slugify(title) || id;
+    // Cada proyecto necesita SU carpeta: dos reuniones con el mismo título no
+    // pueden terminar escribiendo sobre los archivos de la otra.
+    const base = slug || slugify(title) || id;
+    let folder = base;
+    for (let suffix = 2; this.slugTaken(companyId, folder); suffix += 1) {
+      folder = `${base}-${suffix}`;
+    }
     this.db.prepare(`
       INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at, kind, slug)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
