@@ -21,7 +21,7 @@ export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.jo
 
 const TICK_MS = Number(process.env.WORKFORCE_TICK_MS || 5000);
 const MAX_CONCURRENT = Number(process.env.WORKFORCE_MAX_CONCURRENT || 2);
-const MAX_STEPS_PER_RUN = 8;
+const MAX_STEPS_PER_RUN = Number(process.env.WORKFORCE_MAX_STEPS || 10);
 const MAX_FILE_BYTES = 200 * 1024;
 const MAX_FILES_PER_RUN = 12;
 const STEP_TIMEOUT_MS = Number(process.env.WORKFORCE_STEP_TIMEOUT_MS || 180000);
@@ -57,6 +57,35 @@ function safeWorkspacePath(companyId, projectSlug, relative) {
     throw new Error(`Extensión no permitida (${ext || 'sin extensión'}). Usá: ${[...ALLOWED_EXTENSIONS].slice(0, 8).join(', ')}…`);
   }
   return target;
+}
+
+// El contenido del archivo puede llegar de varias formas según cómo el modelo
+// decida responder: entre los marcadores (lo pedido), dentro del JSON con
+// distintos nombres de campo, o simplemente pegado después del JSON. Todas
+// valen: rechazarlas quemaba pasos de la corrida sin producir nada.
+export function extractFileContent(rawText, action) {
+  const heredoc = String(rawText || '').match(/<<<CONTENIDO\n?([\s\S]*?)\n?CONTENIDO>>>/);
+  if (heredoc) {
+    return heredoc[1];
+  }
+  for (const key of ['content', 'contents', 'text', 'body', 'data', 'file']) {
+    if (typeof action?.[key] === 'string' && action[key].trim()) {
+      return action[key];
+    }
+  }
+  // Última chance: lo que venga después del JSON de la acción.
+  const text = String(rawText || '');
+  const closing = text.indexOf('}');
+  if (closing >= 0) {
+    const rest = text.slice(closing + 1)
+      .replace(/^\s*```[a-z]*\n?/i, '')
+      .replace(/```\s*$/, '')
+      .trim();
+    if (rest.length > 40) {
+      return rest;
+    }
+  }
+  return '';
 }
 
 export class Workforce {
@@ -303,8 +332,7 @@ export class Workforce {
         try {
           // El contenido viene crudo entre marcadores (robusto para HTML/CSS),
           // o inline en el JSON como fallback.
-          const heredoc = rawText.match(/<<<CONTENIDO\n?([\s\S]*?)\n?CONTENIDO>>>/);
-          const content = heredoc ? heredoc[1] : String(action.content ?? '');
+          const content = extractFileContent(rawText, action);
           if (!content.trim()) {
             throw new Error('write_file sin contenido (usá los marcadores <<<CONTENIDO … CONTENIDO>>>)');
           }
@@ -324,7 +352,14 @@ export class Workforce {
           this.emitEvent(companyId, { kind: 'file_written', taskId: task.id, agentId: agent.id, agentName: agent.name, path: String(action.path) });
         } catch (error) {
           log.push({ step, action: 'write_file', path: action.path, ok: false, note: String(error?.message).slice(0, 120) });
-          lastObservation = `No pude escribir ${action.path}: ${String(error?.message).slice(0, 120)}`;
+          lastObservation = [
+            `No pude escribir ${action.path}: ${String(error?.message).slice(0, 160)}`,
+            'Repetí la acción con este formato EXACTO, el contenido crudo entre los marcadores:',
+            `{"action":"write_file","path":"${action.path}"}`,
+            '<<<CONTENIDO',
+            '<!doctype html> … el archivo entero …',
+            'CONTENIDO>>>'
+          ].join('\n');
         }
       } else if (action.action === 'finish') {
         const summary = String(action.summary || 'Tarea completada.').slice(0, 500);
@@ -346,9 +381,20 @@ export class Workforce {
       }
     }
 
-    // Sin finish en el presupuesto de pasos: lo hecho queda, la tarea se bloquea con contexto.
-    this.store.finishWorkRun(runId, { status: 'blocked', summary: 'Se quedó sin pasos antes del finish.', log, artifacts: [...artifacts] });
-    this.store.finishTask(task.id, { status: 'blocked', blockedReason: 'Agotó los pasos de la corrida; revisar el alcance de la tarea.' });
+    // Se acabaron los pasos. Si alcanzó a producir archivos, el trabajo existe
+    // y cuenta como hecho (queda la revisión del compañero para juzgarlo);
+    // si no produjo nada, ahí sí la tarea queda bloqueada con contexto.
+    const produced = [...artifacts];
+    if (produced.length > 0) {
+      const summary = `Entregó ${produced.join(', ')} (se quedó sin pasos antes de cerrar el resumen).`;
+      this.store.finishWorkRun(runId, { status: 'ok', summary, log, artifacts: produced });
+      this.store.finishTask(task.id, { status: 'done', summary });
+      this.emitEvent(companyId, { kind: 'task_done', taskId: task.id, agentId: agent.id, agentName: agent.name, summary, artifacts: produced });
+      this.requestReview(companyId, agent, task, produced);
+      return;
+    }
+    this.store.finishWorkRun(runId, { status: 'blocked', summary: 'Se quedó sin pasos sin producir nada.', log, artifacts: [] });
+    this.store.finishTask(task.id, { status: 'blocked', blockedReason: 'Agotó los pasos sin producir un entregable; revisar el alcance de la tarea.' });
     this.emitEvent(companyId, { kind: 'task_blocked', taskId: task.id, agentId: agent.id, agentName: agent.name, reason: 'sin pasos' });
   }
 

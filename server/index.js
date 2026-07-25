@@ -20,6 +20,7 @@ if (seededCompany) {
   console.log(`Empresa inicial creada: ${seededCompany.name}.`);
 }
 store.ensureLeadership(companyTemplates);
+store.ensureGoalSlugs();
 
 const app = createApp({ store });
 const server = createServer(app);

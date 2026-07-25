@@ -3710,7 +3710,7 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
     case 'review_done': {
       const approved = text(event.verdict) !== 'cambios';
       item = {
-        key: `review-${taskId}`,
+        key: `review-verdict-${text(event.targetTaskId) || taskId}`,
         icon: approved ? '👍' : '✋',
         html: `<strong>${escapeHtml(name)}</strong> ${approved ? 'aprobó' : 'pidió cambios sobre'} el trabajo de <strong>${escapeHtml(text(event.authorName))}</strong>${text(event.comment) ? `: <span class="feed-quote">${escapeHtml(clip(text(event.comment), 240))}</span>` : ''}`
       };
@@ -3849,6 +3849,29 @@ function buildFeedItems(): WorkFeedItem[] {
     const memberById = new Map(data.team.map((member) => [member.id, member]));
     const nameOf = (agentId?: string | null) =>
       (agentId && memberById.get(agentId)?.name) || 'un compañero';
+    // Clave común a las tres fuentes del mismo veredicto (comentario del
+    // endpoint, corrida de la revisión y evento review_done del WS): gana
+    // el comentario, que es el único que trae el texto de la devolución.
+    const verdictKey = (targetTaskId: string) => `review-verdict-${targetTaskId}`;
+
+    // Veredictos con su comentario: el ida y vuelta real entre compañeros.
+    for (const comment of data.comments || []) {
+      const task = taskById.get(comment.taskId);
+      const author = nameOf(comment.authorId);
+      const target = nameOf(task?.agentId);
+      const isVerdict = comment.kind === 'aprobacion' || comment.kind === 'cambios';
+      const verb = comment.kind === 'aprobacion'
+        ? 'aprobó el trabajo de'
+        : comment.kind === 'cambios'
+          ? 'le pidió cambios a'
+          : 'le comentó a';
+      addIfAbsent({
+        key: isVerdict ? verdictKey(comment.taskId) : `comment-${comment.id}`,
+        at: Date.parse(comment.createdAt) || Date.now(),
+        icon: comment.kind === 'cambios' ? '✋' : comment.kind === 'aprobacion' ? '👍' : '💬',
+        html: `<strong>${escapeHtml(author)}</strong> ${verb} <strong>${escapeHtml(target)}</strong>: <span class="feed-quote">${escapeHtml(clip(comment.text.replace(/\s*\n+\s*/g, ' · '), 260))}</span>`
+      });
+    }
 
     for (const run of data.runs) {
       const member = memberById.get(run.agent_id);
@@ -3865,10 +3888,9 @@ function buildFeedItems(): WorkFeedItem[] {
         if (run.status === 'ok') {
           const hiring = member?.role === 'contratista' || task?.kind === 'contratacion';
           if (isReview) {
-            // Se fusiona con el review_done del WS (misma clave semántica).
             const approved = !/cambios/i.test(run.summary || '');
             addIfAbsent({
-              key: `review-${run.task_id}`,
+              key: verdictKey(task?.parentTaskId || run.task_id),
               at: endedAt,
               icon: approved ? '👍' : '✋',
               html: `<strong>${escapeHtml(runName)}</strong> ${approved ? 'aprobó' : 'pidió cambios sobre'} el trabajo de <strong>${escapeHtml(reviewedName)}</strong>`
@@ -3904,24 +3926,6 @@ function buildFeedItems(): WorkFeedItem[] {
         html: isReview
           ? `<strong>${escapeHtml(runName)}</strong> se puso a revisar el trabajo de <strong>${escapeHtml(reviewedName)}</strong>`
           : `<strong>${escapeHtml(runName)}</strong> empezó: ${escapeHtml(clip(task?.text || 'una tarea', 160))}`
-      });
-    }
-
-    // Veredictos con su comentario: el ida y vuelta real entre compañeros.
-    for (const comment of data.comments || []) {
-      const task = taskById.get(comment.taskId);
-      const author = nameOf(comment.authorId);
-      const target = nameOf(task?.agentId);
-      const verb = comment.kind === 'aprobacion'
-        ? 'aprobó el trabajo de'
-        : comment.kind === 'cambios'
-          ? 'le pidió cambios a'
-          : 'le comentó a';
-      addIfAbsent({
-        key: `comment-${comment.id}`,
-        at: Date.parse(comment.createdAt) || Date.now(),
-        icon: comment.kind === 'cambios' ? '✋' : comment.kind === 'aprobacion' ? '👍' : '💬',
-        html: `<strong>${escapeHtml(author)}</strong> ${verb} <strong>${escapeHtml(target)}</strong>: <span class="feed-quote">${escapeHtml(clip(comment.text.replace(/\s*\n+\s*/g, ' · '), 260))}</span>`
       });
     }
 
@@ -4113,6 +4117,8 @@ function renderTasksBoard(): string {
     if (tasks.length === 0) return '';
     const htmlFile = (goal.files || []).find((file) => /\.html?$/i.test(file.path));
     const columns = TASK_COLUMNS.map((column) => {
+      // Con un estado filtrado el tablero se reduce a esa sola columna.
+      if (state.taskFilterStatus && state.taskFilterStatus !== column.status) return '';
       const inColumn = tasks.filter((task) => task.status === column.status);
       if (inColumn.length === 0 && !column.always) return '';
       return `

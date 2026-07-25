@@ -155,6 +155,16 @@ export class Store {
     return company;
   }
 
+  // Metas sin carpeta (creadas antes de los proyectos, o por una migración
+  // que corrió antes de este relleno): quedan en 'general', que es donde se
+  // mudan sus archivos al arrancar. Idempotente.
+  ensureGoalSlugs() {
+    const result = this.db.prepare(
+      "UPDATE goals SET slug = 'general' WHERE slug IS NULL OR slug = ''"
+    ).run();
+    return result.changes;
+  }
+
   // Toda empresa necesita CEO y contratista para el flujo de trabajo:
   // a las empresas viejas se les suman genéricos y el equipo reporta al CEO.
   ensureLeadership(companyTemplates) {
