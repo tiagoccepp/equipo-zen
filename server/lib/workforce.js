@@ -41,7 +41,7 @@ export function projectDir(companyId, projectSlug) {
 // Guardia del sandbox: la ruta resultante tiene que caer DENTRO de la carpeta
 // del proyecto, sin escapes (..), sin ocultos, sin symlinks y con extensión
 // permitida.
-function safeWorkspacePath(companyId, projectSlug, relative) {
+export function safeWorkspacePath(companyId, projectSlug, relative) {
   const base = projectDir(companyId, projectSlug);
   const raw = String(relative || '').trim();
   if (!raw || path.isAbsolute(raw) || raw.includes('\0')) {
