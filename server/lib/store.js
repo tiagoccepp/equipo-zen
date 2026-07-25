@@ -33,6 +33,8 @@ function rowToAgent(row) {
     boundaries: parseJsonColumn(row.boundaries_json, []),
     knowledge: row.knowledge || '',
     companyId: row.company_id || null,
+    role: row.role || 'worker',
+    managerId: row.manager_id || null,
     learningEnabled: Boolean(row.learning_enabled),
     version: row.version
   };
@@ -114,8 +116,10 @@ export class Store {
 
   createCompanyFromTemplate(template, actor = 'user') {
     const company = this.insertCompany(template, actor);
+    let ceoId = null;
     for (const employee of template.employees || []) {
-      const agentId = employee.name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
+      const agentId = employee.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
+      const role = employee.role || 'worker';
       this.insertAgent({
         id: agentId,
         companyId: company.id,
@@ -127,10 +131,68 @@ export class Store {
         aliases: employee.aliases || [employee.name.toLowerCase()],
         domains: employee.skills || [],
         boundaries: employee.boundaries || [],
-        knowledge: employee.knowledge || ''
+        knowledge: employee.knowledge || '',
+        role,
+        managerId: role === 'ceo' ? null : ceoId
       }, 'builtin', actor);
+      if (role === 'ceo') {
+        ceoId = agentId;
+      }
     }
     return company;
+  }
+
+  // Toda empresa necesita CEO y contratista para el flujo de trabajo:
+  // a las empresas viejas se les suman genéricos y el equipo reporta al CEO.
+  ensureLeadership(companyTemplates) {
+    for (const company of this.listCompanies()) {
+      const team = this.listAgents({ companyId: company.id });
+      let ceo = team.find((agent) => agent.role === 'ceo');
+      if (!ceo) {
+        const ceoId = 'ceo-' + nanoid(6);
+        ceo = this.insertAgent({
+          id: ceoId,
+          companyId: company.id,
+          name: 'Delia',
+          title: 'CEO',
+          voice: 'F5',
+          color: company.color,
+          style: 'Ejecutiva cercana: clara y al grano. Resume, prioriza y reparte el trabajo, y cierra las reuniones repasando quién quedó con qué.',
+          aliases: ['delia', 'ceo', 'jefa', 'directora'],
+          domains: ['estrategia', 'prioridades', 'planificacion', 'coordinacion', 'objetivos'],
+          boundaries: ['No baja a detalles técnicos finos; delega y coordina.', 'No asigna trabajo sin explicar el porqué.'],
+          knowledge: `Dirige ${company.name}: sabe qué está haciendo cada integrante del equipo y es la interlocutora directa del dueño (vos).`,
+          role: 'ceo',
+          managerId: null
+        }, 'builtin', 'migration');
+      }
+      if (!team.some((agent) => agent.role === 'contratista')) {
+        this.insertAgent({
+          id: 'contratista-' + nanoid(6),
+          companyId: company.id,
+          name: 'Franco',
+          title: 'Contratista de talento',
+          voice: 'M4',
+          color: company.color,
+          style: 'Observador y resolutivo: cuando falta una habilidad en el equipo lo dice y propone el perfil exacto que hay que sumar.',
+          aliases: ['franco', 'contratista', 'talento', 'reclutador'],
+          domains: ['contratacion', 'perfiles', 'talento', 'reclutamiento', 'equipo nuevo'],
+          boundaries: ['No contrata sin una necesidad concreta.', 'No duplica roles existentes.'],
+          knowledge: 'Detecta cuando una tarea necesita habilidades que el equipo no tiene y crea al empleado ideal (nombre, rol, skills, conocimientos y personalidad).',
+          role: 'contratista',
+          managerId: ceo.id
+        }, 'builtin', 'migration');
+      }
+      // El resto del equipo reporta al CEO si no tiene jefe.
+      this.db.prepare("UPDATE agents SET manager_id = ? WHERE company_id = ? AND role != 'ceo' AND (manager_id IS NULL OR manager_id = '')")
+        .run(ceo.id, company.id);
+      // Y sumar a los nuevos a las reuniones activas existentes de la empresa.
+      for (const meeting of this.db.prepare("SELECT id FROM meetings WHERE company_id = ? AND status = 'active'").all(company.id)) {
+        for (const agent of this.listAgents({ companyId: company.id })) {
+          this.addAgentToMeeting(meeting.id, agent.id);
+        }
+      }
+    }
   }
 
   getCompany(companyId) {
@@ -175,8 +237,8 @@ export class Store {
     const at = now();
     this.db.prepare(`
       INSERT INTO agents (id, origin, status, name, title, voice, color, style,
-        aliases_json, domains_json, boundaries_json, knowledge, company_id, learning_enabled, version, created_at, updated_at)
-      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+        aliases_json, domains_json, boundaries_json, knowledge, company_id, role, manager_id, learning_enabled, version, created_at, updated_at)
+      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
     `).run(
       profile.id,
       origin,
@@ -190,6 +252,8 @@ export class Store {
       JSON.stringify(profile.boundaries),
       profile.knowledge || '',
       profile.companyId || null,
+      profile.role || 'worker',
+      profile.managerId || null,
       at,
       at
     );
@@ -423,6 +487,106 @@ export class Store {
         completed: Boolean(row.completed),
         createdAt: row.created_at
       }));
+  }
+
+  // ── Metas y trabajo (estilo Paperclip) ─────────────────────────────────
+
+  createGoal({ companyId, meetingId = null, title, description = '' }) {
+    const id = 'goal-' + nanoid(8);
+    this.db.prepare(`
+      INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'active', ?)
+    `).run(id, companyId, meetingId, title, description, now());
+    this.logChange('user', 'goal', id, 'create', { title });
+    return this.getGoal(id);
+  }
+
+  getGoal(goalId) {
+    return this.db.prepare('SELECT * FROM goals WHERE id = ?').get(goalId) || null;
+  }
+
+  listGoals(companyId, status = null) {
+    if (status) {
+      return this.db.prepare('SELECT * FROM goals WHERE company_id = ? AND status = ? ORDER BY created_at DESC').all(companyId, status);
+    }
+    return this.db.prepare('SELECT * FROM goals WHERE company_id = ? ORDER BY created_at DESC').all(companyId);
+  }
+
+  completeGoalIfDone(goalId) {
+    const remaining = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM tasks WHERE goal_id = ? AND status IN ('pending','in_progress')"
+    ).get(goalId).count;
+    if (remaining === 0) {
+      this.db.prepare("UPDATE goals SET status = 'done', completed_at = ? WHERE id = ? AND status = 'active'").run(now(), goalId);
+      return this.getGoal(goalId)?.status === 'done';
+    }
+    return false;
+  }
+
+  assignTaskToGoal(taskId, goalId) {
+    this.db.prepare("UPDATE tasks SET goal_id = ?, status = 'pending' WHERE id = ?").run(goalId, taskId);
+  }
+
+  // Checkout atómico: un solo worker puede tomar la tarea (semántica issue).
+  checkoutTask(taskId) {
+    const result = this.db.prepare(
+      "UPDATE tasks SET status = 'in_progress', run_count = run_count + 1 WHERE id = ? AND status = 'pending'"
+    ).run(taskId);
+    return result.changes === 1;
+  }
+
+  finishTask(taskId, { status, summary = null, blockedReason = null }) {
+    this.db.prepare(`
+      UPDATE tasks SET status = ?, result_summary = ?, blocked_reason = ?,
+        completed = CASE WHEN ? = 'done' THEN 1 ELSE completed END,
+        completed_at = CASE WHEN ? = 'done' THEN ? ELSE completed_at END
+      WHERE id = ?
+    `).run(status, summary, blockedReason, status, status, now(), taskId);
+  }
+
+  workQueue(companyId) {
+    return this.db.prepare(`
+      SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id
+      WHERE g.company_id = ? AND g.status = 'active' AND t.status = 'pending'
+      ORDER BY t.created_at
+    `).all(companyId);
+  }
+
+  tasksForGoal(goalId) {
+    return this.db.prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY created_at').all(goalId);
+  }
+
+  activeWorkCompanies() {
+    return this.db.prepare(`
+      SELECT DISTINCT g.company_id AS id FROM goals g
+      JOIN tasks t ON t.goal_id = g.id
+      WHERE g.status = 'active' AND t.status IN ('pending','in_progress')
+    `).all().map((row) => row.id);
+  }
+
+  startWorkRun(taskId, agentId, companyId) {
+    const result = this.db.prepare(`
+      INSERT INTO work_runs (task_id, agent_id, company_id, started_at, status)
+      VALUES (?, ?, ?, ?, 'running')
+    `).run(taskId, agentId, companyId, now());
+    return result.lastInsertRowid;
+  }
+
+  finishWorkRun(runId, { status, summary = null, log = [], artifacts = [] }) {
+    this.db.prepare(`
+      UPDATE work_runs SET ended_at = ?, status = ?, summary = ?, log_json = ?, artifacts_json = ?
+      WHERE id = ?
+    `).run(now(), status, summary, JSON.stringify(log).slice(0, 200000), JSON.stringify(artifacts), runId);
+  }
+
+  recentWorkRuns(companyId, limit = 30) {
+    return this.db.prepare(`
+      SELECT id, task_id, agent_id, started_at, ended_at, status, summary, artifacts_json
+      FROM work_runs WHERE company_id = ? ORDER BY id DESC LIMIT ?
+    `).all(companyId, limit).map((row) => ({
+      ...row,
+      artifacts: parseJsonColumn(row.artifacts_json, [])
+    }));
   }
 
   // ── Resúmenes, telemetría y changelog ──────────────────────────────────

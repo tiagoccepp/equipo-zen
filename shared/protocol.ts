@@ -55,6 +55,8 @@ export interface PublicAgent {
   origin?: 'builtin' | 'custom';
   enabled?: boolean;
   learningEnabled?: boolean;
+  role?: 'ceo' | 'contratista' | 'worker';
+  managerId?: string | null;
 }
 
 export interface MeetingScenario {
@@ -152,6 +154,8 @@ export type ClientMessage =
   | { type: 'archive_agent'; agentId: string }
   | { type: 'set_agent_enabled'; agentId: string; enabled: boolean }
   | { type: 'set_scenario'; text: string }
+  | { type: 'end_meeting' }
+  | { type: 'confirm_end_meeting' }
   | { type: 'add_task'; agentId: string; text: string }
   | { type: 'toggle_task'; agentId: string; taskId: string; completed: boolean }
   | { type: 'delete_task'; agentId: string; taskId: string };
@@ -173,6 +177,14 @@ export type ServerMessage =
     }
   | { type: 'meeting_reset' }
   | { type: 'scenario_updated'; scenario: MeetingScenario }
+  | {
+      type: 'meeting_closing_summary';
+      goalTitle: string;
+      goalDescription: string;
+      assignments: Array<{ agentId: string; agentName: string; tasks: string[] }>;
+      hires: Array<{ need: string }>;
+    }
+  | { type: 'work_event'; kind: string; [key: string]: unknown }
   | { type: 'meeting_warmup_start' }
   | { type: 'meeting_warmup_complete'; ok: boolean; failures: number }
   | { type: 'agents_updated'; agents: PublicAgent[] }
@@ -371,6 +383,10 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       }
       return { ok: true, message: { type: 'set_agent_enabled', agentId, enabled: Boolean(value.enabled) } };
     }
+
+    case 'end_meeting':
+    case 'confirm_end_meeting':
+      return { ok: true, message: { type: value.type } };
 
     case 'set_scenario': {
       const text = cappedString(value.text, 2000);

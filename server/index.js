@@ -5,11 +5,13 @@ import { createServer } from 'node:http';
 import { DB_PATH, HOST, PORT, collectApiKeys, companyTemplates } from './lib/config.js';
 import { createApp } from './lib/http.js';
 import { ApiKeyRing } from './lib/key-ring.js';
+import { broadcastToCompany } from './lib/meeting-session.js';
 import { initSettings } from './lib/settings.js';
 import { Store } from './lib/store.js';
 import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable } from './lib/supertonic.js';
 import { telemetry } from './lib/telemetry.js';
+import { Workforce } from './lib/workforce.js';
 import { attachMeetingServer } from './lib/ws.js';
 
 const store = new Store(DB_PATH);
@@ -17,6 +19,7 @@ const seededCompany = store.ensureCompanies(companyTemplates, LEGACY_VOICE_MAP);
 if (seededCompany) {
   console.log(`Empresa inicial creada: ${seededCompany.name}.`);
 }
+store.ensureLeadership(companyTemplates);
 
 const app = createApp({ store });
 const server = createServer(app);
@@ -24,6 +27,10 @@ const keyRing = new ApiKeyRing(collectApiKeys());
 keyRing.setTelemetry(telemetry);
 initSettings(store, keyRing);
 attachMeetingServer(server, keyRing, store);
+const workforce = new Workforce(store, keyRing, {
+  onEvent: (companyId, payload) => broadcastToCompany(companyId, payload)
+});
+workforce.start();
 
 server.listen(PORT, HOST, () => {
   console.log(`Backend listo en http://${HOST}:${PORT} (DB: ${DB_PATH})`);

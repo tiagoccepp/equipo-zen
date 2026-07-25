@@ -17,6 +17,7 @@ import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
+import { WORKSPACE_ROOT } from './workforce.js';
 
 export function createApp({ store }) {
   const app = express();
@@ -96,6 +97,37 @@ export function createApp({ store }) {
 
   app.get('/api/companies', (_req, res) => {
     res.json({ companies: store.listCompanies() });
+  });
+
+  // Entregables reales de los empleados (páginas, docs...) navegables.
+  app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, index: ['index.html'] }));
+
+  // Panel de trabajo de la empresa: metas con sus tareas, corridas
+  // recientes y organigrama (rol + jefe) para el árbol.
+  app.get('/api/companies/:id/work', (req, res) => {
+    const company = store.getCompany(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    const goals = store.listGoals(company.id).slice(0, 10).map((goal) => ({
+      ...goal,
+      tasks: store.tasksForGoal(goal.id).map((task) => ({
+        id: task.id,
+        text: task.text,
+        status: task.status,
+        agentId: task.agent_id,
+        resultSummary: task.result_summary,
+        blockedReason: task.blocked_reason,
+        runCount: task.run_count
+      }))
+    }));
+    res.json({
+      company: { id: company.id, name: company.name },
+      team: store.listAgents({ companyId: company.id }).map(({ id, name, title, color, role, managerId }) => ({ id, name, title, color, role, managerId })),
+      goals,
+      runs: store.recentWorkRuns(company.id, 30),
+      workspaceUrl: `/workspace/${company.id}/`
+    });
   });
 
   app.get('/api/company-templates', (_req, res) => {

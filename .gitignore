@@ -9,3 +9,4 @@ npm-debug.log*
 .claude/
 server/data/
 .venv-tts/
+workspace/

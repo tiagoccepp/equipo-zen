@@ -176,10 +176,11 @@ export async function streamChat(keyRing, options, onDelta) {
           return { text: emitted, model, aborted: true };
         }
         if (emitted) {
-          keyRing.reportFailure(key, error);
           return { text: emitted, model, partial: true };
         }
-        keyRing.reportFailure(key, error);
+        if (!isOwnTimeout(error)) {
+          keyRing.reportFailure(key, error);
+        }
         keyRing.logKey('api_call_error', {
           scope: options.scope,
           model,
@@ -242,7 +243,9 @@ export async function completeChat(keyRing, options) {
         return { text, model };
       } catch (error) {
         lastError = error;
-        keyRing.reportFailure(key, error);
+        if (!isOwnTimeout(error)) {
+          keyRing.reportFailure(key, error);
+        }
         keyRing.logKey('api_call_error', {
           scope: options.scope,
           model,
@@ -261,6 +264,12 @@ export async function completeChat(keyRing, options) {
 
 function isModelNotFound(error) {
   return /model.*(not found|invalid|does not exist)|2013|1004/i.test(getErrorText(error));
+}
+
+// Timeout puesto por NOSOTROS (paciencia del cliente): no es culpa de la
+// clave — sin cooldown, para que una sola clave no muera 45s por cada uno.
+function isOwnTimeout(error) {
+  return /^Timeout en /.test(getErrorText(error)) || /aborted|abort/i.test(String(error?.name || ''));
 }
 
 function isEmptyResponse(error) {

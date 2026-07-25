@@ -142,6 +142,27 @@ export class AgentRouter {
       return b.directMention - a.directMention || b.score - a.score;
     });
 
+    // Fallback ejecutivo: si ningún especialista tiene señal, la CEO toma
+    // el punto (es la interlocutora directa del humano).
+    if (targets.length === 0) {
+      const ceo = this.activeAgents.find((agent) => agent.role === 'ceo');
+      if (ceo) {
+        targets.push({
+          agentId: ceo.id,
+          name: ceo.name,
+          score: 3,
+          directMention: false,
+          matchedDomains: ['coordinación general'],
+          mentionIndex: 0
+        });
+        return {
+          responses: [],
+          targets,
+          reason: 'Sin dominio claro: la CEO toma el punto para coordinar.'
+        };
+      }
+    }
+
     return {
       responses: [],
       targets,

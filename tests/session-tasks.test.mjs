@@ -117,11 +117,56 @@ test('modo mock: sin claves los agentes responden enlatado con usedMock', async 
   await session.processUserTurn('t4', 'hola equipo');
 
   const completes = socket.sent.filter((m) => m.type === 'agent_turn_complete');
-  assert.equal(completes.length, 2);
+  assert.equal(completes.length, session.sessionAgents.length, 'saluda todo el equipo (incl. CEO y contratista)');
   for (const complete of completes) {
     assert.equal(complete.usedMock, true);
     assert.match(complete.text, /modo simulación/);
   }
+});
+
+test('organigrama: toda empresa tiene CEO y contratista, y el equipo reporta al CEO', () => {
+  const { session } = newSession();
+  const ceo = session.sessionAgents.find((a) => a.role === 'ceo');
+  const contratista = session.sessionAgents.find((a) => a.role === 'contratista');
+  assert.ok(ceo, 'hay CEO');
+  assert.ok(contratista, 'hay contratista');
+  assert.equal(ceo.managerId, null);
+  for (const agent of session.sessionAgents.filter((a) => a.role !== 'ceo')) {
+    assert.equal(agent.managerId, ceo.id, `${agent.name} reporta al CEO`);
+  }
+});
+
+test('router: sin dominio claro, la CEO toma el punto', () => {
+  const { session } = newSession();
+  const route = session.router.route('zzz asunto totalmente ajeno qqq', session.memory);
+  assert.equal(route.targets.length, 1);
+  const ceo = session.sessionAgents.find((a) => a.role === 'ceo');
+  assert.equal(route.targets[0].agentId, ceo.id);
+});
+
+test('cierre de reunión: la meta agrupa las tareas pendientes y arranca la cola', async () => {
+  const { socket, session, store, julioId } = newSession();
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'armar la landing del catálogo' });
+
+  await session.prepareMeetingClose();
+  const summary = socket.sent.find((m) => m.type === 'meeting_closing_summary');
+  assert.ok(summary, 'llega el resumen de cierre');
+  assert.ok(summary.assignments.some((a) => a.tasks.includes('armar la landing del catálogo')));
+
+  const oldMeetingId = session.meeting.id;
+  session.confirmMeetingClose();
+
+  const goals = store.listGoals(session.company.id, 'active');
+  assert.equal(goals.length, 1);
+  const queue = store.workQueue(session.company.id);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].text, 'armar la landing del catálogo');
+  assert.equal(store.getMeeting(oldMeetingId).status, 'closed');
+  assert.notEqual(session.meeting.id, oldMeetingId, 'se abre una reunión nueva');
+
+  // Checkout atómico: solo un worker puede tomarla
+  assert.equal(store.checkoutTask(queue[0].id), true);
+  assert.equal(store.checkoutTask(queue[0].id), false);
 });
 
 test('continuidad: turnos, agente spawneado y tareas sobreviven a otra sesión', async () => {

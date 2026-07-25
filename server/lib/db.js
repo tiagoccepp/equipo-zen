@@ -162,6 +162,47 @@ const MIGRATIONS = [
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  `,
+  // v4: empresa digital estilo Paperclip — jerarquía (rol + jefe), metas
+  // que bajan en cascada desde las reuniones, tareas con checkout atómico
+  // y corridas de trabajo (heartbeats) con log y artefactos.
+  `
+  ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'worker';
+  ALTER TABLE agents ADD COLUMN manager_id TEXT;
+
+  CREATE TABLE goals (
+    id           TEXT PRIMARY KEY,
+    company_id   TEXT NOT NULL,
+    meeting_id   TEXT,
+    title        TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'active',
+    created_at   TEXT NOT NULL,
+    completed_at TEXT
+  );
+  CREATE INDEX idx_goals_company ON goals(company_id, status);
+
+  ALTER TABLE tasks ADD COLUMN goal_id TEXT;
+  ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+  ALTER TABLE tasks ADD COLUMN blocked_reason TEXT;
+  ALTER TABLE tasks ADD COLUMN result_summary TEXT;
+  ALTER TABLE tasks ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;
+  UPDATE tasks SET status = 'done' WHERE completed = 1;
+
+  CREATE TABLE work_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id       TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    company_id    TEXT,
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT,
+    status        TEXT NOT NULL DEFAULT 'running',
+    summary       TEXT,
+    log_json      TEXT NOT NULL DEFAULT '[]',
+    artifacts_json TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX idx_work_runs_task ON work_runs(task_id, id);
+  CREATE INDEX idx_work_runs_company ON work_runs(company_id, id);
   `
 ];
 

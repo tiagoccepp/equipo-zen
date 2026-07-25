@@ -37,6 +37,15 @@ const PERSISTED_TELEMETRY_TYPES = new Set([
 // que intente retomar la misma reunión recibe una reunión nueva.
 const activeSessionsByMeeting = new Map();
 
+// Difusión a todas las sesiones vivas de una empresa (eventos de trabajo).
+export function broadcastToCompany(companyId, payload) {
+  for (const session of activeSessionsByMeeting.values()) {
+    if (session.company?.id === companyId) {
+      session.send(payload);
+    }
+  }
+}
+
 // Reflexión post-reunión: singleton por proceso (los timers de debounce
 // deben sobrevivir a la sesión WS y cancelarse si la reunión resume).
 let reflectionRunner = null;
@@ -81,6 +90,7 @@ export class MeetingSession {
     // Paciencia conversacional: los mensajes seguidos del usuario se juntan
     // en UN solo turno antes de rutear (el agente espera a que termines la idea).
     this.pendingUser = null;
+    this.pendingClose = null;
   }
 
   createAgentRuntime(agent) {
@@ -210,7 +220,7 @@ export class MeetingSession {
   }
 
   publicAgents() {
-    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, knowledge, style, voice, tasks, origin, enabled, learningEnabled }) => ({
+    return this.sessionAgents.map(({ id, name, title, color, domains, aliases, boundaries, knowledge, style, voice, tasks, origin, enabled, learningEnabled, role, managerId }) => ({
       id,
       name,
       title,
@@ -224,7 +234,9 @@ export class MeetingSession {
       tasks: tasks || [],
       origin,
       enabled,
-      learningEnabled
+      learningEnabled,
+      role,
+      managerId
     }));
   }
 
@@ -493,6 +505,18 @@ export class MeetingSession {
       this.store.setAgentEnabled(this.meeting.id, agent.id, message.enabled);
       this.logTelemetry('agent_enabled_changed', { agentId: agent.id, enabled: message.enabled });
       this.broadcastAgentsUpdated();
+      return;
+    }
+
+    if (message.type === 'end_meeting') {
+      void this.prepareMeetingClose().catch((error) => {
+        this.send({ type: 'error', message: 'No pude preparar el cierre de la reunión.', detail: getShortError(error) });
+      });
+      return;
+    }
+
+    if (message.type === 'confirm_end_meeting') {
+      this.confirmMeetingClose();
       return;
     }
 
@@ -1047,6 +1071,155 @@ export class MeetingSession {
       }, turnId);
 
       followups += 1;
+    }
+  }
+
+  // "Finalizar reunión": la CEO repasa en voz alta quién quedó con qué
+  // (validación conversacional) y queda pendiente la confirmación del
+  // usuario para arrancar el trabajo.
+  async prepareMeetingClose() {
+    const ceo = this.sessionAgents.find((agent) => agent.role === 'ceo' && agent.enabled !== false);
+    const assignments = this.sessionAgents
+      .filter((agent) => (agent.tasks || []).some((task) => !task.completed))
+      .map((agent) => ({
+        agentId: agent.id,
+        agentName: agent.name,
+        tasks: agent.tasks.filter((task) => !task.completed).map((task) => task.text)
+      }));
+
+    const transcript = this.memory.recentContext(30);
+    const prompt = [
+      `Sos ${ceo ? ceo.name : 'la CEO'}, CEO de ${this.company.name}. La reunión está por cerrarse y los empleados van a ponerse a TRABAJAR en serio con lo asignado.`,
+      '',
+      'TAREAS PENDIENTES POR EMPLEADO:',
+      assignments.length
+        ? assignments.map((a) => `- ${a.agentName}: ${a.tasks.join(' | ')}`).join('\n')
+        : '(no se asignaron tareas en esta reunión)',
+      '',
+      'TRANSCRIPCIÓN RECIENTE:',
+      transcript || '(vacía)',
+      '',
+      'Devolvé SOLO un JSON válido:',
+      '{"goalTitle":"título corto de la meta de esta reunión","goalDescription":"1-2 oraciones: qué se busca lograr y por qué","spokenSummary":"tu repaso HABLADO en 2-5 oraciones, cálido y claro: qué quedó a cargo de cada uno y qué pasa ahora; terminá preguntando si está bien así para arrancar","hires":[{"need":"si detectás que falta una habilidad que NADIE del equipo tiene, describila; lista vacía si no falta nada"}]}'
+    ].join('\n');
+
+    let plan = null;
+    if (this.keyRing.hasKeys()) {
+      try {
+        const { text } = await completeChat(this.keyRing, {
+          models: getMinimaxModels(),
+          scope: 'cierre de reunión',
+          timeoutMs: 30000,
+          maxTokens: 4000,
+          temperature: 0.4,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        plan = parseJsonFromModel(text);
+      } catch {
+        plan = null;
+      }
+    }
+
+    const fallbackSummary = assignments.length
+      ? `Repasemos antes de cerrar: ${assignments.map((a) => `${a.agentName} queda con ${a.tasks.join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`
+      : 'No quedaron tareas asignadas en esta reunión. ¿Cerramos igual?';
+
+    this.pendingClose = {
+      goalTitle: String(plan?.goalTitle || `Objetivos de la reunión`).slice(0, 120),
+      goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
+      hires: Array.isArray(plan?.hires) ? plan.hires.filter((h) => h?.need).slice(0, 3) : []
+    };
+
+    const spoken = String(plan?.spokenSummary || fallbackSummary).slice(0, 900);
+    if (ceo) {
+      await this.speakAs(ceo, spoken);
+    }
+    this.send({
+      type: 'meeting_closing_summary',
+      goalTitle: this.pendingClose.goalTitle,
+      goalDescription: this.pendingClose.goalDescription,
+      assignments,
+      hires: this.pendingClose.hires.map((h) => ({ need: String(h.need).slice(0, 200) }))
+    });
+    this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, hires: this.pendingClose.hires.length });
+  }
+
+  confirmMeetingClose() {
+    const pending = this.pendingClose;
+    this.pendingClose = null;
+    if (!pending) {
+      this.send({ type: 'error', message: 'No hay un cierre de reunión pendiente.' });
+      return;
+    }
+
+    const goal = this.store.createGoal({
+      companyId: this.company.id,
+      meetingId: this.meeting.id,
+      title: pending.goalTitle,
+      description: pending.goalDescription
+    });
+
+    // Las tareas pendientes de la reunión pasan a la meta → cola de trabajo.
+    let taskCount = 0;
+    for (const agent of this.sessionAgents) {
+      for (const task of agent.tasks || []) {
+        if (!task.completed) {
+          this.store.assignTaskToGoal(task.id, goal.id);
+          taskCount += 1;
+        }
+      }
+    }
+    // Necesidades sin dueño → tareas del contratista (contrata y delega).
+    const contratista = this.sessionAgents.find((agent) => agent.role === 'contratista');
+    if (contratista) {
+      for (const hire of pending.hires) {
+        const taskId = this.store.insertTask(this.meeting.id, contratista.id, {
+          text: `Contratar a alguien para: ${hire.need}`
+        });
+        this.store.assignTaskToGoal(taskId, goal.id);
+        taskCount += 1;
+      }
+    }
+
+    this.logTelemetry('meeting_confirmed_close', { goalId: goal.id, tasks: taskCount });
+    const companyId = this.company.id;
+    this.closeCurrentMeeting('finished_to_work');
+    this.send({ type: 'meeting_reset' });
+    this.initMeeting(null, companyId);
+  }
+
+  // Habla sintética de un agente fuera del flujo de respuesta (p.ej. el
+  // resumen de cierre de la CEO): texto + voz por el gate.
+  async speakAs(agent, text) {
+    const turnId = nanoid(8);
+    this.send({ type: 'agent_turn_start', turnId, agentId: agent.id });
+    this.send({ type: 'agent_transcript_delta', turnId, agentId: agent.id, delta: text, seq: 1 });
+    this.memory.add('agent', agent.name, text, agent.id, turnId);
+    this.send({
+      type: 'agent_turn_complete',
+      turnId,
+      agentId: agent.id,
+      text,
+      backend: 'stream',
+      keyStatus: this.keyRing.snapshot()
+    });
+    const runtime = this.agents.get(agent.id);
+    if (runtime) {
+      void (async () => {
+        try {
+          const parts = await runtime.generateAudioParts(text, (event) => this.send({ ...event, turnId, agentId: agent.id }));
+          if (parts.length > 0) {
+            const rate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
+            const token = await this.gate.acquire(turnId, agent.id, { sampleRate: rate });
+            for (const part of parts) {
+              this.gate.sendChunk(token, part.data, part.mimeType);
+            }
+            this.gate.finish(token, 'complete');
+          }
+        } catch {
+          // La voz del cierre es best-effort.
+        }
+      })();
     }
   }
 
