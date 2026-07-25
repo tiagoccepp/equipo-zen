@@ -1,11 +1,11 @@
 import './styles.css';
 
-import { parseServerMessage } from '../shared/protocol.ts';
+import { VOICES, VOICE_LABELS, parseServerMessage } from '../shared/protocol.ts';
 import type {
-  AgentTask as Task,
   KeyStatus,
   MeetingScenario,
   PublicAgent as Agent,
+  PublicCompany as Company,
   RouteDecision,
   ServerMessage as MeetingMessage
 } from '../shared/protocol.ts';
@@ -39,6 +39,27 @@ type MicMeter = {
   speaking: boolean;
 };
 
+type CompanyTemplate = {
+  id: string;
+  name: string;
+  industry: string;
+  emoji: string;
+  color: string;
+  scenario: string;
+  teamSize: number;
+  team: Array<{ name: string; title: string }>;
+};
+
+type MeetingListItem = {
+  id: string;
+  title: string | null;
+  scenario_name: string | null;
+  status: string;
+  last_active_at: string;
+  turn_count: number;
+  summary: string | null;
+};
+
 const telemetryClientId = crypto.randomUUID();
 let telemetrySeq = 0;
 let inputTraceTimer = 0;
@@ -48,9 +69,15 @@ let voiceStatusTimer = 0;
 let renderQueued = false;
 
 const MIC_SETTINGS_STORAGE_KEY = 'reunion.micSettings.v1';
-const MEETING_ID_STORAGE_KEY = 'reunion.meetingId.v1';
 const ASR_LOCALE_STORAGE_KEY = 'reunion.asrLocale.v1';
+const LAST_COMPANY_STORAGE_KEY = 'sim.companyId.v1';
+const MEETING_STORAGE_PREFIX = 'sim.meetingId.';
 const ASR_LOCALES = ['es-ES', 'es-AR', 'es-MX', 'en-US'];
+
+const DEFAULT_VOICE = 'M4';
+const AGENT_COLORS = ['#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#5c5470', '#15618a', '#c2255c', '#f08c00'];
+const COMPANY_COLORS = ['#2f6f73', '#4c6ef5', '#e8590c', '#0ca678', '#8a5a2b', '#5c5470', '#c2255c', '#1971c2'];
+const VOICE_READY = 'Te escucho: hablá cuando quieras.';
 
 function loadAsrLocale(): string {
   try {
@@ -71,21 +98,51 @@ function saveAsrLocale(locale: string) {
   trace('asr_locale_changed', { locale });
 }
 
-function loadStoredMeetingId(): string | undefined {
+function loadLastCompanyId(): string {
   try {
-    return window.localStorage.getItem(MEETING_ID_STORAGE_KEY) || undefined;
+    return window.localStorage.getItem(LAST_COMPANY_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveLastCompanyId(companyId: string) {
+  try {
+    window.localStorage.setItem(LAST_COMPANY_STORAGE_KEY, companyId);
+  } catch {
+    // localStorage puede fallar en modo privado; la sesión sigue en memoria.
+  }
+}
+
+function clearLastCompanyId(companyId: string) {
+  try {
+    if (window.localStorage.getItem(LAST_COMPANY_STORAGE_KEY) === companyId) {
+      window.localStorage.removeItem(LAST_COMPANY_STORAGE_KEY);
+    }
+    window.localStorage.removeItem(`${MEETING_STORAGE_PREFIX}${companyId}`);
+  } catch {
+    // Best effort.
+  }
+}
+
+function loadStoredMeetingId(companyId: string): string | undefined {
+  if (!companyId) return undefined;
+  try {
+    return window.localStorage.getItem(`${MEETING_STORAGE_PREFIX}${companyId}`) || undefined;
   } catch {
     return undefined;
   }
 }
 
-function saveStoredMeetingId(meetingId: string) {
+function saveStoredMeetingId(companyId: string, meetingId: string) {
+  if (!companyId) return;
   try {
-    window.localStorage.setItem(MEETING_ID_STORAGE_KEY, meetingId);
+    window.localStorage.setItem(`${MEETING_STORAGE_PREFIX}${companyId}`, meetingId);
   } catch {
     // localStorage puede fallar en modo privado; la reunión sigue en memoria.
   }
 }
+
 const DEFAULT_MIC_SETTINGS: MicSettings = {
   sensitivity: 55,
   endSilenceMs: 800,
@@ -210,6 +267,10 @@ class PcmAudioQueue {
   }
 }
 
+// Captura de micrófono con VAD local. El PCM ya NO viaja al servidor: la
+// transcripción es del SpeechRecognition del navegador y llega como
+// transcriptHint en audio_end. Acá queda el gate de voz (inicio/fin de
+// habla por RMS), el medidor y el barge-in con ducking.
 class LiveMicrophoneStreamer {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -220,7 +281,6 @@ class LiveMicrophoneStreamer {
   private silenceMs = 0;
   private speechMs = 0;
   private lastMeterAt = 0;
-  private preBuffer: Array<{ data: string; durationMs: number }> = [];
   private bargeMs = 0;
 
   private sendMessage: (payload: unknown) => void;
@@ -270,7 +330,7 @@ class LiveMicrophoneStreamer {
     this.worklet.connect(this.mute);
     this.mute.connect(this.context.destination);
     trace('microphone_ready');
-    this.onState('Escuchando audio real.');
+    this.onState(VOICE_READY);
   }
 
   stop() {
@@ -294,17 +354,11 @@ class LiveMicrophoneStreamer {
     this.speaking = false;
     this.silenceMs = 0;
     this.speechMs = 0;
-    this.preBuffer = [];
     this.onMeter({ level: 0, startThreshold: micThresholds(state.micSettings).startThreshold, speaking: false });
     this.onState('');
   }
 
   private handlePcmChunk(chunk: { pcm: ArrayBuffer; rms: number; durationMs: number }) {
-    const payload = {
-      data: base64FromArrayBuffer(chunk.pcm),
-      durationMs: chunk.durationMs
-    };
-
     const settings = state.micSettings;
     const { startThreshold, continueThreshold } = micThresholds(settings);
     const endSilenceMs = settings.endSilenceMs;
@@ -324,8 +378,6 @@ class LiveMicrophoneStreamer {
           this.bargeMs += chunk.durationMs;
         }
         if (this.bargeMs < 250) {
-          this.preBuffer.push(payload);
-          this.preBuffer = this.preBuffer.slice(-4);
           return;
         }
         // Confirmado: cortar al agente y dejar que el flujo normal de
@@ -348,8 +400,6 @@ class LiveMicrophoneStreamer {
     }
 
     if (!this.speaking) {
-      this.preBuffer.push(payload);
-      this.preBuffer = this.preBuffer.slice(-4);
       if (chunk.rms >= startThreshold) {
         this.speaking = true;
         this.silenceMs = 0;
@@ -363,16 +413,11 @@ class LiveMicrophoneStreamer {
           sensitivity: settings.sensitivity
         });
         this.sendMessage({ type: 'audio_start' });
-        for (const buffered of this.preBuffer) {
-          this.sendMessage({ type: 'audio_chunk', data: buffered.data, mimeType: 'audio/pcm;rate=16000' });
-        }
-        this.preBuffer = [];
-        this.onState('Hablando...');
+        this.onState('Grabando tu turno…');
       }
       return;
     }
 
-    this.sendMessage({ type: 'audio_chunk', data: payload.data, mimeType: 'audio/pcm;rate=16000' });
     this.speechMs += chunk.durationMs;
     if (chunk.rms < continueThreshold) {
       this.silenceMs += chunk.durationMs;
@@ -400,7 +445,7 @@ class LiveMicrophoneStreamer {
         this.onState('Ruido descartado.');
         window.setTimeout(() => {
           if (state.recording && state.voiceStatus === 'Ruido descartado.') {
-            state.voiceStatus = 'Audio Live conectado.';
+            state.voiceStatus = VOICE_READY;
             markDirty('voice');
           }
         }, 900);
@@ -408,7 +453,7 @@ class LiveMicrophoneStreamer {
       }
       trace('speech_ended', { transcriptHint, endSilenceMs, speechMs });
       this.sendMessage({ type: 'audio_end', transcriptHint });
-      this.onState('Procesando audio...');
+      this.onState('Procesando…');
     }
   }
 }
@@ -441,7 +486,7 @@ class BrowserSpeechRecognizer {
     this.recognition.maxAlternatives = 1;
     this.recognition.onresult = (event: any) => this.handleResult(event);
     this.recognition.onerror = () => {
-      // El audio PCM del backend queda como respaldo si el navegador no reconoce voz.
+      // El VAD sigue enmarcando el turno; sin hint el servidor pide reintento.
     };
     this.recognition.onend = () => {
       if (!this.active) {
@@ -517,6 +562,19 @@ class BrowserSpeechRecognizer {
 const initialMicSettings = loadMicSettings();
 
 const state = {
+  view: 'home' as 'home' | 'workspace',
+  companies: [] as Company[],
+  companiesLoading: false,
+  companiesError: false,
+  templates: [] as CompanyTemplate[],
+  templatesLoaded: false,
+  selectedTemplateId: '',
+  newCompanyTab: 'templates' as 'templates' | 'scratch',
+  scratchColor: COMPANY_COLORS[0],
+  creatingCompany: false,
+  company: null as Company | null,
+  companyId: loadLastCompanyId(),
+  mode: 'mock' as 'stream' | 'mock',
   sessionId: '',
   meetingId: '',
   scenario: null as MeetingScenario | null,
@@ -544,7 +602,8 @@ const state = {
   audio: new PcmAudioQueue(),
   audioSegment: null as { turnId: string; agentId: string; endReceived: boolean } | null,
   editingAgentId: null as string | null,
-  selectedSpawnColor: '#2f6f73'
+  selectedSpawnColor: AGENT_COLORS[0],
+  openTaskPanels: new Set<string>()
 };
 
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -553,15 +612,17 @@ if (!root) {
 }
 const app: HTMLDivElement = root;
 
-// Reconexión con backoff exponencial + jitter. El socket previo se cierra
-// antes de abrir otro; al reconectar se re-arma el micrófono si estaba
-// activo y se reenvía hello (que reanuda la reunión persistida).
+// ── Conexión WebSocket ──────────────────────────────────────────────────
+// Reconexión con backoff exponencial + jitter, SOLO mientras la vista
+// activa es el workspace. Al volver al home el socket se cierra en
+// silencio (sin reintentos). hello lleva companyId + meetingId por empresa.
+
 let reconnectAttempts = 0;
 let reconnectTimer = 0;
 let connecting = false;
 
 function scheduleReconnect() {
-  if (reconnectTimer) return;
+  if (reconnectTimer || state.view !== 'workspace') return;
   const base = Math.min(15000, 500 * Math.pow(1.8, reconnectAttempts));
   const jitter = base * 0.3 * (Math.random() * 2 - 1);
   const delay = Math.round(base + jitter);
@@ -572,45 +633,77 @@ function scheduleReconnect() {
   }, delay);
 }
 
-function connect() {
-  if (connecting) return;
-  connecting = true;
-
-  if (state.socket) {
-    const old = state.socket;
-    state.socket = null;
+function detachSocket() {
+  const old = state.socket;
+  state.socket = null;
+  if (old) {
     old.onopen = old.onclose = old.onmessage = old.onerror = null;
     try { old.close(); } catch { /* ya cerrado */ }
   }
+}
+
+// Cierra el socket sin disparar la reconexión (cambio de empresa / home).
+function closeSocketSilently() {
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = 0;
+  }
+  connecting = false;
+  reconnectAttempts = 0;
+  detachSocket();
+  state.connected = false;
+}
+
+function reconnectNow() {
+  closeSocketSilently();
+  // Pequeño respiro para que el servidor procese el cierre de la sesión
+  // anterior antes del nuevo hello (libera la reunión para reanudarla).
+  window.setTimeout(() => connect(), 140);
+  markDirty('connection');
+}
+
+function connect() {
+  if (state.view !== 'workspace') return;
+  if (connecting) return;
+  connecting = true;
+
+  detachSocket();
 
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(`${protocol}://${window.location.host}/meeting`);
 
-  socket.addEventListener('open', () => {
+  socket.onopen = () => {
+    if (state.socket !== socket) return;
     connecting = false;
     reconnectAttempts = 0;
     state.connected = true;
-    trace('socket_open');
-    // hello inicializa la reunión: reanuda la guardada o crea una nueva.
-    socket.send(JSON.stringify({ type: 'hello', meetingId: loadStoredMeetingId() }));
+    trace('socket_open', { companyId: state.companyId });
+    // hello abre/reanuda una reunión DE ESTA EMPRESA.
+    socket.send(JSON.stringify({
+      type: 'hello',
+      companyId: state.companyId || undefined,
+      meetingId: loadStoredMeetingId(state.companyId)
+    }));
     if (state.recording) {
       // El servidor es nuevo: re-preparar el transcriptor y el ASR local.
       socket.send(JSON.stringify({ type: 'audio_prepare' }));
       state.browserSpeech?.start();
     }
     markDirty('connection', 'voice');
-  });
+  };
 
-  socket.addEventListener('close', () => {
+  socket.onclose = () => {
+    if (state.socket !== socket) return;
     connecting = false;
     state.connected = false;
     state.speakingAgentId = '';
     trace('socket_close');
     markDirty('connection', 'agents', 'voice');
     scheduleReconnect();
-  });
+  };
 
-  socket.addEventListener('message', async (event) => {
+  socket.onmessage = async (event) => {
+    if (state.socket !== socket) return;
     const message = parseServerMessage(event.data);
     if (!message) {
       trace('server_message_invalid', { raw: String(event.data).slice(0, 200) });
@@ -618,10 +711,76 @@ function connect() {
     }
     traceIncomingMessage(message);
     await handleServerMessage(message);
-  });
+  };
 
   state.socket = socket;
 }
+
+// ── Navegación entre vistas ─────────────────────────────────────────────
+
+function resetMeetingLocalState() {
+  state.sessionId = '';
+  state.meetingId = '';
+  state.scenario = null;
+  state.agents = [];
+  state.turns = [];
+  state.route = null;
+  state.keyStatus = [];
+  state.speakingAgentId = '';
+  state.activeAudioTranscript = '';
+  state.clientSpeechText = '';
+  state.audioSegment = null;
+  state.turnStartedAt.clear();
+  state.agentStartedAt.clear();
+  state.openTaskPanels.clear();
+  state.browserSpeech?.resetUtterance();
+  state.audio.stop();
+  transcriptReset();
+}
+
+function enterCompany(companyId: string, seed?: Company | null) {
+  state.view = 'workspace';
+  state.companyId = companyId;
+  if (seed) {
+    state.company = seed;
+  } else if (state.company?.id !== companyId) {
+    state.company = null;
+  }
+  saveLastCompanyId(companyId);
+  resetMeetingLocalState();
+  closeSocketSilently();
+  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'micTuning');
+  trace('company_entered', { companyId });
+  connect();
+}
+
+function leaveToHome() {
+  if (state.recording) {
+    stopVoiceCapture();
+  }
+  state.audio.stop();
+  closeSocketSilently();
+  state.view = 'home';
+  markDirty('view', 'connection', 'home');
+  trace('back_to_home');
+  void loadCompanies();
+}
+
+async function loadCompanies() {
+  state.companiesLoading = true;
+  state.companiesError = false;
+  markDirty('home');
+  try {
+    const data = await apiJson<{ companies: Company[] }>('/api/companies');
+    state.companies = data.companies || [];
+  } catch {
+    state.companiesError = true;
+  }
+  state.companiesLoading = false;
+  markDirty('home');
+}
+
+// ── Mensajes del servidor ───────────────────────────────────────────────
 
 async function handleServerMessage(message: MeetingMessage) {
   switch (message.type) {
@@ -637,11 +796,16 @@ async function handleServerMessage(message: MeetingMessage) {
       state.agents = message.agents;
       state.model = message.model;
       state.liveMode = message.liveMode;
-      saveStoredMeetingId(message.meetingId);
+      state.company = message.company;
+      state.companyId = message.company.id;
+      state.mode = message.mode === 'mock' || (!message.mode && !message.liveMode) ? 'mock' : 'stream';
+      saveLastCompanyId(message.company.id);
+      saveStoredMeetingId(message.company.id, message.meetingId);
       trace('meeting_ready', {
         model: message.model,
         liveMode: message.liveMode,
         meetingId: message.meetingId,
+        companyId: message.company.id,
         resumed: message.resumed,
         agents: message.agents.map((agent) => ({ id: agent.id, name: agent.name, title: agent.title }))
       });
@@ -656,12 +820,12 @@ async function handleServerMessage(message: MeetingMessage) {
         transcriptReset();
       }
       const statusText = message.resumed
-        ? 'Reunión retomada: se restauró la conversación, los agentes y las tareas.'
-        : message.liveMode
-          ? 'Reunión nueva en modo Live. Los agentes responden con Gemini en el backend.'
-          : 'Reunión nueva en modo simulación. Configura .env con tus claves Gemini para activar Live API.';
-      upsertAlert('meeting-status', 'Reunión', statusText, 'ok', 4000);
-      markDirty('agents', 'scenario', 'keys', 'voice', 'route');
+        ? 'Reunión retomada: se restauró la conversación, el equipo y las tareas.'
+        : state.mode === 'mock'
+          ? 'Reunión nueva en modo demo: los agentes responden simulados (sin claves API).'
+          : 'Reunión nueva: el equipo está en la mesa.';
+      upsertAlert('meeting-status', state.company.name, statusText, 'ok', 4000);
+      markDirty('view', 'company', 'agents', 'scenario', 'keys', 'voice', 'route');
       break;
     }
 
@@ -688,12 +852,12 @@ async function handleServerMessage(message: MeetingMessage) {
       const turn: TranscriptTurn = {
         id: message.turnId,
         kind: message.source === 'system' ? 'system' : 'user',
-        speaker: message.source === 'system' ? 'Sistema' : 'Tu',
+        speaker: message.source === 'system' ? 'Sistema' : 'Vos',
         text: message.text
       };
       state.turns.push(turn);
       transcriptAppend(turn);
-      state.voiceStatus = message.source === 'audio' ? 'Orquestando respuesta...' : state.voiceStatus;
+      state.voiceStatus = message.source === 'audio' ? 'Orquestando respuesta…' : state.voiceStatus;
       markDirty('voice');
       break;
     }
@@ -707,7 +871,7 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'no_agent_response':
-      setVoiceStatus(state.recording ? 'Audio Live conectado.' : '', 0);
+      setVoiceStatus(state.recording ? VOICE_READY : '', 0);
       break;
 
     case 'agent_turn_start': {
@@ -805,7 +969,7 @@ async function handleServerMessage(message: MeetingMessage) {
     case 'live_session_status':
       trace('live_session_status', { agentId: message.agentId, status: message.status });
       if (message.status === 'fallback') {
-        upsertAlert(`live-${message.agentId}`, agentName(message.agentId), 'Sesión Live no disponible; usando streaming con TTS.', 'working', 3200);
+        upsertAlert(`live-${message.agentId}`, agentName(message.agentId), 'Voz en tiempo real no disponible; usando streaming con TTS.', 'working', 3200);
       }
       break;
 
@@ -830,11 +994,11 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'agent_silence':
-      setVoiceStatus(state.recording ? 'Audio Live conectado.' : '', 0);
+      setVoiceStatus(state.recording ? VOICE_READY : '', 0);
       break;
 
     case 'audio_listening_start':
-      state.voiceStatus = 'Audio Live conectado.';
+      state.voiceStatus = VOICE_READY;
       break;
 
     case 'audio_listening_stop':
@@ -852,12 +1016,7 @@ async function handleServerMessage(message: MeetingMessage) {
       state.activeAudioTranscript = '';
       state.clientSpeechText = '';
       state.browserSpeech?.resetUtterance();
-      state.voiceStatus =
-        message.source === 'fallback'
-          ? 'Audio transcripto.'
-          : message.source === 'client'
-            ? 'Audio reconocido.'
-            : 'Audio Live transcripto.';
+      state.voiceStatus = 'Turno de voz enviado.';
       markDirty('voice');
       break;
 
@@ -868,7 +1027,7 @@ async function handleServerMessage(message: MeetingMessage) {
 
     case 'audio_transcription_empty':
       state.voiceStatus = '';
-      upsertAlert('audio-empty', 'Audio', message.message, 'error', 2600);
+      upsertAlert('audio-empty', 'Voz', message.message, 'error', 2600);
       markDirty('voice');
       break;
 
@@ -983,10 +1142,13 @@ function traceIncomingMessage(message: MeetingMessage) {
 // El shell se monta UNA vez; cada región se repinta solo cuando su dato
 // cambió. El transcript es append-only con nodos vivos (los deltas de
 // streaming mutan un text node, nunca innerHTML). Los inputs (composer,
-// drawer, tareas) son estáticos: el foco y lo tipeado sobreviven a
+// drawers, tareas) son estáticos: el foco y lo tipeado sobreviven a
 // cualquier mensaje del servidor.
 
 type Region =
+  | 'view'
+  | 'home'
+  | 'company'
   | 'connection'
   | 'alerts'
   | 'agents'
@@ -1008,9 +1170,9 @@ function markDirty(...regions: Region[]) {
   requestAnimationFrame(flushRender);
 }
 
-// Compat con los caminos que antes re-renderizaban toda la app.
+// Compat con los caminos que re-renderizan toda la app.
 function render() {
-  markDirty('connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario');
+  markDirty('view', 'home', 'company', 'connection', 'alerts', 'agents', 'route', 'keys', 'voice', 'micTuning', 'micMeter', 'scenario');
 }
 
 function flushRender() {
@@ -1031,16 +1193,38 @@ function byId<T extends HTMLElement>(id: string): T {
 }
 
 const REGION_RENDERERS: Record<Region, () => void> = {
+  view() {
+    byId('viewHome').hidden = state.view !== 'home';
+    byId('viewWorkspace').hidden = state.view !== 'workspace';
+    document.title = state.view === 'workspace' && state.company
+      ? `${state.company.name} — Equipo`
+      : 'Equipo — Simulaciones';
+  },
+  home() {
+    byId('companiesGrid').innerHTML = renderCompanies();
+  },
+  company() {
+    const company = state.company;
+    byId('wsTile').textContent = company?.emoji || '🏢';
+    byId('wsName').textContent = company?.name || 'Cargando…';
+    byId('wsIndustry').textContent = company?.industry || '';
+    byId('viewWorkspace').style.setProperty('--company-color', company?.color || 'var(--accent)');
+    const badge = byId('modeBadge');
+    badge.hidden = state.mode !== 'mock';
+  },
   connection() {
     const el = byId<HTMLDivElement>('connectionStatus');
     el.className = `status ${state.connected ? 'is-on' : ''}`;
-    el.innerHTML = `<span></span>${state.connected ? 'Conectado' : 'Reconectando'}`;
+    el.innerHTML = `<span aria-hidden="true"></span>${state.connected ? 'Conectado' : 'Conectando…'}`;
   },
   alerts() {
     byId('alerts').innerHTML = renderAlerts();
   },
   agents() {
-    byId('agents').innerHTML = state.agents.map(renderAgent).join('');
+    const container = byId('agents');
+    container.innerHTML = state.agents.length
+      ? state.agents.map(renderAgent).join('')
+      : '<p class="muted side-empty">Cargando el equipo…</p>';
   },
   route() {
     byId('routePanel').innerHTML = renderRoute();
@@ -1050,12 +1234,17 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   },
   voice() {
     const mic = byId<HTMLButtonElement>('micButton');
-    mic.className = `icon-button ${state.recording ? 'danger' : ''}`;
-    mic.title = state.recording ? 'Detener voz' : 'Iniciar voz';
-    mic.setAttribute('aria-label', mic.title);
-    mic.innerHTML = state.recording ? pauseIcon() : micIcon();
-    byId('speechTitle').textContent = state.recording ? 'Conversacion activa' : 'Audio Live';
-    byId('speechStatus').textContent = state.activeAudioTranscript || state.voiceStatus || speechSupportText();
+    mic.classList.toggle('is-recording', state.recording);
+    mic.setAttribute('aria-pressed', String(state.recording));
+    const label = state.recording ? 'Apagar el micrófono' : 'Hablar con el equipo (activar micrófono)';
+    mic.title = label;
+    mic.setAttribute('aria-label', label);
+    mic.innerHTML = state.recording ? stopIcon() : micIcon();
+    const status = byId('speechStatus');
+    status.textContent = state.activeAudioTranscript
+      ? `“${state.activeAudioTranscript}”`
+      : state.voiceStatus;
+    status.classList.toggle('is-live', Boolean(state.activeAudioTranscript));
     byId<HTMLButtonElement>('sendButton').disabled = !state.connected;
   },
   micTuning() {
@@ -1073,7 +1262,6 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     }
   },
   scenario() {
-    byId('scenarioName').textContent = state.scenario?.name || 'Reunión en vivo';
     const input = byId<HTMLInputElement>('scenarioInput');
     if (document.activeElement !== input) {
       input.value = state.scenario?.text || '';
@@ -1089,8 +1277,13 @@ function isNearBottom(el: HTMLElement) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 90;
 }
 
+function syncTranscriptEmpty() {
+  byId('transcriptEmpty').hidden = byId('transcriptList').childElementCount > 0;
+}
+
 function transcriptAppend(turn: TranscriptTurn) {
   const container = byId<HTMLDivElement>('transcript');
+  const list = byId<HTMLDivElement>('transcriptList');
   const stick = isNearBottom(container);
   const article = document.createElement('article');
   article.className = `turn ${turn.kind}`;
@@ -1102,10 +1295,11 @@ function transcriptAppend(turn: TranscriptTurn) {
   speaker.className = 'speaker';
   speaker.textContent = turn.speaker;
   const text = document.createElement('p');
-  text.textContent = turn.text || '...';
+  text.textContent = turn.text || '…';
   article.append(speaker, text);
-  container.append(article);
+  list.append(article);
   transcriptNodes.set(turn.id, { article, text });
+  syncTranscriptEmpty();
   if (stick) {
     container.scrollTop = container.scrollHeight;
   }
@@ -1116,7 +1310,7 @@ function transcriptSetText(id: string, value: string) {
   if (!node) return;
   const container = byId<HTMLDivElement>('transcript');
   const stick = isNearBottom(container);
-  node.text.textContent = value || '...';
+  node.text.textContent = value || '…';
   if (stick) {
     container.scrollTop = container.scrollHeight;
   }
@@ -1125,14 +1319,57 @@ function transcriptSetText(id: string, value: string) {
 function transcriptRemove(id: string) {
   transcriptNodes.get(id)?.article.remove();
   transcriptNodes.delete(id);
+  syncTranscriptEmpty();
 }
 
 // Reconstruye el DOM del transcript desde state.turns (reset / resume).
 function transcriptReset() {
   transcriptNodes.clear();
-  byId<HTMLDivElement>('transcript').innerHTML = '';
+  byId<HTMLDivElement>('transcriptList').innerHTML = '';
   for (const turn of state.turns) {
     transcriptAppend(turn);
+  }
+  syncTranscriptEmpty();
+}
+
+// ── Modales accesibles (overlay + Escape + foco) ────────────────────────
+
+const modalStack: string[] = [];
+let modalReturnFocus: HTMLElement | null = null;
+
+function openModal(id: string) {
+  const modal = byId(id);
+  if (!modalStack.includes(id)) {
+    modalStack.push(id);
+  }
+  if (modalStack.length === 1) {
+    modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  modal.classList.add('is-open');
+  const panel = modal.querySelector<HTMLElement>('.modal-panel');
+  window.setTimeout(() => {
+    const target = panel?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')
+      || panel?.querySelector<HTMLElement>('button');
+    target?.focus();
+  }, 40);
+}
+
+function closeModal(id: string) {
+  byId(id).classList.remove('is-open');
+  const index = modalStack.indexOf(id);
+  if (index >= 0) {
+    modalStack.splice(index, 1);
+  }
+  if (modalStack.length === 0 && modalReturnFocus?.isConnected) {
+    modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+}
+
+function closeTopModal() {
+  const top = modalStack[modalStack.length - 1];
+  if (top) {
+    closeModal(top);
   }
 }
 
@@ -1140,153 +1377,278 @@ function transcriptReset() {
 
 function mountShell() {
   app.innerHTML = `
-    <main class="shell">
-      <section class="workspace">
-        <header class="topbar">
-          <div>
-            <div class="eyebrow">Mesa de trabajo</div>
-            <h1 id="scenarioName">Reunión en vivo</h1>
+    <div class="view view-home" id="viewHome">
+      <div class="home-inner">
+        <header class="home-head">
+          <p class="eyebrow">Equipo · simulador de empresas</p>
+          <h1>Simulaciones</h1>
+          <p class="lead">Cada empresa es un mundo aparte: su equipo, sus reuniones y su memoria. Entrá a una para conversar por voz o texto con sus empleados.</p>
+        </header>
+        <section id="companiesGrid" class="companies" aria-label="Tus simulaciones"></section>
+      </div>
+    </div>
+
+    <div class="view view-workspace" id="viewWorkspace" hidden>
+      <div class="ws-inner">
+        <header class="wsbar">
+          <button class="btn ghost back-btn" data-action="go-home" type="button">← Simulaciones</button>
+          <div class="ws-identity">
+            <span class="company-tile sm" id="wsTile" aria-hidden="true">🏢</span>
+            <div class="ws-titles">
+              <h1 id="wsName">Cargando…</h1>
+              <p id="wsIndustry"></p>
+            </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 14px;">
-            <button class="text-button" data-action="open-meetings" type="button">Reuniones</button>
-            <button class="btn-sumar" data-action="open-spawn" type="button">
-              <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-              <span>Sumar al Equipo</span>
-            </button>
-            <div class="status" id="connectionStatus"><span></span>Reconectando</div>
+          <div class="ws-tools">
+            <span class="mode-badge" id="modeBadge" hidden title="Sin claves API: los agentes responden simulados">Demo</span>
+            <div class="status" id="connectionStatus" role="status"><span aria-hidden="true"></span>Conectando…</div>
+            <button class="btn ghost" data-action="open-meetings" type="button">Reuniones</button>
+            <button class="icon-btn" data-action="open-company-edit" type="button" aria-label="Editar empresa" title="Editar empresa">${pencilIcon()}</button>
+            <button class="icon-btn danger" data-action="archive-company" type="button" aria-label="Archivar empresa" title="Archivar empresa">${archiveIcon()}</button>
           </div>
         </header>
 
-        <form id="scenarioForm" class="scenario-bar">
-          <label for="scenarioInput">Contexto</label>
-          <input type="text" id="scenarioInput" placeholder="Objetivo o contexto de esta reunión..." />
-          <button class="text-button" type="submit">Guardar</button>
-        </form>
-
-        <div id="alerts"></div>
-
-        <section class="agents" id="agents" aria-label="Colaboradores en la mesa"></section>
-
-        <section class="meeting">
-          <div class="transcript" id="transcript" aria-live="polite"></div>
-          <aside class="protocol">
-            <h2>Orquestacion</h2>
-            <div id="routePanel"></div>
-            <div id="keysPanel"></div>
-          </aside>
-        </section>
-
-        <section class="composer">
-          <div class="speech">
-            <button class="icon-button" id="micButton" data-action="toggle-mic" type="button" title="Iniciar voz" aria-label="Iniciar voz">${micIcon()}</button>
-            <div class="speech-copy">
-              <strong id="speechTitle">Audio Live</strong>
-              <span id="speechStatus">${escapeHtml(speechSupportText())}</span>
-            </div>
-          </div>
-          <form id="turnForm" class="turn-form">
-            <textarea id="turnInput" rows="2" placeholder="Di o escribe: revisemos una arquitectura con un modelo de optimizacion..."></textarea>
-            <button class="send-button" id="sendButton" type="submit" disabled>
-              ${sendIcon()}<span>Enviar</span>
-            </button>
+        <div class="goalbar">
+          <form id="scenarioForm" class="goal-form">
+            <label class="goal-label" for="scenarioInput">Objetivo de la reunión</label>
+            <input type="text" id="scenarioInput" placeholder="¿Qué quieren resolver hoy? (opcional)" />
+            <button class="btn ghost sm" type="submit">Guardar</button>
           </form>
-          <div id="micTuning"></div>
-          <div class="controls">
-            <button class="text-button" data-action="reset" type="button">Reiniciar reunion</button>
-            <button class="text-button" data-action="health" type="button">Estado de claves</button>
-          </div>
-        </section>
-      </section>
-    </main>
+          <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
+        </div>
 
-    <div class="dialog-overlay" id="spawnOverlay" data-action="close-spawn"></div>
-    <div class="dialog-content" id="spawnDialog">
-      <div class="dialog-header">
-        <h2 id="spawnDialogTitle">Sumar al Equipo</h2>
-        <button class="dialog-close-btn" data-action="close-spawn" type="button" aria-label="Cerrar">
-          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
+        <div class="ws-layout">
+          <aside class="ws-side">
+            <section class="side-section" aria-labelledby="teamTitle">
+              <div class="side-head">
+                <h2 id="teamTitle">Equipo</h2>
+                <button class="btn ghost sm" data-action="open-spawn" type="button">+ Sumar</button>
+              </div>
+              <div id="agents" class="agents"></div>
+            </section>
+            <details class="side-panel" id="orchestrationPanel">
+              <summary>
+                <h2>Orquestación</h2>
+                ${chevronIcon()}
+              </summary>
+              <div class="side-panel-body">
+                <div id="routePanel"></div>
+                <div id="keysPanel"></div>
+                <button class="btn ghost sm" data-action="health" type="button">Actualizar estado de claves</button>
+              </div>
+            </details>
+          </aside>
+
+          <main class="ws-main">
+            <h2 class="sr-only">Conversación</h2>
+            <div class="transcript" id="transcript" tabindex="-1">
+              <div class="transcript-empty" id="transcriptEmpty">
+                <p class="empty-title">La mesa está lista</p>
+                <p>Escribí abajo o activá el micrófono para arrancar la reunión. Podés nombrar a un empleado para dirigirte a esa persona.</p>
+              </div>
+              <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
+            </div>
+            <section class="composer" aria-label="Mandar un mensaje al equipo">
+              <p class="speech-status" id="speechStatus"></p>
+              <form id="turnForm" class="turn-form">
+                <button class="mic-btn" id="micButton" data-action="toggle-mic" type="button" aria-pressed="false" aria-label="Hablar con el equipo (activar micrófono)" title="Hablar con el equipo (activar micrófono)">${micIcon()}</button>
+                <textarea id="turnInput" rows="1" placeholder="Escribile al equipo… (Enter envía · Shift+Enter, salto de línea)" aria-label="Mensaje para el equipo"></textarea>
+                <button class="send-btn" id="sendButton" type="submit" disabled>${sendIcon()}<span>Enviar</span></button>
+              </form>
+              <details class="mic-details" id="micDetails">
+                <summary>Ajustes de micrófono ${chevronIcon()}</summary>
+                <div id="micTuning"></div>
+              </details>
+            </section>
+          </main>
+        </div>
       </div>
-      <form id="spawnForm" style="display: contents;">
-        <div class="dialog-body">
-          <div class="form-group">
-            <label for="spawnName">Nombre</label>
-            <input type="text" id="spawnName" class="form-control" placeholder="Ej. Carlos" required />
-          </div>
-          <div class="form-group">
-            <label for="spawnTitle">Rol / Especialidad</label>
-            <input type="text" id="spawnTitle" class="form-control" placeholder="Ej. Especialista en Seguridad" required />
-          </div>
-          <div class="form-group">
-            <label>Color de Firma</label>
-            <div class="color-picker-grid" id="spawnColors">
-              ${['#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#344e41', '#5c5470'].map((color) => `
-                <button type="button" class="color-option" data-action="select-color" style="background: ${color};" data-color="${color}"></button>
-              `).join('')}
+    </div>
+
+    <div class="toasts" id="alerts" aria-live="polite"></div>
+
+    <div class="modal center" id="newCompanyModal">
+      <div class="modal-backdrop" data-action="close-new-company"></div>
+      <section class="modal-panel wide" role="dialog" aria-modal="true" aria-labelledby="newCompanyTitle">
+        <header class="modal-head">
+          <h2 id="newCompanyTitle">Nueva simulación</h2>
+          <button class="icon-btn" data-action="close-new-company" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="tabs" role="tablist" aria-label="Cómo crear la empresa">
+          <button role="tab" type="button" id="tabTemplates" class="tab is-active" aria-selected="true" aria-controls="templateForm" data-action="nc-tab" data-tab="templates">Desde plantilla</button>
+          <button role="tab" type="button" id="tabScratch" class="tab" aria-selected="false" aria-controls="scratchForm" data-action="nc-tab" data-tab="scratch">Desde cero</button>
+        </div>
+        <form id="templateForm" class="modal-form" role="tabpanel" aria-labelledby="tabTemplates">
+          <div class="modal-body">
+            <div id="templateList" class="template-list" aria-label="Plantillas disponibles"></div>
+            <div class="form-field">
+              <label for="templateName">Nombre de tu empresa <span class="hint-inline">(opcional)</span></label>
+              <input type="text" id="templateName" class="form-control" maxlength="80" placeholder="Dejalo vacío para usar el de la plantilla" />
             </div>
           </div>
-          <div class="form-group">
-            <label for="spawnDomains">Áreas de Dominio (separadas por coma)</label>
-            <input type="text" id="spawnDomains" class="form-control" placeholder="Ej. seguridad, encriptacion, auditoria" />
+          <footer class="modal-foot">
+            <button type="button" class="btn ghost" data-action="close-new-company">Cancelar</button>
+            <button type="submit" class="btn primary">Crear simulación</button>
+          </footer>
+        </form>
+        <form id="scratchForm" class="modal-form" role="tabpanel" aria-labelledby="tabScratch" hidden>
+          <div class="modal-body">
+            <div class="form-field">
+              <label for="scratchName">Nombre</label>
+              <input type="text" id="scratchName" class="form-control" maxlength="80" placeholder="Ej. Panadería La Espiga" required />
+            </div>
+            <div class="form-row">
+              <div class="form-field">
+                <label for="scratchIndustry">Industria</label>
+                <input type="text" id="scratchIndustry" class="form-control" maxlength="80" placeholder="Ej. Gastronomía" />
+              </div>
+              <div class="form-field emoji-field">
+                <label for="scratchEmoji">Emoji</label>
+                <input type="text" id="scratchEmoji" class="form-control" maxlength="4" placeholder="🏢" />
+              </div>
+            </div>
+            <div class="form-field">
+              <span class="field-label" id="scratchColorLabel">Color</span>
+              <div class="swatches" id="scratchColors" role="group" aria-labelledby="scratchColorLabel">
+                ${COMPANY_COLORS.map((color, index) => `
+                  <button type="button" class="swatch ${index === 0 ? 'is-selected' : ''}" data-action="nc-pick-color" data-color="${color}" style="--swatch: ${color}" aria-label="Color ${color}" aria-pressed="${index === 0 ? 'true' : 'false'}"></button>
+                `).join('')}
+              </div>
+            </div>
+            <div class="form-field">
+              <label for="scratchScenario">Escenario</label>
+              <textarea id="scratchScenario" class="form-control" maxlength="2000" rows="4" placeholder="¿A qué se dedica la empresa? ¿Qué está pasando? Este contexto lo conocen todos los empleados."></textarea>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="spawnAliases">Alias para el ruteo (separados por coma)</label>
-            <input type="text" id="spawnAliases" class="form-control" placeholder="Ej. carlos, seguridad, seba" />
-          </div>
-          <div class="form-group">
-            <label for="spawnVoice">Voz en Vivo</label>
-            <select id="spawnVoice" class="form-control">
-              <option value="Charon">Macho Maduro (Charon)</option>
-              <option value="Aoede" selected>Hembra Melódica (Aoede)</option>
-              <option value="Fenrir">Macho Profundo (Fenrir)</option>
-              <option value="Puck">Hembra Alegre (Puck)</option>
-              <option value="Kore">Hembra Suave (Kore)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label for="spawnStyle">Estilo de Habla</label>
-            <textarea id="spawnStyle" class="form-control" placeholder="Ej. Preciso, formal y enfocado en la mitigación de riesgos."></textarea>
-          </div>
-          <div class="form-group">
-            <label for="spawnBoundaries">Límites (uno por línea)</label>
-            <textarea id="spawnBoundaries" class="form-control" placeholder="Ej. No decide precios sin validar con el equipo"></textarea>
-          </div>
-          <div class="form-group" id="spawnTasksGroup">
-            <label for="spawnTasks">Tareas Iniciales (una por línea)</label>
-            <textarea id="spawnTasks" class="form-control" placeholder="Ej. Validar cifrado en endpoints&#10;Revisar accesos de base de datos"></textarea>
-          </div>
-        </div>
-        <div class="dialog-footer">
-          <button type="button" class="btn-secondary" data-action="close-spawn">Cancelar</button>
-          <button type="submit" class="btn-primary" id="spawnSubmitLabel">Sumar al Equipo</button>
-        </div>
-      </form>
+          <footer class="modal-foot">
+            <button type="button" class="btn ghost" data-action="close-new-company">Cancelar</button>
+            <button type="submit" class="btn primary">Crear empresa</button>
+          </footer>
+        </form>
+      </section>
     </div>
 
-    <div class="dialog-overlay" id="meetingsOverlay" data-action="close-meetings"></div>
-    <div class="dialog-content" id="meetingsDialog">
-      <div class="dialog-header">
-        <h2>Reuniones</h2>
-        <button class="dialog-close-btn" data-action="close-meetings" type="button" aria-label="Cerrar">
-          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
-      <div class="dialog-body" id="meetingsList">
-        <p class="muted">Cargando reuniones...</p>
-      </div>
+    <div class="modal center" id="companyEditModal">
+      <div class="modal-backdrop" data-action="close-company-edit"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="companyEditTitle">
+        <header class="modal-head">
+          <h2 id="companyEditTitle">Editar empresa</h2>
+          <button class="icon-btn" data-action="close-company-edit" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <form id="companyEditForm" class="modal-form">
+          <div class="modal-body">
+            <div class="form-field">
+              <label for="companyEditName">Nombre</label>
+              <input type="text" id="companyEditName" class="form-control" maxlength="80" required />
+            </div>
+            <div class="form-field">
+              <label for="companyEditIndustry">Industria</label>
+              <input type="text" id="companyEditIndustry" class="form-control" maxlength="80" />
+            </div>
+            <div class="form-field">
+              <label for="companyEditScenario">Escenario de la empresa</label>
+              <textarea id="companyEditScenario" class="form-control" maxlength="2000" rows="5"></textarea>
+              <p class="hint">Es el contexto de fondo que conocen todos los empleados. El objetivo puntual de cada reunión se define en la barra del workspace.</p>
+            </div>
+          </div>
+          <footer class="modal-foot">
+            <button type="button" class="btn ghost" data-action="close-company-edit">Cancelar</button>
+            <button type="submit" class="btn primary">Guardar cambios</button>
+          </footer>
+        </form>
+      </section>
     </div>
 
-    <div class="dialog-overlay" id="memoryOverlay" data-action="close-memory"></div>
-    <div class="dialog-content" id="memoryDialog">
-      <div class="dialog-header">
-        <h2 id="memoryDialogTitle">Memoria</h2>
-        <button class="dialog-close-btn" data-action="close-memory" type="button" aria-label="Cerrar">
-          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
-      <div class="dialog-body" id="memoryBody">
-        <p class="muted">Cargando memoria...</p>
-      </div>
+    <div class="modal drawer" id="agentModal">
+      <div class="modal-backdrop" data-action="close-spawn"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="spawnDialogTitle">
+        <header class="modal-head">
+          <h2 id="spawnDialogTitle">Sumar al equipo</h2>
+          <button class="icon-btn" data-action="close-spawn" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <form id="spawnForm" class="modal-form">
+          <div class="modal-body">
+            <div class="form-field">
+              <label for="spawnName">Nombre</label>
+              <input type="text" id="spawnName" class="form-control" maxlength="40" placeholder="Ej. Carlos" required />
+            </div>
+            <div class="form-field">
+              <label for="spawnTitle">Rol / especialidad</label>
+              <input type="text" id="spawnTitle" class="form-control" maxlength="80" placeholder="Ej. Especialista en seguridad" required />
+            </div>
+            <div class="form-field">
+              <span class="field-label" id="spawnColorLabel">Color de firma</span>
+              <div class="swatches" id="spawnColors" role="group" aria-labelledby="spawnColorLabel">
+                ${AGENT_COLORS.map((color) => `
+                  <button type="button" class="swatch" data-action="select-color" data-color="${color}" style="--swatch: ${color}" aria-label="Color ${color}" aria-pressed="false"></button>
+                `).join('')}
+              </div>
+            </div>
+            <div class="form-field">
+              <label for="spawnSkills">Skills (para el ruteo)</label>
+              <input type="text" id="spawnSkills" class="form-control" placeholder="Ej. seguridad, encriptación, auditoría" />
+              <p class="hint">Separadas por coma. Cuando la conversación toca estos temas, este empleado toma la palabra.</p>
+            </div>
+            <div class="form-field">
+              <label for="spawnAliases">Alias <span class="hint-inline">(separados por coma)</span></label>
+              <input type="text" id="spawnAliases" class="form-control" placeholder="Ej. carlos, seguridad, segu" />
+            </div>
+            <div class="form-field">
+              <label for="spawnVoice">Voz</label>
+              <select id="spawnVoice" class="form-control">
+                ${VOICES.map((voice) => `<option value="${voice}" ${voice === DEFAULT_VOICE ? 'selected' : ''}>${escapeHtml(VOICE_LABELS[voice])}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="spawnStyle">Estilo de habla</label>
+              <textarea id="spawnStyle" class="form-control" maxlength="500" rows="3" placeholder="Ej. Preciso, formal y enfocado en la mitigación de riesgos."></textarea>
+            </div>
+            <div class="form-field">
+              <label for="spawnKnowledge">Conocimientos del puesto</label>
+              <textarea id="spawnKnowledge" class="form-control" maxlength="2000" rows="4" placeholder="Lo que esta persona sabe de la empresa: sistemas, historia, números, mañas del rubro…"></textarea>
+              <p class="hint">Conocimiento propio del empleado (máx. 2000 caracteres). Lo usa para responder con detalle real.</p>
+            </div>
+            <div class="form-field">
+              <label for="spawnBoundaries">Límites <span class="hint-inline">(uno por línea)</span></label>
+              <textarea id="spawnBoundaries" class="form-control" rows="3" placeholder="Ej. No decide precios sin validar con el equipo"></textarea>
+            </div>
+            <div class="form-field" id="spawnTasksGroup">
+              <label for="spawnTasks">Tareas iniciales <span class="hint-inline">(una por línea)</span></label>
+              <textarea id="spawnTasks" class="form-control" rows="3" placeholder="Ej. Validar cifrado en endpoints&#10;Revisar accesos a la base"></textarea>
+            </div>
+          </div>
+          <footer class="modal-foot">
+            <button type="button" class="btn ghost" data-action="close-spawn">Cancelar</button>
+            <button type="submit" class="btn primary" id="spawnSubmitLabel">Sumar al equipo</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal drawer" id="meetingsModal">
+      <div class="modal-backdrop" data-action="close-meetings"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="meetingsTitle">
+        <header class="modal-head">
+          <h2 id="meetingsTitle">Reuniones</h2>
+          <button class="icon-btn" data-action="close-meetings" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="modal-body" id="meetingsList">
+          <p class="muted">Cargando reuniones…</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal drawer" id="memoryModal">
+      <div class="modal-backdrop" data-action="close-memory"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="memoryDialogTitle">
+        <header class="modal-head">
+          <h2 id="memoryDialogTitle">Memoria</h2>
+          <button class="icon-btn" data-action="close-memory" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="modal-body" id="memoryBody">
+          <p class="muted">Cargando memoria…</p>
+        </div>
+      </section>
     </div>
   `;
 
@@ -1310,6 +1672,25 @@ function mountShell() {
   document.addEventListener('submit', handleDelegatedSubmit);
   document.addEventListener('change', handleDelegatedChange);
   document.addEventListener('input', handleDelegatedInput);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && modalStack.length > 0) {
+      event.preventDefault();
+      closeTopModal();
+    }
+  });
+  // El estado abierto/cerrado de las tareas por agente sobrevive a los
+  // re-render de la región (toggle no burbujea: se captura).
+  document.addEventListener('toggle', (event) => {
+    const details = event.target as HTMLDetailsElement | null;
+    const agentId = details?.dataset?.agentTasks;
+    if (details && agentId) {
+      if (details.open) {
+        state.openTaskPanels.add(agentId);
+      } else {
+        state.openTaskPanels.delete(agentId);
+      }
+    }
+  }, true);
 }
 
 function handleDelegatedClick(event: Event) {
@@ -1318,6 +1699,55 @@ function handleDelegatedClick(event: Event) {
   const action = target.dataset.action;
 
   switch (action) {
+    // ── Home ──
+    case 'enter-company': {
+      const companyId = target.dataset.companyId;
+      if (companyId) {
+        enterCompany(companyId, state.companies.find((company) => company.id === companyId) || null);
+      }
+      break;
+    }
+    case 'retry-companies':
+      void loadCompanies();
+      break;
+    case 'open-new-company':
+      void openNewCompanyModal();
+      break;
+    case 'close-new-company':
+      closeModal('newCompanyModal');
+      break;
+    case 'nc-tab':
+      applyNewCompanyTab(target.dataset.tab === 'scratch' ? 'scratch' : 'templates');
+      break;
+    case 'nc-pick-template':
+      state.selectedTemplateId = target.dataset.templateId || '';
+      renderTemplateList();
+      break;
+    case 'nc-pick-color': {
+      state.scratchColor = target.dataset.color || COMPANY_COLORS[0];
+      document.querySelectorAll<HTMLElement>('#scratchColors .swatch').forEach((el) => {
+        const selected = el.dataset.color === state.scratchColor;
+        el.classList.toggle('is-selected', selected);
+        el.setAttribute('aria-pressed', String(selected));
+      });
+      break;
+    }
+
+    // ── Workspace: empresa ──
+    case 'go-home':
+      leaveToHome();
+      break;
+    case 'open-company-edit':
+      openCompanyEditModal();
+      break;
+    case 'close-company-edit':
+      closeModal('companyEditModal');
+      break;
+    case 'archive-company':
+      void archiveCurrentCompany();
+      break;
+
+    // ── Workspace: reunión ──
     case 'toggle-mic':
       void toggleLiveAudio();
       break;
@@ -1329,6 +1759,11 @@ function handleDelegatedClick(event: Event) {
       trace('health_clicked');
       send({ type: 'health' });
       break;
+    case 'mic-preset':
+      applyMicPreset(target.dataset.micPreset || 'normal');
+      break;
+
+    // ── Workspace: equipo ──
     case 'open-spawn':
       openAgentDialog(null);
       break;
@@ -1336,16 +1771,19 @@ function handleDelegatedClick(event: Event) {
       closeAgentDialog();
       break;
     case 'select-color': {
-      document.querySelectorAll('#spawnColors .color-option').forEach((el) => el.classList.remove('is-selected'));
-      target.classList.add('is-selected');
-      state.selectedSpawnColor = target.dataset.color || '#2f6f73';
+      state.selectedSpawnColor = target.dataset.color || AGENT_COLORS[0];
+      document.querySelectorAll<HTMLElement>('#spawnColors .swatch').forEach((el) => {
+        const selected = el.dataset.color === state.selectedSpawnColor;
+        el.classList.toggle('is-selected', selected);
+        el.setAttribute('aria-pressed', String(selected));
+      });
       break;
     }
     case 'edit-agent':
       openAgentDialog(target.dataset.agentId || null);
       break;
     case 'archive-agent':
-      if (target.dataset.agentId && window.confirm('¿Archivar este agente? Sale de la mesa (su historial se conserva).')) {
+      if (target.dataset.agentId && window.confirm('¿Archivar este empleado? Sale de la mesa (su historial se conserva).')) {
         send({ type: 'archive_agent', agentId: target.dataset.agentId });
       }
       break;
@@ -1364,11 +1802,13 @@ function handleDelegatedClick(event: Event) {
       }
       break;
     }
+
+    // ── Drawers ──
     case 'open-meetings':
       void openMeetingsDrawer();
       break;
     case 'close-meetings':
-      byId('meetingsOverlay').classList.remove('is-open');
+      closeModal('meetingsModal');
       break;
     case 'open-memory':
       if (target.dataset.agentId) {
@@ -1376,7 +1816,7 @@ function handleDelegatedClick(event: Event) {
       }
       break;
     case 'close-memory':
-      byId('memoryOverlay').classList.remove('is-open');
+      closeModal('memoryModal');
       break;
     case 'memory-edit': {
       const learningId = target.dataset.learningId;
@@ -1393,7 +1833,7 @@ function handleDelegatedClick(event: Event) {
       }
       break;
     case 'memory-forget-all':
-      if (target.dataset.agentId && window.confirm('¿Olvidar TODO lo aprendido por este agente? (queda registrado en el changelog)')) {
+      if (target.dataset.agentId && window.confirm('¿Olvidar TODO lo aprendido por este empleado? (queda registrado en el changelog)')) {
         void memoryAction(`/api/agents/${target.dataset.agentId}/forget`, 'POST', {}, target.dataset.agentId);
       }
       break;
@@ -1419,12 +1859,12 @@ function handleDelegatedClick(event: Event) {
       break;
     case 'resume-meeting': {
       const meetingId = target.dataset.meetingId;
-      if (meetingId) {
-        saveStoredMeetingId(meetingId);
-        byId('meetingsOverlay').classList.remove('is-open');
-        state.turns = [];
-        transcriptReset();
-        state.socket?.close();
+      if (meetingId && state.companyId) {
+        saveStoredMeetingId(state.companyId, meetingId);
+        closeModal('meetingsModal');
+        resetMeetingLocalState();
+        markDirty('agents', 'route', 'keys', 'voice', 'scenario');
+        reconnectNow();
       }
       break;
     }
@@ -1444,12 +1884,31 @@ function handleDelegatedSubmit(event: Event) {
     event.preventDefault();
     const text = byId<HTMLInputElement>('scenarioInput').value.trim();
     send({ type: 'set_scenario', text });
+    upsertAlert('scenario-saved', 'Objetivo', 'Objetivo de la reunión guardado.', 'ok', 1800);
     return;
   }
 
   if (form.id === 'spawnForm') {
     event.preventDefault();
     submitAgentDialog();
+    return;
+  }
+
+  if (form.id === 'templateForm') {
+    event.preventDefault();
+    void submitTemplateForm(form);
+    return;
+  }
+
+  if (form.id === 'scratchForm') {
+    event.preventDefault();
+    void submitScratchForm(form);
+    return;
+  }
+
+  if (form.id === 'companyEditForm') {
+    event.preventDefault();
+    void submitCompanyEdit(form);
     return;
   }
 
@@ -1487,45 +1946,270 @@ function handleDelegatedInput(event: Event) {
   }
 }
 
-// ── Drawer de agente (crear/editar) ─────────────────────────────────────
+// ── Home: tarjetas de empresas ──────────────────────────────────────────
+
+function renderCompanies() {
+  if (state.companiesLoading && state.companies.length === 0) {
+    return '<p class="muted grid-note">Cargando simulaciones…</p>';
+  }
+  if (state.companiesError && state.companies.length === 0) {
+    return `
+      <div class="grid-note">
+        <p class="muted">No pude cargar las simulaciones. ¿Está corriendo el servidor?</p>
+        <button class="btn ghost sm" data-action="retry-companies" type="button">Reintentar</button>
+      </div>
+    `;
+  }
+
+  const lastCompanyId = loadLastCompanyId();
+  const cards = state.companies.map((company) => {
+    const team = company.teamSize ?? 0;
+    const meetings = company.meetingCount ?? 0;
+    return `
+      <button type="button" class="company-card" data-action="enter-company" data-company-id="${escapeHtml(company.id)}">
+        <span class="company-tile" style="--company-color: ${escapeHtml(company.color)}" aria-hidden="true">${escapeHtml(company.emoji)}</span>
+        <span class="company-card-body">
+          <span class="company-name">${escapeHtml(company.name)}</span>
+          <span class="company-industry">${escapeHtml(company.industry || 'Sin industria')}</span>
+          <span class="company-meta">${team} ${team === 1 ? 'empleado' : 'empleados'} · ${meetings} ${meetings === 1 ? 'reunión' : 'reuniones'}</span>
+          <span class="company-when">${escapeHtml(relativeTime(company.lastActiveAt))}</span>
+        </span>
+        ${company.id === lastCompanyId ? '<span class="company-flag">Última visitada</span>' : ''}
+      </button>
+    `;
+  }).join('');
+
+  const emptyHint = state.companies.length === 0
+    ? '<p class="muted grid-note">Todavía no hay simulaciones. Creá la primera: elegí una plantilla con equipo armado o empezá desde cero.</p>'
+    : '';
+
+  return `
+    ${emptyHint}
+    <div class="companies-grid">
+      ${cards}
+      <button type="button" class="company-card is-new" data-action="open-new-company">
+        <span class="company-tile is-new" aria-hidden="true">+</span>
+        <span class="company-card-body">
+          <span class="company-name">Nueva simulación</span>
+          <span class="company-industry">Desde una plantilla o desde cero</span>
+        </span>
+      </button>
+    </div>
+  `;
+}
+
+// ── Modal: nueva simulación ─────────────────────────────────────────────
+
+async function openNewCompanyModal() {
+  applyNewCompanyTab('templates');
+  byId<HTMLInputElement>('templateName').value = '';
+  byId<HTMLFormElement>('scratchForm').reset();
+  state.scratchColor = COMPANY_COLORS[0];
+  document.querySelectorAll<HTMLElement>('#scratchColors .swatch').forEach((el, index) => {
+    el.classList.toggle('is-selected', index === 0);
+    el.setAttribute('aria-pressed', String(index === 0));
+  });
+  openModal('newCompanyModal');
+
+  if (!state.templatesLoaded) {
+    byId('templateList').innerHTML = '<p class="muted">Cargando plantillas…</p>';
+    try {
+      const data = await apiJson<{ templates: CompanyTemplate[] }>('/api/company-templates');
+      state.templates = data.templates || [];
+      state.templatesLoaded = true;
+      if (!state.selectedTemplateId && state.templates.length > 0) {
+        state.selectedTemplateId = state.templates[0].id;
+      }
+    } catch {
+      byId('templateList').innerHTML = '<p class="muted">No pude cargar las plantillas. Probá la pestaña “Desde cero”.</p>';
+      return;
+    }
+  }
+  renderTemplateList();
+}
+
+function applyNewCompanyTab(tab: 'templates' | 'scratch') {
+  state.newCompanyTab = tab;
+  const templatesTab = byId<HTMLButtonElement>('tabTemplates');
+  const scratchTab = byId<HTMLButtonElement>('tabScratch');
+  templatesTab.classList.toggle('is-active', tab === 'templates');
+  scratchTab.classList.toggle('is-active', tab === 'scratch');
+  templatesTab.setAttribute('aria-selected', String(tab === 'templates'));
+  scratchTab.setAttribute('aria-selected', String(tab === 'scratch'));
+  byId('templateForm').hidden = tab !== 'templates';
+  byId('scratchForm').hidden = tab !== 'scratch';
+}
+
+function renderTemplateList() {
+  const list = byId('templateList');
+  if (!state.templatesLoaded) return;
+  if (state.templates.length === 0) {
+    list.innerHTML = '<p class="muted">No hay plantillas disponibles.</p>';
+    return;
+  }
+  list.innerHTML = state.templates.map((template) => `
+    <button type="button" class="template-card ${template.id === state.selectedTemplateId ? 'is-selected' : ''}"
+      data-action="nc-pick-template" data-template-id="${escapeHtml(template.id)}"
+      aria-pressed="${template.id === state.selectedTemplateId ? 'true' : 'false'}">
+      <span class="template-tile" style="--company-color: ${escapeHtml(template.color)}" aria-hidden="true">${escapeHtml(template.emoji)}</span>
+      <span class="template-info">
+        <span class="template-name">${escapeHtml(template.name)}</span>
+        <span class="template-industry">${escapeHtml(template.industry)}</span>
+        <span class="template-scenario">${escapeHtml(template.scenario)}</span>
+        <span class="template-team">${template.team.map((member) => `${escapeHtml(member.name)} — ${escapeHtml(member.title)}`).join(' · ')}</span>
+      </span>
+    </button>
+  `).join('');
+}
+
+async function submitTemplateForm(form: HTMLFormElement) {
+  if (state.creatingCompany || !state.selectedTemplateId) return;
+  const name = byId<HTMLInputElement>('templateName').value.trim();
+  await createCompany(form, { templateId: state.selectedTemplateId, name: name || undefined });
+}
+
+async function submitScratchForm(form: HTMLFormElement) {
+  if (state.creatingCompany) return;
+  const name = byId<HTMLInputElement>('scratchName').value.trim();
+  if (!name) {
+    upsertAlert('company-create', 'Nueva simulación', 'La empresa necesita un nombre.', 'error', 2600);
+    return;
+  }
+  await createCompany(form, {
+    name,
+    industry: byId<HTMLInputElement>('scratchIndustry').value.trim(),
+    emoji: byId<HTMLInputElement>('scratchEmoji').value.trim() || '🏢',
+    color: state.scratchColor,
+    scenario: byId<HTMLTextAreaElement>('scratchScenario').value.trim()
+  });
+}
+
+async function createCompany(form: HTMLFormElement, payload: Record<string, unknown>) {
+  state.creatingCompany = true;
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    const data = await apiJson<{ company: Company }>('/api/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    trace('company_created', { companyId: data.company.id, templateId: payload.templateId || null });
+    closeModal('newCompanyModal');
+    upsertAlert('company-create', data.company.name, 'Simulación creada. Entrando…', 'ok', 2600);
+    enterCompany(data.company.id, data.company);
+  } catch (error) {
+    upsertAlert('company-create', 'Nueva simulación', `No pude crear la empresa: ${getClientError(error)}`, 'error', 4200);
+  } finally {
+    state.creatingCompany = false;
+    if (submit) submit.disabled = false;
+  }
+}
+
+// ── Modal: editar / archivar empresa ────────────────────────────────────
+
+function openCompanyEditModal() {
+  const company = state.company;
+  if (!company) return;
+  byId<HTMLInputElement>('companyEditName').value = company.name;
+  byId<HTMLInputElement>('companyEditIndustry').value = company.industry || '';
+  byId<HTMLTextAreaElement>('companyEditScenario').value = company.scenario || '';
+  openModal('companyEditModal');
+}
+
+async function submitCompanyEdit(form: HTMLFormElement) {
+  if (!state.companyId) return;
+  const name = byId<HTMLInputElement>('companyEditName').value.trim();
+  if (!name) {
+    upsertAlert('company-edit', 'Empresa', 'El nombre no puede quedar vacío.', 'error', 2600);
+    return;
+  }
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    const data = await apiJson<{ company: Company }>(`/api/companies/${encodeURIComponent(state.companyId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        industry: byId<HTMLInputElement>('companyEditIndustry').value.trim(),
+        scenario: byId<HTMLTextAreaElement>('companyEditScenario').value
+      })
+    });
+    state.company = data.company;
+    closeModal('companyEditModal');
+    upsertAlert('company-edit', data.company.name, 'Empresa actualizada. Reabriendo la reunión con el contexto nuevo…', 'ok', 3200);
+    markDirty('company');
+    trace('company_updated', { companyId: data.company.id });
+    // Reconectar para que la sesión tome el escenario/nombre nuevos.
+    reconnectNow();
+  } catch (error) {
+    upsertAlert('company-edit', 'Empresa', `No pude guardar: ${getClientError(error)}`, 'error', 4200);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function archiveCurrentCompany() {
+  const company = state.company;
+  if (!company) return;
+  const confirmed = window.confirm(`¿Archivar "${company.name}"? La simulación sale del listado (sus datos se conservan).`);
+  if (!confirmed) return;
+  try {
+    await apiJson(`/api/companies/${encodeURIComponent(company.id)}/archive`, { method: 'POST' });
+    clearLastCompanyId(company.id);
+    upsertAlert('company-archive', company.name, 'Simulación archivada.', 'ok', 2600);
+    trace('company_archived', { companyId: company.id });
+    leaveToHome();
+  } catch (error) {
+    upsertAlert('company-archive', 'Empresa', `No pude archivar: ${getClientError(error)}`, 'error', 4200);
+  }
+}
+
+// ── Drawer de empleado (crear/editar) ───────────────────────────────────
 
 function openAgentDialog(agentId: string | null) {
   state.editingAgentId = agentId;
   const agent = agentId ? state.agents.find((item) => item.id === agentId) : null;
 
-  byId('spawnDialogTitle').textContent = agent ? `Editar a ${agent.name}` : 'Sumar al Equipo';
-  byId('spawnSubmitLabel').textContent = agent ? 'Guardar cambios' : 'Sumar al Equipo';
+  byId('spawnDialogTitle').textContent = agent ? `Editar a ${agent.name}` : 'Sumar al equipo';
+  byId('spawnSubmitLabel').textContent = agent ? 'Guardar cambios' : 'Sumar al equipo';
   byId<HTMLInputElement>('spawnName').value = agent?.name || '';
   byId<HTMLInputElement>('spawnTitle').value = agent?.title || '';
-  byId<HTMLInputElement>('spawnDomains').value = agent ? agent.domains.join(', ') : '';
+  byId<HTMLInputElement>('spawnSkills').value = agent ? agent.domains.join(', ') : '';
   byId<HTMLInputElement>('spawnAliases').value = agent ? agent.aliases.join(', ') : '';
-  byId<HTMLSelectElement>('spawnVoice').value = agent?.voice || 'Aoede';
+  const voiceSelect = byId<HTMLSelectElement>('spawnVoice');
+  voiceSelect.value = agent?.voice && (VOICES as readonly string[]).includes(agent.voice) ? agent.voice : DEFAULT_VOICE;
   byId<HTMLTextAreaElement>('spawnStyle').value = agent?.style || '';
+  byId<HTMLTextAreaElement>('spawnKnowledge').value = agent?.knowledge || '';
   byId<HTMLTextAreaElement>('spawnBoundaries').value = agent ? agent.boundaries.join('\n') : '';
   byId<HTMLTextAreaElement>('spawnTasks').value = '';
-  byId('spawnTasksGroup').style.display = agent ? 'none' : '';
+  byId('spawnTasksGroup').hidden = Boolean(agent);
 
-  state.selectedSpawnColor = agent?.color || '#2f6f73';
-  document.querySelectorAll<HTMLElement>('#spawnColors .color-option').forEach((el) => {
-    el.classList.toggle('is-selected', el.dataset.color === state.selectedSpawnColor);
+  state.selectedSpawnColor = agent?.color || AGENT_COLORS[0];
+  document.querySelectorAll<HTMLElement>('#spawnColors .swatch').forEach((el) => {
+    const selected = el.dataset.color === state.selectedSpawnColor;
+    el.classList.toggle('is-selected', selected);
+    el.setAttribute('aria-pressed', String(selected));
   });
 
-  byId('spawnOverlay').classList.add('is-open');
+  openModal('agentModal');
 }
 
 function closeAgentDialog() {
   state.editingAgentId = null;
-  byId('spawnOverlay').classList.remove('is-open');
+  closeModal('agentModal');
   byId<HTMLFormElement>('spawnForm').reset();
 }
 
 function submitAgentDialog() {
   const name = byId<HTMLInputElement>('spawnName').value.trim();
   const title = byId<HTMLInputElement>('spawnTitle').value.trim();
-  const domains = byId<HTMLInputElement>('spawnDomains').value.split(',').map((s) => s.trim()).filter(Boolean);
+  const domains = byId<HTMLInputElement>('spawnSkills').value.split(',').map((s) => s.trim()).filter(Boolean);
   const aliases = byId<HTMLInputElement>('spawnAliases').value.split(',').map((s) => s.trim()).filter(Boolean);
   const voice = byId<HTMLSelectElement>('spawnVoice').value;
   const style = byId<HTMLTextAreaElement>('spawnStyle').value.trim();
+  const knowledge = byId<HTMLTextAreaElement>('spawnKnowledge').value.trim();
   const boundaries = byId<HTMLTextAreaElement>('spawnBoundaries').value.split('\n').map((s) => s.trim()).filter(Boolean);
 
   if (!name || !title) return;
@@ -1534,7 +2218,7 @@ function submitAgentDialog() {
     send({
       type: 'update_agent',
       agentId: state.editingAgentId,
-      patch: { name, title, color: state.selectedSpawnColor, voice, style, domains, aliases, boundaries }
+      patch: { name, title, color: state.selectedSpawnColor, voice, style, knowledge, domains, aliases, boundaries }
     });
   } else {
     const tasksStr = byId<HTMLTextAreaElement>('spawnTasks').value.trim();
@@ -1548,6 +2232,7 @@ function submitAgentDialog() {
         aliases: aliases.length ? aliases : [name.toLowerCase()],
         domains,
         boundaries,
+        knowledge,
         style,
         voice,
         initialTasks
@@ -1557,8 +2242,6 @@ function submitAgentDialog() {
 
   closeAgentDialog();
 }
-
-// ── Drawer de reuniones ─────────────────────────────────────────────────
 
 // ── Drawer de memoria (aprendizajes + sugerencias) ──────────────────────
 
@@ -1587,9 +2270,9 @@ async function memoryAction(path: string, method: string, body: Record<string, u
 async function openMemoryDrawer(agentId: string) {
   const agent = state.agents.find((item) => item.id === agentId);
   byId('memoryDialogTitle').textContent = agent ? `Memoria de ${agent.name}` : 'Memoria';
-  byId('memoryOverlay').classList.add('is-open');
+  openModal('memoryModal');
   const body = byId('memoryBody');
-  body.innerHTML = '<p class="muted">Cargando memoria...</p>';
+  body.innerHTML = '<p class="muted">Cargando memoria…</p>';
 
   try {
     const [learningsRes, suggestionsRes] = await Promise.all([
@@ -1608,10 +2291,10 @@ async function openMemoryDrawer(agentId: string) {
 
     body.innerHTML = `
       <div class="memory-toolbar">
-        <button class="text-button" type="button" data-action="memory-toggle-learning" data-agent-id="${agentId}" data-enabled="${learningEnabled}">
+        <button class="btn ghost sm" type="button" data-action="memory-toggle-learning" data-agent-id="${agentId}" data-enabled="${learningEnabled}" aria-pressed="${learningEnabled}">
           ${learningEnabled ? 'Aprendizaje: activado' : 'Aprendizaje: pausado'}
         </button>
-        <button class="text-button danger" type="button" data-action="memory-forget-all" data-agent-id="${agentId}">Olvidar todo</button>
+        <button class="btn ghost sm danger" type="button" data-action="memory-forget-all" data-agent-id="${agentId}">Olvidar todo</button>
       </div>
       ${suggestions.length ? `
         <h3 class="memory-section-title">Sugerencias pendientes</h3>
@@ -1622,8 +2305,8 @@ async function openMemoryDrawer(agentId: string) {
               <p>${escapeHtml(suggestion.value)}</p>
             </div>
             <div class="memory-row-actions">
-              <button class="text-button" type="button" data-action="suggestion-apply" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Aplicar</button>
-              <button class="text-button danger" type="button" data-action="suggestion-reject" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Rechazar</button>
+              <button class="btn ghost sm" type="button" data-action="suggestion-apply" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Aplicar</button>
+              <button class="btn ghost sm danger" type="button" data-action="suggestion-reject" data-suggestion-id="${suggestion.id}" data-agent-id="${agentId}">Rechazar</button>
             </div>
           </div>
         `).join('')}
@@ -1639,26 +2322,29 @@ async function openMemoryDrawer(agentId: string) {
               <small>reforzado ×${learning.timesReinforced} · ${new Date(learning.lastReinforcedAt).toLocaleDateString()}</small>
             </div>
             <div class="memory-row-actions">
-              <button class="text-button" type="button" data-action="memory-edit" data-learning-id="${learning.id}" data-agent-id="${agentId}" data-content="${escapeHtml(learning.content)}">Editar</button>
-              <button class="text-button danger" type="button" data-action="memory-delete" data-learning-id="${learning.id}" data-agent-id="${agentId}">Borrar</button>
+              <button class="btn ghost sm" type="button" data-action="memory-edit" data-learning-id="${learning.id}" data-agent-id="${agentId}" data-content="${escapeHtml(learning.content)}">Editar</button>
+              <button class="btn ghost sm danger" type="button" data-action="memory-delete" data-learning-id="${learning.id}" data-agent-id="${agentId}">Borrar</button>
             </div>
           </div>
         `).join('')}
     `;
   } catch {
-    body.innerHTML = '<p class="muted">No pude cargar la memoria del agente.</p>';
+    body.innerHTML = '<p class="muted">No pude cargar la memoria del empleado.</p>';
   }
 }
 
+// ── Drawer de reuniones (historial de la empresa) ───────────────────────
+
 async function openMeetingsDrawer() {
-  byId('meetingsOverlay').classList.add('is-open');
+  byId('meetingsTitle').textContent = state.company ? `Reuniones de ${state.company.name}` : 'Reuniones';
+  openModal('meetingsModal');
   const list = byId('meetingsList');
-  list.innerHTML = '<p class="muted">Cargando reuniones...</p>';
+  list.innerHTML = '<p class="muted">Cargando reuniones…</p>';
   try {
-    const response = await fetch(`${backendHttpBase()}/api/meetings`);
-    const data = await response.json() as { meetings: Array<{ id: string; title: string | null; scenario_name: string | null; status: string; last_active_at: string; turn_count: number; summary: string | null }> };
+    const query = state.companyId ? `?companyId=${encodeURIComponent(state.companyId)}` : '';
+    const data = await apiJson<{ meetings: MeetingListItem[] }>(`/api/meetings${query}`);
     if (!data.meetings.length) {
-      list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas.</p>';
+      list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas en esta empresa. Cuando cierres una con “Nueva reunión”, va a quedar acá para retomarla.</p>';
       return;
     }
     list.innerHTML = data.meetings.map((meeting) => `
@@ -1669,8 +2355,8 @@ async function openMeetingsDrawer() {
           ${meeting.summary ? `<small>${escapeHtml(meeting.summary.slice(0, 140))}</small>` : ''}
         </div>
         ${meeting.id === state.meetingId
-          ? '<span class="muted">actual</span>'
-          : `<button class="text-button" data-action="resume-meeting" data-meeting-id="${meeting.id}" type="button">Retomar</button>`}
+          ? '<span class="muted current-tag">actual</span>'
+          : `<button class="btn ghost sm" data-action="resume-meeting" data-meeting-id="${escapeHtml(meeting.id)}" type="button">Retomar</button>`}
       </div>
     `).join('');
   } catch {
@@ -1678,92 +2364,93 @@ async function openMeetingsDrawer() {
   }
 }
 
+// ── Tarjetas de empleados ───────────────────────────────────────────────
+
 function renderAgent(agent: Agent) {
   const speaking = state.speakingAgentId === agent.id;
   const disabled = agent.enabled === false;
   const tasks = agent.tasks || [];
   const total = tasks.length;
-  const completed = tasks.filter(t => t.completed).length;
+  const completed = tasks.filter((task) => task.completed).length;
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const skills = agent.domains.slice(0, 4);
+  const extraSkills = agent.domains.length - skills.length;
+  const tasksOpen = state.openTaskPanels.has(agent.id);
 
   return `
     <article class="agent ${speaking ? 'is-speaking' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
-      <div class="agent-main">
-        <div class="agent-avatar">${escapeHtml(agent.name.slice(0, 1))}</div>
-        <div class="agent-body">
-          <div class="agent-head">
-            <h2>${escapeHtml(agent.name)}</h2>
-            <span>${disabled ? 'En pausa' : speaking ? 'Hablando' : escapeHtml(agent.title)}</span>
-          </div>
-          <p>${escapeHtml(agent.domains.slice(0, 5).join(' · '))}</p>
+      <div class="agent-top">
+        <span class="agent-avatar" aria-hidden="true">${escapeHtml(agent.name.slice(0, 1))}</span>
+        <div class="agent-id">
+          <h3>${escapeHtml(agent.name)}</h3>
+          <p class="agent-role">${escapeHtml(agent.title)}</p>
         </div>
+        ${disabled
+          ? '<span class="agent-state paused">En pausa</span>'
+          : speaking
+            ? '<span class="agent-state speaking"><span class="pulse-dot" aria-hidden="true"></span>Hablando…</span>'
+            : ''}
+      </div>
+      <div class="agent-chips">
+        ${skills.map((skill) => `<span class="chip">${escapeHtml(skill)}</span>`).join('')}
+        ${extraSkills > 0 ? `<span class="chip more">+${extraSkills}</span>` : ''}
+        ${agent.knowledge ? `<span class="chip knowledge" title="Tiene conocimientos propios del puesto">${bookIcon()}saber propio</span>` : ''}
+      </div>
+      <div class="agent-foot">
+        <details class="agent-tasks" data-agent-tasks="${escapeHtml(agent.id)}" ${tasksOpen ? 'open' : ''}>
+          <summary>
+            <span class="tasks-label">Tareas ${completed}/${total}</span>
+            <span class="progress" aria-hidden="true"><span style="width: ${percentage}%"></span></span>
+            ${chevronIcon()}
+          </summary>
+          <div class="tasks-list">
+            ${tasks.length === 0
+              ? '<p class="muted tasks-empty">Sin tareas asignadas.</p>'
+              : tasks.map((task) => `
+                <div class="task-item ${task.completed ? 'is-completed' : ''}">
+                  <input type="checkbox" class="task-checkbox" ${task.completed ? 'checked' : ''}
+                    data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}"
+                    aria-label="Marcar tarea: ${escapeHtml(task.text)}" />
+                  <span class="task-text">${escapeHtml(task.text)}</span>
+                  <button class="task-delete-btn" type="button" data-action="delete-task" aria-label="Eliminar tarea: ${escapeHtml(task.text)}" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">
+                    ${trashIcon()}
+                  </button>
+                </div>
+              `).join('')}
+          </div>
+          <form class="task-add-form" data-agent-id="${escapeHtml(agent.id)}">
+            <input type="text" class="task-add-input" placeholder="Nueva tarea…" aria-label="Nueva tarea para ${escapeHtml(agent.name)}" required />
+            <button class="btn ghost sm" type="submit">Sumar</button>
+          </form>
+        </details>
         <div class="agent-actions">
-          <button class="agent-action-btn" type="button" data-action="open-memory" data-agent-id="${agent.id}" title="Memoria del agente">
-            <svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zm-3 16h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-1z"/></svg>
-          </button>
-          <button class="agent-action-btn" type="button" data-action="edit-agent" data-agent-id="${agent.id}" title="Editar agente">
-            <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-          </button>
-          <button class="agent-action-btn" type="button" data-action="toggle-agent-enabled" data-agent-id="${agent.id}" title="${disabled ? 'Reactivar en esta reunión' : 'Pausar en esta reunión'}">
-            ${disabled
-              ? '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'
-              : '<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'}
+          <button class="icon-btn sm" type="button" data-action="open-memory" data-agent-id="${escapeHtml(agent.id)}" aria-label="Memoria de ${escapeHtml(agent.name)}" title="Memoria">${brainIcon()}</button>
+          <button class="icon-btn sm" type="button" data-action="edit-agent" data-agent-id="${escapeHtml(agent.id)}" aria-label="Editar a ${escapeHtml(agent.name)}" title="Editar">${pencilIcon()}</button>
+          <button class="icon-btn sm" type="button" data-action="toggle-agent-enabled" data-agent-id="${escapeHtml(agent.id)}" aria-label="${disabled ? `Reactivar a ${escapeHtml(agent.name)}` : `Pausar a ${escapeHtml(agent.name)}`}" title="${disabled ? 'Reactivar en esta reunión' : 'Pausar en esta reunión'}">
+            ${disabled ? playIcon() : pauseIcon()}
           </button>
           ${agent.origin === 'custom'
-            ? `<button class="agent-action-btn danger" type="button" data-action="archive-agent" data-agent-id="${agent.id}" title="Archivar agente">
-                <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-              </button>`
+            ? `<button class="icon-btn sm danger" type="button" data-action="archive-agent" data-agent-id="${escapeHtml(agent.id)}" aria-label="Archivar a ${escapeHtml(agent.name)}" title="Archivar">${trashIcon()}</button>`
             : ''}
         </div>
-      </div>
-
-      <div class="agent-tasks-container">
-        <div class="tasks-progress-wrapper">
-          <span class="tasks-progress-label">Tareas: ${completed}/${total}</span>
-          <div class="tasks-progress-bar">
-            <div class="tasks-progress-fill" style="width: ${percentage}%"></div>
-          </div>
-        </div>
-        <div class="tasks-list">
-          ${tasks.length === 0 
-            ? '<p class="muted" style="font-size: 0.8rem; font-style: italic; margin: 4px 0 8px;">Sin tareas asignadas.</p>' 
-            : tasks.map(task => `
-              <div class="task-item ${task.completed ? 'is-completed' : ''}">
-                <div class="task-checkbox-wrapper">
-                  <input type="checkbox" class="task-checkbox" ${task.completed ? 'checked' : ''} 
-                    data-agent-id="${agent.id}" data-task-id="${task.id}" />
-                </div>
-                <span class="task-text">${escapeHtml(task.text)}</span>
-                <button class="task-delete-btn" title="Eliminar tarea" data-agent-id="${agent.id}" data-task-id="${task.id}">
-                  <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                </button>
-              </div>
-            `).join('')}
-        </div>
-        <form class="task-add-form" data-agent-id="${agent.id}">
-          <input type="text" class="task-add-input" placeholder="Sumar tarea al colaborador..." required />
-          <button class="task-add-btn" type="submit">Sumar</button>
-        </form>
       </div>
     </article>
   `;
 }
+
+// ── Paneles auxiliares ──────────────────────────────────────────────────
 
 function renderAlerts() {
   if (!state.alerts.length) {
     return '';
   }
 
-  return `
-    <section class="alerts" aria-live="polite">
-      ${state.alerts.map((alert) => `
-        <div class="alert ${alert.tone}">
-          <strong>${escapeHtml(alert.scope)}</strong>
-          <span>${escapeHtml(alert.message)}</span>
-        </div>
-      `).join('')}
-    </section>
-  `;
+  return state.alerts.map((alert) => `
+    <div class="alert ${alert.tone}" role="status">
+      <strong>${escapeHtml(alert.scope)}</strong>
+      <span>${escapeHtml(alert.message)}</span>
+    </div>
+  `).join('');
 }
 
 function renderAudioTuning() {
@@ -1776,17 +2463,17 @@ function renderAudioTuning() {
   return `
     <section class="audio-tuning" aria-label="Ajustes de micrófono">
       <div class="audio-tuning-head">
-        <h2>Micrófono</h2>
+        <h3>Micrófono</h3>
         <span>${state.micMeter.speaking ? 'voz activa' : 'en espera'}</span>
       </div>
       <div class="mic-presets" role="group" aria-label="Perfil de micrófono">
         ${Object.keys(MIC_PRESETS).map((preset) => `
-          <button class="${activePreset === preset ? 'is-active' : ''}" type="button" data-mic-preset="${preset}">
+          <button class="${activePreset === preset ? 'is-active' : ''}" type="button" data-action="mic-preset" data-mic-preset="${preset}" aria-pressed="${activePreset === preset}">
             ${presetLabel(preset)}
           </button>
         `).join('')}
       </div>
-      <div class="meter" style="--level: ${Math.round(levelRatio * 100)}%; --gate: ${Math.round(gateRatio * 100)}%">
+      <div class="meter" style="--level: ${Math.round(levelRatio * 100)}%; --gate: ${Math.round(gateRatio * 100)}%" aria-hidden="true">
         <div></div>
         <span></span>
       </div>
@@ -1814,19 +2501,9 @@ function renderRangeControl(label: string, setting: keyof MicSettings, value: nu
   `;
 }
 
-function renderTurn(turn: TranscriptTurn) {
-  const color = turn.agentId ? state.agents.find((agent) => agent.id === turn.agentId)?.color : undefined;
-  return `
-    <article class="turn ${turn.kind}" ${color ? `style="--agent-color: ${color}"` : ''}>
-      <div class="speaker">${escapeHtml(turn.speaker)}</div>
-      <p>${escapeHtml(turn.text || '...')}</p>
-    </article>
-  `;
-}
-
 function renderRoute() {
   if (!state.route) {
-    return '<p class="muted">El proximo turno mostrara a quien se le asigno la palabra.</p>';
+    return '<p class="muted">Acá vas a ver a quién se le asigna la palabra en cada turno.</p>';
   }
 
   if (state.route.targets.length === 0) {
@@ -1838,7 +2515,7 @@ function renderRoute() {
       ${state.route.targets.map((target) => `
         <div class="route-item">
           <strong>${escapeHtml(target.name)}</strong>
-          <span>${target.directMention ? 'mencion directa' : 'dominio detectado'}</span>
+          <span>${target.directMention ? 'mención directa' : 'dominio detectado'}</span>
           <small>${escapeHtml(target.matchedDomains.join(', ') || 'sin etiquetas')}</small>
         </div>
       `).join('')}
@@ -1847,8 +2524,12 @@ function renderRoute() {
 }
 
 function renderKeys() {
+  if (state.mode === 'mock') {
+    return '<div class="key-box"><strong>Modo demo</strong><span>Sin claves API: los agentes responden simulados. Configurá .env para activar el modelo real.</span></div>';
+  }
+
   if (!state.keyStatus.length) {
-    return `<div class="key-box"><strong>${state.liveMode ? 'Claves listas' : 'Sin claves Live'}</strong><span>${escapeHtml(state.model)}</span></div>`;
+    return `<div class="key-box"><strong>Claves listas</strong><span>${escapeHtml(state.model)}</span></div>`;
   }
 
   return `
@@ -1862,6 +2543,8 @@ function renderKeys() {
     </div>
   `;
 }
+
+// ── Acciones del composer ───────────────────────────────────────────────
 
 function submitTurn() {
   const text = state.manualText.trim();
@@ -1927,11 +2610,7 @@ function traceOutgoingPayload(payload: unknown) {
     return;
   }
 
-  const message = payload as { type?: string; text?: string; transcriptHint?: string; mimeType?: string };
-  if (message.type === 'audio_chunk') {
-    return;
-  }
-
+  const message = payload as { type?: string; text?: string; transcriptHint?: string };
   if (message.type === 'user_turn') {
     trace('client_ws_send', {
       type: message.type,
@@ -1988,18 +2667,24 @@ function resolveAlertIfPresent(id: string, scope: string, message: string) {
   upsertAlert(id, scope, message, 'ok', 1400);
 }
 
+// ── Captura de voz ──────────────────────────────────────────────────────
+
+function stopVoiceCapture() {
+  trace('audio_toggle_clicked', { action: 'stop' });
+  state.recording = false;
+  state.microphone?.stop();
+  state.microphone = null;
+  state.browserSpeech?.stop();
+  state.browserSpeech = null;
+  state.clientSpeechText = '';
+  state.voiceStatus = '';
+  state.activeAudioTranscript = '';
+  render();
+}
+
 async function toggleLiveAudio() {
   if (state.recording) {
-    trace('audio_toggle_clicked', { action: 'stop' });
-    state.recording = false;
-    state.microphone?.stop();
-    state.microphone = null;
-    state.browserSpeech?.stop();
-    state.browserSpeech = null;
-    state.clientSpeechText = '';
-    state.voiceStatus = '';
-    state.activeAudioTranscript = '';
-    render();
+    stopVoiceCapture();
     return;
   }
 
@@ -2013,7 +2698,7 @@ async function toggleLiveAudio() {
   try {
     trace('audio_toggle_clicked', { action: 'start' });
     state.recording = true;
-    state.voiceStatus = 'Preparando audio Live...';
+    state.voiceStatus = 'Preparando el micrófono…';
     render();
     state.browserSpeech = new BrowserSpeechRecognizer((text) => {
       state.clientSpeechText = text;
@@ -2029,7 +2714,10 @@ async function toggleLiveAudio() {
       }, 300);
       render();
     });
-    state.browserSpeech.start();
+    const asrSupported = state.browserSpeech.start();
+    if (!asrSupported) {
+      upsertAlert('asr', 'Voz', 'Este navegador no tiene reconocimiento de voz local; los turnos de voz pueden salir vacíos.', 'working', 4600);
+    }
     state.microphone = new LiveMicrophoneStreamer(send, (label) => {
       state.voiceStatus = label;
       render();
@@ -2053,6 +2741,8 @@ async function toggleLiveAudio() {
     render();
   }
 }
+
+// ── Helpers de transcript/estado ────────────────────────────────────────
 
 function appendAgentText(turnId: string, agentId: string, delta: string) {
   const id = `${turnId}-${agentId}`;
@@ -2087,17 +2777,13 @@ function elapsedFromMap(map: Map<string, number>, key: string) {
   return startedAt ? Math.round(performance.now() - startedAt) : null;
 }
 
-function speechSupportText() {
-  return 'Pulsa para hablar; cada pausa envia audio directo a Gemini Live.';
-}
-
 function setVoiceStatus(message: string, timeoutMs = 0) {
   window.clearTimeout(voiceStatusTimer);
   state.voiceStatus = message;
 
   if (timeoutMs > 0) {
     voiceStatusTimer = window.setTimeout(() => {
-      state.voiceStatus = state.recording ? 'Audio Live conectado.' : '';
+      state.voiceStatus = state.recording ? VOICE_READY : '';
       markDirty('voice');
     }, timeoutMs);
   }
@@ -2168,6 +2854,30 @@ function parseRate(mimeType: string) {
   return match ? Number(match[1]) : 24000;
 }
 
+function relativeTime(iso?: string) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  const diff = Date.now() - date.getTime();
+  if (!Number.isFinite(diff)) return '';
+  const minutes = Math.round(diff / 60000);
+  if (minutes < 1) return 'activa recién';
+  if (minutes < 60) return `activa hace ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `activa hace ${hours} h`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `activa hace ${days} ${days === 1 ? 'día' : 'días'}`;
+  return `última actividad: ${date.toLocaleDateString()}`;
+}
+
+async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${backendHttpBase()}${path}`, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -2184,16 +2894,6 @@ function base64ToBytes(base64: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
-}
-
-function base64FromArrayBuffer(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return window.btoa(binary);
 }
 
 function getClientError(error: unknown) {
@@ -2274,23 +2974,61 @@ function audioWorkletCode() {
   `;
 }
 
+// ── Íconos ──────────────────────────────────────────────────────────────
+
 function micIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 1 0-8 0v5a4 4 0 0 0 4 4Zm7-4a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z"/></svg>`;
+}
+
+function stopIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
 }
 
 function pauseIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5a2 2 0 0 1 2 2v10a2 2 0 1 1-4 0V7a2 2 0 0 1 2-2Zm8 0a2 2 0 0 1 2 2v10a2 2 0 1 1-4 0V7a2 2 0 0 1 2-2Z"/></svg>`;
 }
 
+function playIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`;
+}
+
 function sendIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.7 20.3 22 12 3.7 3.7 3 10.2l10 1.8-10 1.8.7 6.5Z"/></svg>`;
+}
+
+function pencilIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>`;
+}
+
+function trashIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`;
+}
+
+function archiveIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.54 5.23 19.15 3.55A1.98 1.98 0 0 0 17.6 3H6.4c-.6 0-1.16.2-1.55.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.5c0-.48-.17-.93-.46-1.27ZM12 17.5 6.5 12H10v-2h4v2h3.5L12 17.5ZM5.12 5l.81-1h12l.94 1H5.12Z"/></svg>`;
+}
+
+function brainIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zm-3 16h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-1z"/></svg>`;
+}
+
+function bookIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 2H8a3 3 0 0 0-3 3v14a3 3 0 0 0 3 3h11a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Zm-1 16H8a1 1 0 0 0-1 1V5a1 1 0 0 1 1-1h9v14Z"/></svg>`;
+}
+
+function closeIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
+}
+
+function chevronIcon() {
+  return `<svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>`;
 }
 
 // ── Bootstrap (al final: las regiones usan const no-hoisted) ────────────
 
 mountShell();
 render();
-connect();
+void loadCompanies();
 trace('page_loaded', {
   userAgent: navigator.userAgent,
   viewport: { width: window.innerWidth, height: window.innerHeight }

@@ -1,4 +1,3 @@
-import { ThinkingLevel } from '@google/genai';
 import { nanoid } from 'nanoid';
 
 import {
@@ -773,7 +772,7 @@ export class MeetingSession {
       scope: 'orquestador',
       timeoutMs: ROUTER_TIMEOUT_MS,
       emit: (event) => this.send(event),
-      maxTokens: 300,
+      maxTokens: 1200,
       temperature: 0,
       messages: [{ role: 'user', content: prompt }]
     });

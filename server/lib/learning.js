@@ -110,7 +110,7 @@ export class LearningObserver {
       models: MINIMAX_LEARNING_MODELS,
       scope: 'observador',
       timeoutMs: 12000,
-      maxTokens: 600,
+      maxTokens: 1400,
       temperature: 0,
       messages: [{ role: 'user', content: `${prompt}\n\n${OBSERVER_FORMAT}` }]
     });

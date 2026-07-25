@@ -18,7 +18,7 @@ function buildBody(options, stream) {
     messages: options.messages,
     stream,
     temperature: options.temperature ?? 0.7,
-    max_completion_tokens: options.maxTokens ?? 400,
+    max_completion_tokens: options.maxTokens ?? 2000,
     thinking: { type: options.thinking || 'disabled' }
   });
 }

@@ -101,7 +101,7 @@ export class ReflectionRunner {
       models: MINIMAX_LEARNING_MODELS,
       scope: 'reflexion',
       timeoutMs: 20000,
-      maxTokens: 800,
+      maxTokens: 1800,
       temperature: 0,
       messages: [{ role: 'user', content: `${prompt}\n\n${REFLECTION_FORMAT}` }]
     });

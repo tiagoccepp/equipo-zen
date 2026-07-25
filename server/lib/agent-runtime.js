@@ -120,7 +120,7 @@ export class LiveAgentRuntime {
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
         emit,
         signal,
-        maxTokens: 300,
+        maxTokens: 1600,
         temperature: 0.8,
         messages: [
           { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
