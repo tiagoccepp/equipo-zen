@@ -33,6 +33,14 @@ Dice qué está bien, qué falta y el comando exacto para arreglarlo (Node, clav
 voz local, transcripción local, base de datos y puertos). Sirve tanto para la
 primera instalación como para cuando algo dejó de responder.
 
+## Las organizaciones
+
+No se crean empresas: elegís entre organizaciones predeterminadas, cada una con
+su equipo armado, su jerga y sus problemas. Hoy son cinco — software, automotriz,
+distribución mayorista, estudio creativo y centro de salud — definidas en
+`server/company-templates.json`. La primera vez que entrás a una, se instancia
+con toda su gente; después queda con su historia (reuniones, proyectos, memoria).
+
 ## La empresa digital (estilo [Paperclip](https://github.com/paperclipai/paperclip))
 
 Cada simulación es una **empresa que trabaja de verdad**:
@@ -44,7 +52,8 @@ Cada simulación es una **empresa que trabaja de verdad**:
 - **Entorno aislado**: todo lo que la empresa produce vive en `workspace/<empresa>/<proyecto>/` y en ningún otro lado. El motor solo escribe ahí dentro (sin rutas relativas hacia afuera, sin archivos ocultos ni absolutos) y únicamente formatos de entregable (html/css/js/json/md/svg/csv…). La carpeta está fuera del control de versiones.
 - **Continuidad del trabajo**: el equipo trabaja **en fila por proyecto**, no en paralelo sobre los mismos archivos. Quien entra recibe en su prompt el contenido real del archivo principal y la identidad visual ya definida (variables `:root`, tipografías, clases y secciones existentes), tiene que **editar** con `edit_file` en vez de regenerar, y no puede sobreescribir un archivo que no leyó. Así el estilo no cambia de cara en cada vuelta.
 - **Revisión entre compañeros**: cuando alguien termina un entregable, un colega con skills afines lo lee de verdad, deja su comentario y lo aprueba o pide cambios concretos (una vuelta de correcciones). Las interacciones quedan registradas.
-- **Contratación automática**: si una tarea necesita habilidades que nadie tiene, el contratista diseña al empleado ideal (perfil completo, voz incluida), lo suma al equipo reportando a la CEO y le delega el trabajo.
+- **El equipo es fijo, pero se afina**: no se contrata gente nueva. El responsable de talento **refina a quien ya está** cuando se lo pedís ("que Delfina sepa de accesibilidad", "quiero a Nahuel más directo"): suma habilidades sin borrar las que tenía, reescribe su conocimiento y su oficio, y guarda la versión anterior por si hay que volver atrás.
+- **Contratación automática (histórico)**: si una tarea necesita habilidades que nadie tiene, el contratista diseña al empleado ideal (perfil completo, voz incluida), lo suma al equipo reportando a la CEO y le delega el trabajo.
 
 ## Cómo funciona
 

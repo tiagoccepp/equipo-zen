@@ -345,8 +345,8 @@ export class Workforce {
     if (task.kind === 'revision') {
       return this.executeReview(companyId, agent, task, runId);
     }
-    if (agent.role === 'contratista') {
-      return this.executeHiring(companyId, agent, task, runId);
+    if (task.kind === 'refinamiento' || agent.role === 'contratista') {
+      return this.executeRefinement(companyId, agent, task, runId);
     }
     return this.executeWork(companyId, agent, task, runId);
   }
@@ -824,70 +824,124 @@ export class Workforce {
     }
   }
 
-  // ── Contratación: el contratista crea al empleado que falta ───────────
+  // ── Refinamiento: el contratista pule a la gente que ya está ──────────
+  //
+  // Antes contrataba gente nueva. Ahora su oficio es afinar a los que están:
+  // el usuario pide "que Bruno sepa más de accesibilidad" o "quiero a Sofía
+  // más directa" y el perfil se ajusta de verdad, con la versión anterior
+  // guardada por si hay que volver atrás.
 
-  async executeHiring(companyId, contratista, task, runId) {
+  // A quién refinar: el nombre que aparezca en el pedido y, si no hay
+  // ninguno, la persona cuyo oficio esté más cerca de lo pedido.
+  pickRefinementTarget(companyId, task) {
+    const equipo = this.store.listAgents({ companyId }).filter((a) => a.status === 'active' && a.role !== 'contratista');
+    if (equipo.length === 0) {
+      return null;
+    }
+    const texto = String(task.text || '').toLowerCase();
+    const nombrado = equipo.find((a) => texto.includes(a.name.toLowerCase()));
+    if (nombrado) {
+      return nombrado;
+    }
+    const palabras = new Set(texto.split(/[^\p{L}0-9]+/u).filter((w) => w.length > 3));
+    const porAfinidad = equipo
+      .map((a) => ({ agente: a, afinidad: a.domains.filter((d) => palabras.has(String(d).toLowerCase())).length }))
+      .sort((a, b) => b.afinidad - a.afinidad)[0];
+    return porAfinidad && porAfinidad.afinidad > 0 ? porAfinidad.agente : null;
+  }
+
+  async executeRefinement(companyId, contratista, task, runId) {
     const company = this.store.getCompany(companyId);
-    const team = this.store.listAgents({ companyId });
-    const ceo = team.find((a) => a.role === 'ceo');
-    const goal = task.goal_id ? this.store.getGoal(task.goal_id) : null;
-
-    const prompt = [
-      `Sos ${contratista.name}, contratista de talento de ${company?.name}. Tenés que CREAR al empleado ideal para esta necesidad.`,
-      goal ? `Meta: ${goal.title} — ${goal.description}` : '',
-      `Necesidad: ${task.text}`,
-      `Equipo actual (NO dupliques roles): ${team.map((a) => `${a.name} — ${a.title} [${a.domains.slice(0, 6).join(', ')}]`).join(' | ')}`,
-      '',
-      'Respondé SOLO un JSON válido:',
-      '{"name":"nombre de pila hispano","title":"puesto","skills":["6-10 skills en minúsculas para el ruteo"],"knowledge":"2-3 oraciones de conocimiento concreto del puesto","craft":"3-4 oraciones de OFICIO: el método concreto y el estándar de calidad con el que produce su trabajo (técnicas, criterios, qué revisa antes de dar algo por terminado)","style":"personalidad y forma de hablar en 1-2 oraciones","voice":"M1|M2|M3|M4|M5|F1|F2|F3|F4|F5","boundaries":["1-2 límites"],"firstTask":"la tarea concreta que debe ejecutar ya (relacionada a la necesidad)"}'
-    ].filter(Boolean).join('\n');
-
-    const { text } = await completeChat(this.keyRing, {
-      models: getMinimaxModels(),
-      scope: 'contratista',
-      timeoutMs: STEP_TIMEOUT_MS,
-      maxTokens: 4000,
-      temperature: 0.5,
-      messages: [{ role: 'user', content: prompt }]
-    });
-    const profile = parseJsonFromModel(text);
-    if (!profile?.name || !profile?.title) {
-      this.store.finishWorkRun(runId, { status: 'error', summary: 'No pude definir el perfil.', log: [{ raw: text?.slice(0, 300) }], artifacts: [] });
-      this.store.finishTask(task.id, { status: 'blocked', blockedReason: 'El contratista no logró definir el perfil.' });
+    const objetivo = this.pickRefinementTarget(companyId, task);
+    if (!objetivo) {
+      const razon = 'No pude identificar a quién refinar: nombrá a la persona en el pedido.';
+      this.store.finishWorkRun(runId, { status: 'blocked', summary: razon, log: [], artifacts: [] });
+      this.store.finishTask(task.id, { status: 'blocked', blockedReason: razon });
       return;
     }
 
-    const agentId = profile.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
-    const hired = this.store.insertAgent({
-      id: agentId,
-      companyId,
-      name: String(profile.name).slice(0, 40),
-      title: String(profile.title).slice(0, 80),
-      voice: ['M1', 'M2', 'M3', 'M4', 'M5', 'F1', 'F2', 'F3', 'F4', 'F5'].includes(profile.voice) ? profile.voice : 'M2',
-      color: company?.color || '#4c6ef5',
-      style: String(profile.style || '').slice(0, 500),
-      aliases: [profile.name.toLowerCase()],
-      domains: (profile.skills || []).map(String).slice(0, 12),
-      boundaries: (profile.boundaries || []).map(String).slice(0, 4),
-      knowledge: String(profile.knowledge || '').slice(0, 2000),
-      craft: String(profile.craft || '').slice(0, 2000),
-      role: 'worker',
-      managerId: ceo?.id || null
-    }, 'custom', 'contratista');
+    const prompt = [
+      `Sos ${contratista.name}, de talento en ${company ? company.name : 'la empresa'}. No contratás gente nueva: tu trabajo es AFINAR a quien ya está.`,
+      '',
+      `PEDIDO: ${task.text}`,
+      '',
+      `PERSONA A REFINAR: ${objetivo.name} — ${objetivo.title}`,
+      `Skills actuales: ${objetivo.domains.join(', ')}`,
+      `Conocimiento actual: ${objetivo.knowledge || '(vacío)'}`,
+      `Oficio actual: ${objetivo.craft || '(vacío)'}`,
+      `Estilo actual: ${objetivo.style || '(vacío)'}`,
+      `Límites actuales: ${(objetivo.boundaries || []).join(' | ') || '(ninguno)'}`,
+      '',
+      'Devolvé SOLO los campos que de verdad cambian, en un JSON. Reglas:',
+      '- NO cambies el nombre ni el puesto salvo que el pedido lo diga explícitamente.',
+      '- "skills" reemplaza la lista entera: incluí las actuales MÁS las nuevas, en minúsculas y sin acentos.',
+      '- "knowledge" y "craft": reescribilos completos incorporando lo pedido, sin perder lo que ya sabía.',
+      '- Nada de inventar una persona distinta: es la misma, mejor preparada.',
+      '',
+      '{"skills":["..."],"knowledge":"...","craft":"...","style":"...","boundaries":["..."],"resumen":"en una oración, qué le cambiaste"}'
+    ].join('\n');
 
-    // Se suma a las reuniones activas de la empresa y hereda la tarea real.
-    for (const meeting of this.store.listMeetings(10, companyId).filter((m) => m.status === 'active')) {
-      this.store.addAgentToMeeting(meeting.id, hired.id);
-    }
-    const firstTaskText = String(profile.firstTask || task.text).slice(0, 300);
-    const newTaskId = this.store.insertTask(task.meeting_id, hired.id, { text: firstTaskText });
-    if (task.goal_id) {
-      this.store.assignTaskToGoal(newTaskId, task.goal_id);
+    let patch = null;
+    try {
+      const { text } = await completeChat(this.keyRing, {
+        models: getMinimaxModels(),
+        scope: `refinamiento ${objetivo.name}`,
+        timeoutMs: STEP_TIMEOUT_MS,
+        maxTokens: 4000,
+        temperature: 0.4,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      patch = parseJsonFromModel(text);
+    } catch {
+      this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la llamada al modelo.', log: [], artifacts: [] });
+      this.store.finishTask(task.id, task.run_count >= MAX_RUNS_PER_TASK
+        ? { status: 'blocked', blockedReason: 'No se pudo refinar tras varios intentos.' }
+        : { status: 'pending' });
+      return;
     }
 
-    const summary = `Contraté a ${hired.name} (${hired.title}) y le asigné: "${firstTaskText}".`;
-    this.store.finishWorkRun(runId, { status: 'ok', summary, log: [{ action: 'hire', agentId: hired.id }], artifacts: [] });
-    this.store.finishTask(task.id, { status: 'done', summary });
-    this.emitEvent(companyId, { kind: 'agent_hired', taskId: task.id, agentId: hired.id, agentName: hired.name, title: hired.title, by: contratista.name, summary });
+    // Solo se acepta lo que de verdad refina; la identidad no se toca.
+    const limpio = {};
+    if (Array.isArray(patch && patch.skills) && patch.skills.length) {
+      limpio.domains = [...new Set(patch.skills.map((x) => String(x).toLowerCase().trim()).filter(Boolean))].slice(0, 16);
+    }
+    for (const [campo, tope] of [['knowledge', 2000], ['craft', 2000], ['style', 500]]) {
+      if (patch && typeof patch[campo] === 'string' && patch[campo].trim()) {
+        limpio[campo] = patch[campo].trim().slice(0, tope);
+      }
+    }
+    if (Array.isArray(patch && patch.boundaries) && patch.boundaries.length) {
+      limpio.boundaries = patch.boundaries.map(String).slice(0, 5);
+    }
+
+    if (Object.keys(limpio).length === 0) {
+      const razon = 'El refinamiento no proponía ningún cambio concreto.';
+      this.store.finishWorkRun(runId, { status: 'blocked', summary: razon, log: [], artifacts: [] });
+      this.store.finishTask(task.id, { status: 'blocked', blockedReason: razon });
+      return;
+    }
+
+    const skillsAntes = objetivo.domains;
+    this.store.updateAgent(objetivo.id, limpio, 'contratista', String(task.text).slice(0, 200));
+    const nuevas = (limpio.domains || []).filter((d) => !skillsAntes.includes(d));
+    const resumen = String((patch && patch.resumen) || `Ajusté el perfil de ${objetivo.name}.`).slice(0, 400);
+
+    this.store.finishWorkRun(runId, {
+      status: 'ok',
+      summary: resumen,
+      log: [{ persona: objetivo.name, campos: Object.keys(limpio), skillsNuevas: nuevas }],
+      artifacts: []
+    });
+    this.store.finishTask(task.id, { status: 'done', summary: resumen });
+    this.emitEvent(companyId, {
+      kind: 'agent_refined',
+      taskId: task.id,
+      agentId: contratista.id,
+      agentName: contratista.name,
+      targetId: objetivo.id,
+      targetName: objetivo.name,
+      skillsNuevas: nuevas,
+      summary: resumen
+    });
   }
 }

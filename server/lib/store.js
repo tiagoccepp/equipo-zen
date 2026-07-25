@@ -199,15 +199,15 @@ export class Store {
           id: 'contratista-' + nanoid(6),
           companyId: company.id,
           name: 'Franco',
-          title: 'Contratista de talento',
+          title: 'Responsable de talento',
           voice: 'M4',
           color: company.color,
-          style: 'Observador y resolutivo: cuando falta una habilidad en el equipo lo dice y propone el perfil exacto que hay que sumar.',
+          style: 'Atento y concreto: escucha qué le falta al equipo y propone en una línea a quién conviene reforzar y en qué.',
           aliases: ['franco', 'contratista', 'talento', 'reclutador'],
-          domains: ['contratacion', 'perfiles', 'talento', 'reclutamiento', 'equipo nuevo'],
-          boundaries: ['No contrata sin una necesidad concreta.', 'No duplica roles existentes.'],
-          knowledge: 'Detecta cuando una tarea necesita habilidades que el equipo no tiene y crea al empleado ideal (nombre, rol, skills, conocimientos y personalidad).',
-          craft: 'Identifica la brecha exacta de habilidades: qué tarea no puede hacer nadie y por qué. Diseña perfiles concretos con responsabilidad, skills operativas, oficio y límites, sin superponerse con el equipo, y entrega una primera tarea que ya aporta valor.',
+          domains: ['talento', 'perfiles', 'habilidades', 'refinamiento', 'capacitacion', 'equipo', 'roles'],
+          boundaries: ['No suma gente nueva: el equipo es el que es.', 'No cambia el nombre ni el puesto de nadie sin que se lo pidan.'],
+          knowledge: 'Conoce a fondo a cada integrante del equipo: qué sabe, cómo trabaja y dónde flojea. Cuando el dueño pide que alguien sepa más de algo o cambie su forma de trabajar, ajusta ese perfil de verdad.',
+          craft: 'Antes de tocar un perfil pregunta qué se busca lograr, no qué palabra agregar. Suma habilidades sin borrar las que ya estaban, reescribe el conocimiento y el oficio incorporando lo nuevo, y deja registrada la versión anterior por si hay que volver atrás.',
           role: 'contratista',
           managerId: ceo.id
         }, 'builtin', 'migration');
@@ -356,12 +356,13 @@ export class Store {
       domains: patch.domains ?? current.domains,
       boundaries: patch.boundaries ?? current.boundaries,
       knowledge: patch.knowledge ?? current.knowledge,
+      craft: patch.craft ?? current.craft,
       learningEnabled: patch.learningEnabled ?? current.learningEnabled
     };
 
     this.db.prepare(`
       UPDATE agents SET name = ?, title = ?, voice = ?, color = ?, style = ?,
-        aliases_json = ?, domains_json = ?, boundaries_json = ?, knowledge = ?, learning_enabled = ?,
+        aliases_json = ?, domains_json = ?, boundaries_json = ?, knowledge = ?, craft = ?, learning_enabled = ?,
         version = version + 1, updated_at = ?
       WHERE id = ?
     `).run(
@@ -374,6 +375,7 @@ export class Store {
       JSON.stringify(next.domains),
       JSON.stringify(next.boundaries),
       next.knowledge,
+      next.craft,
       next.learningEnabled ? 1 : 0,
       now(),
       agentId
@@ -648,7 +650,7 @@ export class Store {
     return this.db.prepare(`
       SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id
       WHERE g.company_id = ? AND g.status = 'active' AND t.status = 'pending'
-        AND t.kind IN ('entregable', 'revision', 'contratacion')
+        AND t.kind IN ('entregable', 'revision', 'refinamiento')
       ORDER BY t.created_at
     `).all(companyId);
   }

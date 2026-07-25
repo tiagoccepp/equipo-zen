@@ -66,7 +66,7 @@ export interface MeetingScenario {
 
 // Qué clase de tarea es: solo 'entregable' (y sus derivadas de proceso)
 // llega a producir archivos; los acuerdos quedan registrados sin trabajo.
-export type TaskKind = 'entregable' | 'decision' | 'seguimiento' | 'revision' | 'contratacion';
+export type TaskKind = 'entregable' | 'decision' | 'seguimiento' | 'revision' | 'refinamiento';
 
 export interface PublicCompany {
   id: string;
@@ -192,7 +192,8 @@ export type ServerMessage =
         agentName: string;
         tasks: Array<{ text: string; kind: TaskKind }>;
       }>;
-      hires: Array<{ need: string }>;
+      // El equipo es fijo: en vez de contratar, se refuerza a quien ya está.
+      refinements: Array<{ agentName: string; need: string }>;
     }
   | { type: 'work_event'; kind: string; [key: string]: unknown }
   | { type: 'meeting_warmup_start' }

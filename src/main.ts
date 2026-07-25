@@ -242,7 +242,7 @@ type ClosingSummary = {
   goalTitle: string;
   goalDescription: string;
   assignments: Array<{ agentId: string; agentName: string; tasks: Array<{ text: string; kind: string }> }>;
-  hires: Array<{ need: string }>;
+  refinements: Array<{ agentName: string; need: string }>;
 };
 
 const telemetryClientId = crypto.randomUUID();
@@ -1202,6 +1202,9 @@ async function loadCompanies() {
   } catch {
     state.companiesError = true;
   }
+  // El catálogo de organizaciones es parte de la pantalla de inicio, no de un
+  // modal: se carga junto con las que ya están abiertas.
+  await loadTemplates();
   state.companiesLoading = false;
   markDirty('home');
 }
@@ -1287,7 +1290,7 @@ async function handleServerMessage(message: MeetingMessage) {
         goalTitle: message.goalTitle,
         goalDescription: message.goalDescription,
         assignments: message.assignments || [],
-        hires: message.hires || []
+        refinements: message.refinements || []
       };
       resolveAlertIfPresent('closing', 'Cierre de reunión', 'Repaso listo: revisalo y confirmá.');
       openClosingModal();
@@ -2829,6 +2832,14 @@ function handleDelegatedClick(event: Event) {
 
   switch (action) {
     // ── Home ──
+    case 'enter-template': {
+      const templateId = target.dataset.templateId;
+      if (templateId && !state.creatingCompany) {
+        void abrirOrganizacion(templateId);
+      }
+      break;
+    }
+
     case 'enter-company': {
       const companyId = target.dataset.companyId;
       if (companyId) {
@@ -3249,22 +3260,34 @@ function renderCompanies() {
     `;
   }).join('');
 
-  const emptyHint = state.companies.length === 0
-    ? '<p class="muted grid-note">Todavía no hay simulaciones. Creá la primera: elegí una plantilla con equipo armado o empezá desde cero.</p>'
-    : '';
+  // Organizaciones predeterminadas que todavía no se abrieron. El usuario no
+  // crea empresas: elige entre las que existen.
+  const abiertas = new Set(state.companies.map((company) => company.name.toLowerCase()));
+  const disponibles = state.templates.filter((template) => !abiertas.has(template.name.toLowerCase()));
+
+  const tarjetasDisponibles = disponibles.map((template) => `
+    <button type="button" class="company-card is-available" data-action="enter-template" data-template-id="${escapeHtml(template.id)}"
+      ${state.creatingCompany ? 'disabled' : ''}>
+      <span class="company-tile" style="--company-color: ${escapeHtml(template.color)}" aria-hidden="true">${escapeHtml(template.emoji)}</span>
+      <span class="company-card-body">
+        <span class="company-name">${escapeHtml(template.name)}</span>
+        <span class="company-industry">${escapeHtml(template.industry || '')}</span>
+        <span class="company-meta">${template.teamSize} ${template.teamSize === 1 ? 'persona' : 'personas'} · sin abrir</span>
+      </span>
+    </button>
+  `).join('');
 
   return `
-    ${emptyHint}
-    <div class="companies-grid">
-      ${cards}
-      <button type="button" class="company-card is-new" data-action="open-new-company">
-        <span class="company-tile is-new" aria-hidden="true">+</span>
-        <span class="company-card-body">
-          <span class="company-name">Nueva simulación</span>
-          <span class="company-industry">Desde una plantilla o desde cero</span>
-        </span>
-      </button>
-    </div>
+    ${state.companies.length ? `<div class="companies-grid">${cards}</div>` : ''}
+    ${disponibles.length ? `
+      <section class="available-orgs" aria-label="Organizaciones disponibles">
+        ${state.companies.length ? '<h2 class="section-eyebrow">Otras organizaciones</h2>' : ''}
+        <p class="muted grid-note">${state.companies.length
+          ? 'Entrá a cualquiera: su equipo ya está armado y esperando.'
+          : 'Elegí con qué organización querés trabajar. Cada una viene con su equipo armado.'}</p>
+        <div class="companies-grid">${tarjetasDisponibles}</div>
+      </section>
+    ` : ''}
   `;
 }
 
@@ -3352,6 +3375,42 @@ async function submitScratchForm(form: HTMLFormElement) {
     color: state.scratchColor,
     scenario: byId<HTMLTextAreaElement>('scratchScenario').value.trim()
   });
+}
+
+// El usuario elige entre organizaciones predeterminadas; no crea ninguna. La
+// primera vez que entra a una, se instancia con su equipo y sigue de largo.
+async function abrirOrganizacion(templateId: string) {
+  const template = state.templates.find((item) => item.id === templateId);
+  state.creatingCompany = true;
+  markDirty('home');
+  try {
+    const data = await apiJson<{ company: Company }>('/api/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templateId })
+    });
+    trace('company_opened', { companyId: data.company.id, templateId });
+    enterCompany(data.company.id, data.company);
+  } catch (error) {
+    upsertAlert('company-open', template?.name || 'Organización', `No pude abrirla: ${getClientError(error)}`, 'error', 4200);
+  } finally {
+    state.creatingCompany = false;
+    markDirty('home');
+  }
+}
+
+// Catálogo de organizaciones predeterminadas (lo sirve /api/company-templates).
+async function loadTemplates() {
+  if (state.templatesLoaded) {
+    return;
+  }
+  try {
+    const data = await apiJson<{ templates: CompanyTemplate[] }>('/api/company-templates');
+    state.templates = data.templates || [];
+    state.templatesLoaded = true;
+  } catch {
+    // Sin catálogo, la pantalla muestra solo lo ya abierto.
+  }
 }
 
 async function createCompany(form: HTMLFormElement, payload: Record<string, unknown>) {
@@ -5557,11 +5616,11 @@ function openClosingModal() {
         </article>
       `).join('') : '<p class="muted">No quedaron tareas pendientes asignadas. Podés confirmar igual (la reunión se archiva) o volver y repartir trabajo.</p>'}
     </section>
-    ${summary.hires.length ? `
-      <section class="close-hires" aria-label="Contrataciones detectadas">
-        <span class="eyebrow">Se va a contratar</span>
-        ${summary.hires.map((hire) => `<div class="hire-row"><span aria-hidden="true">🧑‍💼</span><span>${escapeHtml(hire.need)}</span></div>`).join('')}
-        <p class="hint">El contratista va a crear a la persona ideal para cada necesidad y le va a asignar su primera tarea.</p>
+    ${summary.refinements.length ? `
+      <section class="close-hires" aria-label="Refuerzos del equipo">
+        <span class="eyebrow">Se va a reforzar</span>
+        ${summary.refinements.map((item) => `<div class="hire-row"><span aria-hidden="true">✦</span><span><strong>${escapeHtml(item.agentName)}</strong>: ${escapeHtml(item.need)}</span></div>`).join('')}
+        <p class="hint">El equipo es fijo: el contratista ajusta el perfil de esas personas (skills, conocimiento y forma de trabajar) en vez de sumar gente nueva.</p>
       </section>
     ` : ''}
   `;

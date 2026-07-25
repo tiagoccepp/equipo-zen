@@ -1305,7 +1305,11 @@ export class MeetingSession {
       ' "goalTitle":"título corto del proyecto (o del acuerdo, si no hay trabajo)",',
       ' "goalDescription":"1-2 oraciones: qué se busca y por qué",',
       ' "spokenSummary":"tu repaso HABLADO en 2-5 oraciones, cálido y claro: qué quedó a cargo de cada uno o, si no hay nada que producir, qué se acordó; terminá preguntando si está bien así",',
-      ' "hires":[{"need":"solo si falta una habilidad que NADIE del equipo tiene; lista vacía si no falta nada"}]}'
+      ' "refuerzos":[{"persona":"nombre de alguien DEL EQUIPO","que":"qué habilidad o criterio hay que reforzarle, en una línea"}]}',
+      '',
+      'Sobre "refuerzos": el equipo es fijo, no se contrata gente nueva. Si en la reunión apareció una habilidad que falta',
+      'o el usuario pidió que alguien sea distinto (más directo, que sepa de X), anotá a quién hay que reforzar y en qué.',
+      'Lista vacía si no hace falta tocar a nadie.'
     ].join('\n');
 
     let plan = null;
@@ -1353,7 +1357,12 @@ export class MeetingSession {
     // un "no" del modelo no puede contradecir su propia clasificación.
     const deliverables = classified.flatMap((a) => a.tasks).filter((t) => t.kind === 'entregable').length;
     const producesWork = deliverables > 0;
-    const hires = producesWork && Array.isArray(plan?.hires) ? plan.hires.filter((h) => h?.need).slice(0, 3) : [];
+    const refuerzos = Array.isArray(plan?.refuerzos)
+      ? plan.refuerzos
+          .filter((r) => r?.persona && r?.que)
+          .filter((r) => this.sessionAgents.some((a) => a.name.toLowerCase() === String(r.persona).toLowerCase()))
+          .slice(0, 3)
+      : [];
 
     const fallbackSummary = producesWork
       ? `Repasemos antes de cerrar: ${classified.map((a) => `${a.agentName} queda con ${a.tasks.map((t) => t.text).join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`
@@ -1367,7 +1376,7 @@ export class MeetingSession {
       goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
       // La clasificación YA corregida: es la que se aplica al confirmar.
       kinds: classified.flatMap((a) => a.tasks).map((task, index) => [index + 1, task.kind]),
-      hires
+      refuerzos
     };
 
     const spoken = String(plan?.spokenSummary || fallbackSummary).slice(0, 900);
@@ -1380,7 +1389,10 @@ export class MeetingSession {
       goalTitle: this.pendingClose.goalTitle,
       goalDescription: this.pendingClose.goalDescription,
       assignments: classified,
-      hires: this.pendingClose.hires.map((h) => ({ need: String(h.need).slice(0, 200) }))
+      refinements: this.pendingClose.refuerzos.map((r) => ({
+        agentName: String(r.persona).slice(0, 40),
+        need: String(r.que).slice(0, 200)
+      }))
     });
     logEvent('cierre_preparado', {
       meetingId: this.meeting?.id,
@@ -1389,7 +1401,7 @@ export class MeetingSession {
       proyecto: this.pendingClose.goalTitle,
       asignaciones: classified.map((a) => ({ quien: a.agentName, tareas: a.tasks.map((t) => `[${t.kind}] ${t.text}`) }))
     });
-    this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, deliverables, producesWork, hires: this.pendingClose.hires.length });
+    this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, deliverables, producesWork, refuerzos: this.pendingClose.refuerzos.length });
   }
 
   confirmMeetingClose() {
@@ -1427,13 +1439,13 @@ export class MeetingSession {
     }
     // Necesidades sin dueño → tareas del contratista (contrata y delega).
     const contratista = this.sessionAgents.find((agent) => agent.role === 'contratista');
-    if (contratista && pending.producesWork) {
-      for (const hire of pending.hires) {
+    if (contratista) {
+      for (const refuerzo of pending.refuerzos || []) {
         const taskId = this.store.insertTask(this.meeting.id, contratista.id, {
-          text: `Contratar a alguien para: ${hire.need}`,
-          kind: 'contratacion'
+          text: `Refinar a ${refuerzo.persona}: ${refuerzo.que}`,
+          kind: 'refinamiento'
         });
-        this.store.assignTaskToGoal(taskId, goal.id, { kind: 'contratacion' });
+        this.store.assignTaskToGoal(taskId, goal.id, { kind: 'refinamiento' });
         taskCount += 1;
       }
     }

@@ -4636,3 +4636,34 @@ summary:focus-visible,
 .btn.sm:focus-visible {
   outline-offset: 3px;
 }
+
+/* Organizaciones predeterminadas que todavía no se abrieron: mismo peso que
+   las abiertas, pero se nota que están en reposo. */
+.company-card.is-available .company-tile {
+  opacity: 0.72;
+}
+
+.company-card.is-available:hover .company-tile,
+.company-card.is-available:focus-visible .company-tile {
+  opacity: 1;
+}
+
+.company-card.is-available[disabled] {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.available-orgs {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+}
+
+.section-eyebrow {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
