@@ -2,7 +2,7 @@ import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
-import { cleanAgentText, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
+import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
@@ -39,6 +39,8 @@ export class LiveAgentRuntime {
     let silenced = false;
     let sentenceBuffer = '';
     let seq = 0;
+    // Las etiquetas [TAREA_...] no se muestran mientras el agente habla.
+    const tagFilter = createTagFilter();
     let gateToken = null;
     let audioRunner = Promise.resolve();
 
@@ -95,8 +97,11 @@ export class LiveAgentRuntime {
         probeBuffer = '';
       }
 
-      seq += 1;
-      emit({ type: 'agent_transcript_delta', delta, seq });
+      const visible = tagFilter.push(delta);
+      if (visible) {
+        seq += 1;
+        emit({ type: 'agent_transcript_delta', delta: visible, seq });
+      }
 
       sentenceBuffer += delta;
       // Corta en fin de oración con un mínimo de largo (evita TTS por "Ok.").
@@ -108,6 +113,14 @@ export class LiveAgentRuntime {
         }
         enqueueSentence(sentence);
         sentenceBuffer = sentenceBuffer.slice(sentence.length);
+      }
+    };
+
+    const flushVisible = () => {
+      const rest = tagFilter.flush();
+      if (rest) {
+        seq += 1;
+        emit({ type: 'agent_transcript_delta', delta: rest, seq });
       }
     };
 
@@ -137,6 +150,9 @@ export class LiveAgentRuntime {
       emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
       return { ...emptyAgentResponse(), backend: 'stream' };
     }
+
+    // Lo retenido por el filtro que al final NO era una etiqueta se muestra.
+    flushVisible();
 
     const rawText = cleanAgentText(result.text, this.name);
     const spokenText = stripTaskTags(rawText);
@@ -361,6 +377,9 @@ export function buildSystemInstruction(agent, context = {}) {
     '- No preguntes lo que ya está dicho en la conversación o en el contexto de la empresa.',
     '- Si algo es menor, no preguntes: asumí lo razonable y decilo en una línea ("le pongo tono sobrio, avisame si querés otra cosa").',
     '- Cuando ya tenés lo necesario, dejá de preguntar y proponé: qué se hace, quién lo hace, y arrancá.',
+    '- REGLA DURA: como mucho DOS rondas de preguntas en toda la reunión. Después decidís con lo que hay,',
+    '  asumís lo que falte diciéndolo en una línea, y repartís el trabajo. Nadie quiere un interrogatorio.',
+    '- Si en la conversación ya se dijo qué es, para quién y en qué formato, NO preguntes más: delegá.',
     '- Ofrecé opciones concretas antes que preguntas abiertas: es más fácil elegir que inventar de cero.',
     '',
     ...(agent.role === 'ceo'
@@ -369,6 +388,8 @@ export function buildSystemInstruction(agent, context = {}) {
           'Sos la interlocutora directa: cuando el pedido llega difuso, el que ordena la charla sos vos.',
           'Entendés qué se quiere lograr, lo confirmás en una frase con tus palabras, y recién ahí repartís el trabajo',
           'diciendo quién se encarga de qué y por qué esa persona. Si algo no se puede hacer todavía, lo decís.',
+          'No te quedes preguntando: tu valor es cerrar el alcance y poner a la gente a trabajar.',
+          'Las tareas se las asignás a quien las va a hacer (no a vos misma): vos coordinás, ellos producen.',
           ''
         ]
       : []),
@@ -409,6 +430,8 @@ export function buildSystemInstruction(agent, context = {}) {
     '- No inventes datos, fechas, números ni hechos que no te dieron.',
     '- No generes contenido inapropiado.',
     '- Respondé siempre en español rioplatense.',
-    '- SOLO caracteres del español: jamás mezcles palabras o caracteres de otros idiomas/alfabetos (nada de chino ni inglés innecesario).'
+    '- SOLO caracteres del español: jamás mezcles palabras o caracteres de otros idiomas/alfabetos (nada de chino ni inglés innecesario).',
+    '  Esto incluye el MEDIO de una palabra: se escribe "que determinan", nunca "que決定an"; "por separado", no "independently".',
+    '  Si dudás de una palabra, usá la más simple en español.'
   ].join('\n');
 }

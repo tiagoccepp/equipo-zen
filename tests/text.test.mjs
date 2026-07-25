@@ -9,7 +9,7 @@ import {
   isSilenceResponse,
   normalize,
   stripTaskTags
-} from '../server/lib/text.js';
+, createTagFilter } from '../server/lib/text.js';
 
 test('normalize quita acentos y puntuación pero conserva ?', () => {
   assert.equal(normalize('¿Qué opinás, Julió?'), 'que opinas julio?');
@@ -49,4 +49,30 @@ test('includesTerm: dominios con límites de palabra y multi-palabra', () => {
 test('isGreetingTurn distingue saludo puro de saludo con tema', () => {
   assert.equal(isGreetingTurn(normalize('hola equipo')), true);
   assert.equal(isGreetingTurn(normalize('hola, ¿cómo va el deploy?')), false);
+});
+
+test('las etiquetas de tarea no se ven mientras el agente habla', () => {
+  // Llegan partidas entre deltas del stream, tal cual las manda el modelo.
+  const filtro = createTagFilter();
+  const deltas = ['Dale, ', 'lo armamos. ', '[TAREA_', 'CREAR: Bruno', ': hacer la landing]'];
+  let visible = '';
+  for (const delta of deltas) {
+    visible += filtro.push(delta);
+  }
+  visible += filtro.flush();
+  assert.equal(visible, 'Dale, lo armamos. ', 'la etiqueta nunca aparece en pantalla');
+});
+
+test('un corchete que no es etiqueta se muestra igual', () => {
+  const filtro = createTagFilter();
+  let visible = filtro.push('El presupuesto queda [entre 100 y 200] mil');
+  visible += filtro.flush();
+  assert.equal(visible, 'El presupuesto queda [entre 100 y 200] mil');
+});
+
+test('un corchete abierto que nunca cierra no se traga el final del mensaje', () => {
+  const filtro = createTagFilter();
+  let visible = filtro.push('Quedó pendiente [revisar');
+  visible += filtro.flush();
+  assert.equal(visible, 'Quedó pendiente [revisar');
 });

@@ -15,6 +15,72 @@ export function stripTaskTags(value) {
   return String(value || '').replace(/\[TAREA_[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// Filtro incremental de etiquetas para el texto que se muestra EN VIVO.
+// Las etiquetas [TAREA_CREAR: ...] llegan partidas entre deltas del stream;
+// sin esto se ven un instante en pantalla y desaparecen al terminar el turno,
+// que a la vista es un glitch.
+const TAG_PREFIX = '[TAREA_';
+const MAX_HELD = 300;
+
+// ¿Lo retenido todavía puede terminar siendo una etiqueta? Mientras coincida
+// con el principio de "[TAREA_", o ya lo tenga y falte el cierre, se espera.
+function couldBeTag(held) {
+  if (held.length > MAX_HELD) {
+    return false;
+  }
+  return held.length <= TAG_PREFIX.length
+    ? TAG_PREFIX.startsWith(held)
+    : held.startsWith(TAG_PREFIX);
+}
+
+export function createTagFilter() {
+  let buffer = '';
+
+  const drain = (final) => {
+    let out = '';
+    for (;;) {
+      const open = buffer.indexOf('[');
+      if (open === -1) {
+        out += buffer;
+        buffer = '';
+        return out;
+      }
+      out += buffer.slice(0, open);
+      buffer = buffer.slice(open);
+
+      const close = buffer.indexOf(']');
+      if (close === -1) {
+        // Sin cierre todavía: se retiene mientras pueda ser el principio de
+        // una etiqueta; si ya se sabe que no lo es, se suelta.
+        if (final || !couldBeTag(buffer)) {
+          out += buffer[0];
+          buffer = buffer.slice(1);
+          continue;
+        }
+        return out;
+      }
+
+      const candidate = buffer.slice(0, close + 1);
+      buffer = buffer.slice(close + 1);
+      if (!/^\[TAREA_[A-Za-z]+\s*:/i.test(candidate)) {
+        out += candidate;
+      }
+    }
+  };
+
+  return {
+    push(delta) {
+      buffer += String(delta || '');
+      return drain(false);
+    },
+    flush() {
+      const rest = drain(true);
+      buffer = '';
+      return rest;
+    }
+  };
+}
+
 export function normalize(value) {
   return String(value || '')
     .toLowerCase()

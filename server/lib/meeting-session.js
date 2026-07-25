@@ -674,6 +674,41 @@ export class MeetingSession {
     });
   }
 
+  // "Bruno y Hugo" / "Sofía, Damián" → los agentes que existan de verdad.
+  static resolveTaskTargets(rawTargets, agents) {
+    const partes = String(rawTargets || '')
+      .split(/\s*(?:,|;|\/|\by\b|\be\b|&)\s*/iu)
+      .map((parte) => parte.trim().toLowerCase())
+      .filter(Boolean);
+    const encontrados = [];
+    for (const parte of partes) {
+      const agente = agents.find((a) => a.id === parte || a.name.toLowerCase() === parte);
+      if (agente && !encontrados.includes(agente)) {
+        encontrados.push(agente);
+      }
+    }
+    return encontrados;
+  }
+
+  // Alta con dedupe: el modelo repite la misma etiqueta en turnos seguidos y
+  // aparecían tareas idénticas duplicadas en el tablero.
+  assignTaskToAgent(agent, taskText) {
+    const texto = String(taskText || '').trim();
+    if (!texto) {
+      return false;
+    }
+    agent.tasks = agent.tasks || [];
+    const yaEsta = agent.tasks.some(
+      (task) => !task.completed && task.text.trim().toLowerCase() === texto.toLowerCase()
+    );
+    if (yaEsta) {
+      return false;
+    }
+    const newTaskId = this.store.insertTask(this.meeting.id, agent.id, { text: texto });
+    agent.tasks.push({ id: newTaskId, text: texto, completed: false, createdAt: new Date().toISOString() });
+    return true;
+  }
+
   processAgentTaskCommands(agentId, text) {
     if (!text) return text;
 
@@ -682,26 +717,18 @@ export class MeetingSession {
 
     // 1. Parsear creaciones con destinatario explícito (nombre o id):
     // [TAREA_CREAR: Tomasa: descripción]
-    const createRegex = /\[TAREA_CREAR:\s*([\p{L}0-9_-]+):\s*([^\]]+)\]/gu;
+    const createRegex = /\[TAREA_CREAR:\s*([^:\]]+):\s*([^\]]+)\]/gu;
     let createMatch;
     while ((createMatch = createRegex.exec(text)) !== null) {
-      const targetRef = createMatch[1].trim().toLowerCase();
       const taskText = createMatch[2].trim();
-
-      const targetAgent = this.sessionAgents.find(
-        (a) => a.id === targetRef || a.name.toLowerCase() === targetRef
-      );
-      if (targetAgent && taskText) {
-        targetAgent.tasks = targetAgent.tasks || [];
-        const newTaskId = this.store.insertTask(this.meeting.id, targetAgent.id, { text: taskText });
-        targetAgent.tasks.push({
-          id: newTaskId,
-          text: taskText,
-          completed: false,
-          createdAt: new Date().toISOString()
-        });
-        this.logTelemetry('task_created_by_agent', { agentId: targetAgent.id, createdBy: agentId, taskText, method: 'explicit_target' });
-        changed = true;
+      // Una etiqueta puede nombrar a más de una persona ("Bruno y Hugo",
+      // "Sofía, Damián"): antes se descartaba entera y el trabajo se perdía.
+      const targets = MeetingSession.resolveTaskTargets(createMatch[1], this.sessionAgents);
+      for (const targetAgent of targets) {
+        if (taskText && this.assignTaskToAgent(targetAgent, taskText)) {
+          this.logTelemetry('task_created_by_agent', { agentId: targetAgent.id, createdBy: agentId, taskText, method: 'explicit_target' });
+          changed = true;
+        }
       }
     }
 
@@ -713,15 +740,7 @@ export class MeetingSession {
       const taskText = selfCreateMatch[1].trim();
       if (taskText && !taskText.startsWith('TAREA_') && !taskText.includes(':')) {
         const targetAgent = this.sessionAgents.find(a => a.id === agentId);
-        if (targetAgent) {
-          targetAgent.tasks = targetAgent.tasks || [];
-          const newTaskId = this.store.insertTask(this.meeting.id, agentId, { text: taskText });
-          targetAgent.tasks.push({
-            id: newTaskId,
-            text: taskText,
-            completed: false,
-            createdAt: new Date().toISOString()
-          });
+        if (targetAgent && this.assignTaskToAgent(targetAgent, taskText)) {
           this.logTelemetry('task_created_by_agent', { agentId, taskText, method: 'self_assign' });
           changed = true;
         }

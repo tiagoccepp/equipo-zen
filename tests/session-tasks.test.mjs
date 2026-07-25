@@ -218,6 +218,36 @@ test('un pedido explícito de crear algo se construye aunque la CEO dude', async
   assert.equal(queue[0].kind, 'entregable');
 });
 
+test('una etiqueta con dos nombres crea la tarea para los dos', async () => {
+  const { session, store, julioId, tomasaId } = newSession();
+
+  // El modelo escribe naturalmente "Julio y Tomasa": antes se descartaba
+  // entera y el trabajo pedido se perdía sin dejar rastro.
+  session.processAgentTaskCommands(julioId, 'Lo vemos. [TAREA_CREAR: Julio y Tomasa: preparar el informe de stock]');
+
+  const deJulio = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === julioId);
+  const deTomasa = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === tomasaId);
+  assert.equal(deJulio.length, 1);
+  assert.equal(deTomasa.length, 1);
+  assert.equal(deJulio[0].text, 'preparar el informe de stock');
+});
+
+test('la misma tarea repetida en dos turnos no se duplica', async () => {
+  const { session, store, julioId } = newSession();
+
+  session.processAgentTaskCommands(julioId, '[TAREA_CREAR: Julio: definir el alcance]');
+  session.processAgentTaskCommands(julioId, 'Como decía, [TAREA_CREAR: Julio: definir el alcance]');
+
+  const tareas = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === julioId);
+  assert.equal(tareas.length, 1, 'el tablero no se llena de tareas idénticas');
+});
+
+test('un destinatario que no existe no rompe ni inventa tareas', async () => {
+  const { session, store, julioId } = newSession();
+  session.processAgentTaskCommands(julioId, '[TAREA_CREAR: Fulano: algo]');
+  assert.equal(store.tasksForMeeting(session.meeting.id).length, 0);
+});
+
 test('continuidad: turnos, agente spawneado y tareas sobreviven a otra sesión', async () => {
   const store = newStore();
   const { session: first } = newSession(store);
