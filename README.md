@@ -79,3 +79,17 @@ server/stt/whisper_server.py    STT local (faster-whisper + FastAPI)
 App local de un solo usuario: bind en loopback, CORS con allowlist, validación y límites en todos los mensajes WS, TTS y base de datos sin salir de tu máquina. No la expongas a la red sin agregar autenticación.
 
 > El vault Obsidian (`00 - Index` … `08 - Roadmap`) describe una arquitectura vieja (era Gemini, pre-empresas). La referencia vigente es este README + el código.
+
+## Diario de la empresa (logs)
+
+Todo lo que pasa queda registrado en `server/data/logs/AAAA-MM-DD.jsonl`, en
+texto plano legible: tu mensaje tal cual lo escribiste, las respuestas de cada
+empleado, el ruteo, las interrupciones, cada paso del trabajo y los errores del
+modelo. Sirve para reconstruir qué pasó cuando algo falla, sin depender de que
+la app siga abierta.
+
+- Consultarlo desde la app: `GET /api/logs?day=2026-07-25&kind=mensaje_usuario&search=web`
+- O abrirlo a mano: `tail -f server/data/logs/$(date +%F).jsonl`
+- Nunca escribe claves (las tapa aunque aparezcan dentro de un texto), recorta
+  los textos enormes y rota el archivo por tamaño.
+- Se apaga con `SESSION_LOG=0`.
