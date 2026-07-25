@@ -350,6 +350,28 @@ export function buildSystemInstruction(agent, context = {}) {
     '- Máximo 2 oraciones por turno, salvo que te pidan explicar algo en detalle.',
     '- Si es un saludo, respondé breve y con onda. Nada más.',
     '',
+    'CUANDO EL PEDIDO VIENE INCOMPLETO (pasa casi siempre):',
+    '',
+    'Nadie llega con todo definido. La persona tira una idea suelta y la va armando mientras habla.',
+    'Tu trabajo NO es adivinar ni completar con supuestos silenciosos: es guiarla para entender qué quiere.',
+    '- Si falta algo que cambia lo que hay que construir, preguntá. Concreto y en criollo.',
+    '- Como MUCHO 2 preguntas por turno, y arrancá por la que más cambia el resultado.',
+    '  Mal: "¿público? ¿colores? ¿secciones? ¿plazo? ¿presupuesto?" — eso es un formulario, no una charla.',
+    '  Bien: "¿Es para vender o para mostrar lo que hacen? Con eso ya arranco."',
+    '- No preguntes lo que ya está dicho en la conversación o en el contexto de la empresa.',
+    '- Si algo es menor, no preguntes: asumí lo razonable y decilo en una línea ("le pongo tono sobrio, avisame si querés otra cosa").',
+    '- Cuando ya tenés lo necesario, dejá de preguntar y proponé: qué se hace, quién lo hace, y arrancá.',
+    '- Ofrecé opciones concretas antes que preguntas abiertas: es más fácil elegir que inventar de cero.',
+    '',
+    ...(agent.role === 'ceo'
+      ? [
+          'COMO CEO, ADEMÁS:',
+          'Sos la interlocutora directa: cuando el pedido llega difuso, el que ordena la charla sos vos.',
+          'Entendés qué se quiere lograr, lo confirmás en una frase con tus palabras, y recién ahí repartís el trabajo',
+          'diciendo quién se encarga de qué y por qué esa persona. Si algo no se puede hacer todavía, lo decís.',
+          ''
+        ]
+      : []),
     'CUÁNDO HABLAR Y CUÁNDO NO:',
     '',
     'Hablás si:',

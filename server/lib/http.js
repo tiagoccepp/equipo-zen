@@ -14,6 +14,7 @@ import {
 import { buildSystemInstruction } from './agent-runtime.js';
 import { renderLearningsSection } from './learning.js';
 import { applySuggestion } from './reflection.js';
+import { listLogDays, logDirectory, readLog } from './session-log.js';
 import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
@@ -131,6 +132,18 @@ export function createApp({ store }) {
         groqConfigured: current.stt.groqKeySet
       }
     });
+  });
+
+  // Diario durable de la empresa: sirve para reconstruir qué pasó después
+  // de que algo falle (los archivos están en server/data/logs/*.jsonl).
+  app.get('/api/logs', async (req, res) => {
+    const entries = await readLog({
+      day: req.query.day,
+      limit: req.query.limit,
+      kind: req.query.kind,
+      search: req.query.search
+    });
+    res.json({ directory: logDirectory(), days: await listLogDays(), entries });
   });
 
   app.get('/api/companies', (_req, res) => {

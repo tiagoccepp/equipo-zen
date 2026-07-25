@@ -13,6 +13,7 @@ import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
 import { ReflectionRunner } from './reflection.js';
 import { registerSession, unregisterSession } from './priority.js';
+import { logEvent } from './session-log.js';
 import { AgentRouter } from './router.js';
 import { renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
@@ -347,6 +348,12 @@ export class MeetingSession {
       this.turnQueue.interrupt(message.reason === 'barge_in' ? 'barge_in' : 'superseded');
       this.gate.flush();
       this.send({ type: 'agent_interrupted', turnId: speakingTurnId || undefined, agentId: speakingAgentId || undefined });
+      logEvent('interrupcion', {
+        meetingId: this.meeting?.id,
+        motivo: message.reason,
+        agenteInterrumpido: this.sessionAgents.find((a) => a.id === speakingAgentId)?.name || speakingAgentId,
+        msReproducidos: message.playedMs ?? null
+      });
       this.logTelemetry('user_interrupt', {
         reason: message.reason,
         agentId: speakingAgentId,
@@ -799,6 +806,14 @@ export class MeetingSession {
     // Cada fragmento se muestra al instante en el chat…
     this.memory.add('user', 'Tu', text, null, fragmentId);
     this.send({ type: 'user_turn_received', turnId: fragmentId, text, source });
+    logEvent('mensaje_usuario', {
+      meetingId: this.meeting?.id,
+      companyId: this.company?.id,
+      empresa: this.company?.name,
+      turnId: fragmentId,
+      via: source,
+      texto: text
+    });
     this.logTelemetry('user_turn_enqueued', { turnId: fragmentId, source, text }, fragmentId);
 
     // …pero el ruteo espera: si venís escribiendo/hablando de a partes,
@@ -831,6 +846,12 @@ export class MeetingSession {
   }
 
   routeCombinedTurn(text, source) {
+    logEvent('turno_combinado', {
+      meetingId: this.meeting?.id,
+      companyId: this.company?.id,
+      via: source,
+      texto: text
+    });
     const turnId = nanoid(8);
     const accepted = this.turnQueue.push(
       turnId,
@@ -1042,6 +1063,13 @@ export class MeetingSession {
         const cleanedText = this.processAgentTaskCommands(agent.id, response.rawText);
         response.text = response.text ? cleanedText : '';
       }
+      logEvent('respuesta_agente', {
+        meetingId: this.meeting?.id,
+        turnId,
+        agente: agent.name,
+        interrumpido: Boolean(response.interrupted),
+        texto: response.text || '(silencio)'
+      });
       if (response.text) {
         const memoryText = response.interrupted
           ? `${response.text} …(interrumpido por el usuario)`
@@ -1291,6 +1319,13 @@ export class MeetingSession {
       goalDescription: this.pendingClose.goalDescription,
       assignments: classified,
       hires: this.pendingClose.hires.map((h) => ({ need: String(h.need).slice(0, 200) }))
+    });
+    logEvent('cierre_preparado', {
+      meetingId: this.meeting?.id,
+      empresa: this.company?.name,
+      produceTrabajo: producesWork,
+      proyecto: this.pendingClose.goalTitle,
+      asignaciones: classified.map((a) => ({ quien: a.agentName, tareas: a.tasks.map((t) => `[${t.kind}] ${t.text}`) }))
     });
     this.logTelemetry('meeting_close_prepared', { assignments: assignments.length, deliverables, producesWork, hires: this.pendingClose.hires.length });
   }

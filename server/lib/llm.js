@@ -3,6 +3,7 @@ import {
   MINIMAX_MODELS,
   RESPONSE_TIMEOUT_MS
 } from './config.js';
+import { logEvent } from './session-log.js';
 import { getErrorText, getShortError } from './text.js';
 
 // Cliente MiniMax (endpoint OpenAI-compatible: /v1/chat/completions).
@@ -200,6 +201,11 @@ export async function streamChat(keyRing, options, onDelta) {
       break;
     }
   }
+  logEvent('error_modelo', {
+    scope: options.scope,
+    modelos: (options.models || []).join(','),
+    error: getErrorText(lastError).slice(0, 400)
+  });
   throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 
@@ -259,6 +265,11 @@ export async function completeChat(keyRing, options) {
       break;
     }
   }
+  logEvent('error_modelo', {
+    scope: options.scope,
+    modelos: (options.models || []).join(','),
+    error: getErrorText(lastError).slice(0, 400)
+  });
   throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 

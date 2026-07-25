@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { rootDir } from './config.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { hasLiveSession, isUserSpeaking } from './priority.js';
+import { logEvent } from './session-log.js';
 import { getMinimaxModels } from './settings.js';
 import { telemetry } from './telemetry.js';
 
@@ -200,6 +201,7 @@ export class Workforce {
 
   emitEvent(companyId, event) {
     telemetry.add({ type: `work_${event.kind}`, payload: { companyId, ...event } });
+    logEvent(`trabajo_${event.kind}`, { companyId, ...event });
     this.onEvent?.(companyId, { type: 'work_event', ...event });
   }
 
