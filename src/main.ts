@@ -215,10 +215,10 @@ const REVIEW_LABEL: Record<string, string> = {
   cambios: 'Cambios pedidos'
 };
 
-const VIEWPORTS: Array<{ id: 'desktop' | 'tablet' | 'mobile'; label: string; icon: string; width: string }> = [
-  { id: 'desktop', label: 'Escritorio', icon: '🖥️', width: '100%' },
-  { id: 'tablet', label: 'Tablet', icon: '📱', width: '820 px' },
-  { id: 'mobile', label: 'Móvil', icon: '📲', width: '390 px' }
+const VIEWPORTS: Array<{ id: 'desktop' | 'tablet' | 'mobile'; label: string; width: string }> = [
+  { id: 'desktop', label: 'Escritorio', width: 'todo el ancho' },
+  { id: 'tablet', label: 'Tablet', width: '820 px' },
+  { id: 'mobile', label: 'Móvil', width: '390 px' }
 ];
 
 type ClosingSummary = {
@@ -4246,9 +4246,7 @@ function renderBrowserChrome(): string {
     <button class="vp-btn${state.projectViewport === viewport.id ? ' is-active' : ''}" type="button"
       data-action="browser-viewport" data-viewport="${viewport.id}"
       aria-pressed="${state.projectViewport === viewport.id}"
-      title="${escapeHtml(viewport.label)} (${escapeHtml(viewport.width)})">
-      <span aria-hidden="true">${viewport.icon}</span><span class="sr-only">${escapeHtml(viewport.label)}</span>
-    </button>
+      title="Ver el sitio a ${escapeHtml(viewport.width)}">${escapeHtml(viewport.label)}</button>
   `).join('');
 
   return `

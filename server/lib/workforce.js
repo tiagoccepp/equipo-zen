@@ -25,6 +25,8 @@ const MAX_STEPS_PER_RUN = 8;
 const MAX_FILE_BYTES = 200 * 1024;
 const MAX_FILES_PER_RUN = 12;
 const STEP_TIMEOUT_MS = Number(process.env.WORKFORCE_STEP_TIMEOUT_MS || 180000);
+// Tope de reintentos por tarea: evita el bucle infinito si el modelo no responde.
+const MAX_RUNS_PER_TASK = Number(process.env.WORKFORCE_MAX_RUNS_PER_TASK || 3);
 
 // Solo formatos de entregable: nada ejecutable, nada de configuración del host.
 const ALLOWED_EXTENSIONS = new Set([
@@ -232,8 +234,14 @@ export class Workforce {
       } catch (error) {
         log.push({ step, action: 'error', note: String(error?.message || error).slice(0, 200) });
         this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la llamada al modelo.', log, artifacts: [...artifacts] });
+        if (task.run_count >= MAX_RUNS_PER_TASK) {
+          const reason = `Falló ${task.run_count} veces seguidas al llamar al modelo. Revisá la clave o el estado del servicio.`;
+          this.store.finishTask(task.id, { status: 'blocked', blockedReason: reason });
+          this.emitEvent(companyId, { kind: 'task_blocked', taskId: task.id, agentId: agent.id, agentName: agent.name, reason });
+          return;
+        }
         this.store.finishTask(task.id, { status: 'pending' }); // vuelve a la cola
-        this.emitEvent(companyId, { kind: 'task_retry', taskId: task.id, agentId: agent.id, agentName: agent.name });
+        this.emitEvent(companyId, { kind: 'task_retry', taskId: task.id, agentId: agent.id, agentName: agent.name, attempt: task.run_count });
         return;
       }
 
@@ -426,7 +434,9 @@ export class Workforce {
       issues = (Array.isArray(parsed.issues) ? parsed.issues : []).map(String).slice(0, 5);
     } catch (error) {
       this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la revisión.', log: [{ error: String(error?.message || error).slice(0, 200) }], artifacts: [] });
-      this.store.finishTask(task.id, { status: 'pending' });
+      this.store.finishTask(task.id, task.run_count >= MAX_RUNS_PER_TASK
+        ? { status: 'blocked', blockedReason: 'No se pudo completar la revisión tras varios intentos.' }
+        : { status: 'pending' });
       return;
     }
 

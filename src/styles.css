@@ -3489,21 +3489,27 @@ select.form-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
-  min-height: 28px;
+  min-height: 26px;
+  padding: 0 var(--s-3);
   border-radius: var(--r-full);
   background: transparent;
-  font-size: var(--text-sm);
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
   line-height: 1;
-  transition: background var(--dur-1) var(--ease);
+  white-space: nowrap;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
 }
 
 .vp-btn:hover {
   background: var(--surface-3);
+  color: var(--ink);
 }
 
 .vp-btn.is-active {
-  background: var(--ink);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-1);
 }
 
 /* El escenario simula el ancho del dispositivo elegido. */
