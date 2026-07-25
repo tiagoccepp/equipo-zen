@@ -23,6 +23,16 @@ Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:87
 
 Scripts: `npm test` (suite `node:test`), `npm run typecheck`, `npm run build`.
 
+## ¿Algo no anda?
+
+```bash
+npm run doctor
+```
+
+Dice qué está bien, qué falta y el comando exacto para arreglarlo (Node, claves,
+voz local, transcripción local, base de datos y puertos). Sirve tanto para la
+primera instalación como para cuando algo dejó de responder.
+
 ## La empresa digital (estilo [Paperclip](https://github.com/paperclipai/paperclip))
 
 Cada simulación es una **empresa que trabaja de verdad**:

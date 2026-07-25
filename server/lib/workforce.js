@@ -472,6 +472,20 @@ export class Workforce {
       ? `Ya leíste arriba el contenido de ${estado.principal}. Continuá sobre eso.`
       : 'Todavía no hiciste ninguna acción.';
 
+    // A partir del paso 2 el contenido completo ya no viaja: el modelo lo vio
+    // en el paso 1 y, si lo necesita otra vez, tiene read_file. Repetirlo
+    // costaba ~7.900 tokens de entrada por paso en una web de 32kB.
+    const headerLiviano = estado
+      ? [
+          goal ? `META DE LA EMPRESA (el porqué): ${goal.title} — ${goal.description}` : '',
+          `TU TAREA (el qué): ${task.text}`,
+          `Proyecto en curso — archivos: ${archivosIniciales.join(', ')}. El principal es ${estado.principal}.`,
+          'Seguís CONTINUANDO ese trabajo: editá con edit_file y respetá su estilo.',
+          ...(estado.identidad.length ? ['IDENTIDAD DEL PROYECTO (respetala):', ...estado.identidad] : []),
+          'Si necesitás ver el archivo de nuevo, usá read_file.'
+        ].filter(Boolean).join('\n')
+      : header;
+
     for (let step = 1; step <= MAX_STEPS_PER_RUN; step += 1) {
       let action = null;
       let rawText = '';
@@ -480,6 +494,7 @@ export class Workforce {
         const history = log.length
           ? 'Acciones que ya hiciste: ' + log.map((entry) => `${entry.step}:${entry.action}${entry.path ? '(' + entry.path + ')' : ''}${entry.ok === false ? '✗' : ''}`).join(', ')
           : '';
+        const encabezado = step === 1 ? header : headerLiviano;
         const { text } = await completeChat(this.keyRing, {
           models: getMinimaxModels(),
           scope: `trabajo ${agent.name}`,
@@ -488,7 +503,7 @@ export class Workforce {
           temperature: 0.4,
           messages: [
             { role: 'system', content: system },
-            { role: 'user', content: [header, history, `Última observación: ${lastObservation}`, `Paso ${step}/${MAX_STEPS_PER_RUN}. Tu próxima acción:`].filter(Boolean).join('\n\n') }
+            { role: 'user', content: [encabezado, history, `Última observación: ${lastObservation}`, `Paso ${step}/${MAX_STEPS_PER_RUN}. Tu próxima acción:`].filter(Boolean).join('\n\n') }
           ]
         });
         rawText = text;

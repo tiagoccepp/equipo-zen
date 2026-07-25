@@ -545,6 +545,10 @@ export class Store {
     ).all(companyId, limit);
   }
 
+  reassignTask(taskId, agentId) {
+    this.db.prepare('UPDATE tasks SET agent_id = ? WHERE id = ?').run(agentId, taskId);
+  }
+
   setTaskCompleted(taskId, completed) {
     this.db.prepare('UPDATE tasks SET completed = ?, completed_at = ? WHERE id = ?')
       .run(completed ? 1 : 0, completed ? now() : null, taskId);

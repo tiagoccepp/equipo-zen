@@ -1218,7 +1218,47 @@ export class MeetingSession {
   // "Finalizar reunión": la CEO repasa en voz alta quién quedó con qué
   // (validación conversacional) y queda pendiente la confirmación del
   // usuario para arrancar el trabajo.
+  // La CEO coordina; no construye. Si quedó con un entregable en la mano, pasa
+  // a quien tenga el oficio: que la jefa reescriba la web del desarrollador
+  // fue justo lo que hacía cambiar el estilo en cada vuelta.
+  reassignCeoDeliverables() {
+    const ceo = this.sessionAgents.find((agent) => agent.role === 'ceo');
+    if (!ceo || !ceo.tasks?.length) {
+      return [];
+    }
+    const candidatos = this.sessionAgents.filter(
+      (agent) => agent.id !== ceo.id && agent.role !== 'contratista' && agent.enabled !== false
+    );
+    if (candidatos.length === 0) {
+      return [];
+    }
+
+    const movidas = [];
+    for (const task of [...ceo.tasks]) {
+      if (task.completed || !MeetingSession.looksLikeDeliverable(task.text)) {
+        continue;
+      }
+      const palabras = new Set(String(task.text).toLowerCase().split(/[^\p{L}0-9]+/u).filter((w) => w.length > 3));
+      const elegido = candidatos
+        .map((agent) => ({ agent, afinidad: agent.domains.filter((d) => palabras.has(String(d).toLowerCase())).length }))
+        .sort((a, b) => b.afinidad - a.afinidad)[0];
+      if (!elegido || elegido.afinidad === 0) {
+        continue; // Nadie encaja mejor: se la queda.
+      }
+      this.store.reassignTask(task.id, elegido.agent.id);
+      ceo.tasks = ceo.tasks.filter((item) => item.id !== task.id);
+      elegido.agent.tasks = elegido.agent.tasks || [];
+      elegido.agent.tasks.push(task);
+      movidas.push({ tarea: task.text, de: ceo.name, a: elegido.agent.name });
+    }
+    if (movidas.length) {
+      logEvent('tareas_reasignadas', { meetingId: this.meeting?.id, movidas });
+    }
+    return movidas;
+  }
+
   async prepareMeetingClose() {
+    this.reassignCeoDeliverables();
     const ceo = this.sessionAgents.find((agent) => agent.role === 'ceo' && agent.enabled !== false);
     const assignments = this.sessionAgents
       .filter((agent) => (agent.tasks || []).some((task) => !task.completed))

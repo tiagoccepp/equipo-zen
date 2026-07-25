@@ -400,3 +400,33 @@ test('paciencia: un conector al final extiende la espera', () => {
   assert.equal(MeetingSession.seemsUnfinished('lavá los platos.'), false);
   assert.equal(MeetingSession.seemsUnfinished('¿cómo va el stock?'), false);
 });
+
+test('la CEO coordina: un entregable en su mano pasa a quien tiene el oficio', async () => {
+  const { session, store } = newSession();
+  const ceo = session.sessionAgents.find((a) => a.role === 'ceo');
+  const julio = session.sessionAgents.find((a) => a.name === 'Julio');
+
+  // Como pasó de verdad: la jefa quedó con la web del desarrollador y la
+  // reescribía entera con su propio estilo.
+  await session.handleClientMessage({
+    type: 'add_task',
+    agentId: ceo.id,
+    text: 'crear la página web del catálogo con el software nuevo'
+  });
+
+  const movidas = session.reassignCeoDeliverables();
+  assert.equal(movidas.length, 1, 'la tarea se movió');
+  assert.equal(movidas[0].a, julio.name, 'quedó en quien tiene las skills');
+  assert.equal(ceo.tasks.filter((t) => !t.completed).length, 0);
+  assert.ok(julio.tasks.some((t) => t.text.includes('página web del catálogo')));
+});
+
+test('lo que sí es de la CEO se queda con ella', async () => {
+  const { session } = newSession();
+  const ceo = session.sessionAgents.find((a) => a.role === 'ceo');
+
+  // Coordinar no es un entregable: no hay a quién pasárselo.
+  await session.handleClientMessage({ type: 'add_task', agentId: ceo.id, text: 'definir la prioridad de la semana' });
+  assert.equal(session.reassignCeoDeliverables().length, 0);
+  assert.equal(ceo.tasks.length, 1);
+});
