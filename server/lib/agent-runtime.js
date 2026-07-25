@@ -133,7 +133,7 @@ export class LiveAgentRuntime {
         emit,
         signal,
         maxTokens: 3000,
-        temperature: 0.6,
+        temperature: 0.5,
         messages: [
           { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
           { role: 'user', content: this.buildTurnPrompt(turn) }

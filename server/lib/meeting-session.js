@@ -1087,6 +1087,9 @@ export class MeetingSession {
         turnId,
         agente: agent.name,
         interrumpido: Boolean(response.interrupted),
+        // MiniMax a veces cuela chino o inglés en medio del español: queda
+        // marcado para poder medirlo en el diario en vez de sospecharlo.
+        idiomaSucio: /[\u4e00-\u9fff\u3040-\u30ff]/.test(response.text || '') || undefined,
         texto: response.text || '(silencio)'
       });
       if (response.text) {
