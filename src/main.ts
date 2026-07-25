@@ -60,6 +60,36 @@ type MeetingListItem = {
   summary: string | null;
 };
 
+type SettingsData = {
+  llm: {
+    provider: string;
+    apiKeySet: boolean;
+    apiKeyMasked: string;
+    model: string;
+    modelOptions: string[];
+  };
+  stt: {
+    provider: 'local' | 'groq' | 'browser';
+    providerOptions: string[];
+    whisperModel: string;
+    whisperModelOptions: string[];
+    groqKeySet: boolean;
+    groqKeyMasked: string;
+    language: string;
+  };
+  tts: {
+    engine: string;
+    language: string;
+    url: string;
+  };
+};
+
+type SettingsStatus = {
+  llm: { configured: boolean; model: string };
+  tts: { engine: string; healthy: boolean };
+  stt: { provider: string; localHealthy: boolean; groqConfigured: boolean };
+};
+
 const telemetryClientId = crypto.randomUUID();
 let telemetrySeq = 0;
 let inputTraceTimer = 0;
@@ -267,10 +297,12 @@ class PcmAudioQueue {
   }
 }
 
-// Captura de micrófono con VAD local. El PCM ya NO viaja al servidor: la
-// transcripción es del SpeechRecognition del navegador y llega como
-// transcriptHint en audio_end. Acá queda el gate de voz (inicio/fin de
-// habla por RMS), el medidor y el barge-in con ducking.
+// Captura de micrófono con VAD local. Mientras hay habla, los frames PCM
+// (16 kHz mono) viajan al servidor como audio_chunk: allá los transcribe
+// Whisper (local o Groq, según Ajustes). El SpeechRecognition del
+// navegador sigue corriendo en paralelo y su texto va como transcriptHint
+// en audio_end (red de seguridad). Acá además vive el gate de voz
+// (inicio/fin de habla por RMS), el medidor y el barge-in con ducking.
 class LiveMicrophoneStreamer {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -281,6 +313,9 @@ class LiveMicrophoneStreamer {
   private silenceMs = 0;
   private speechMs = 0;
   private lastMeterAt = 0;
+  // Últimos frames previos al arranque del habla: se mandan al detectar voz
+  // para no perder el ataque de la primera palabra.
+  private preBuffer: Array<{ data: string; durationMs: number }> = [];
   private bargeMs = 0;
 
   private sendMessage: (payload: unknown) => void;
@@ -354,11 +389,17 @@ class LiveMicrophoneStreamer {
     this.speaking = false;
     this.silenceMs = 0;
     this.speechMs = 0;
+    this.preBuffer = [];
     this.onMeter({ level: 0, startThreshold: micThresholds(state.micSettings).startThreshold, speaking: false });
     this.onState('');
   }
 
   private handlePcmChunk(chunk: { pcm: ArrayBuffer; rms: number; durationMs: number }) {
+    const payload = {
+      data: base64FromArrayBuffer(chunk.pcm),
+      durationMs: chunk.durationMs
+    };
+
     const settings = state.micSettings;
     const { startThreshold, continueThreshold } = micThresholds(settings);
     const endSilenceMs = settings.endSilenceMs;
@@ -378,6 +419,8 @@ class LiveMicrophoneStreamer {
           this.bargeMs += chunk.durationMs;
         }
         if (this.bargeMs < 250) {
+          this.preBuffer.push(payload);
+          this.preBuffer = this.preBuffer.slice(-4);
           return;
         }
         // Confirmado: cortar al agente y dejar que el flujo normal de
@@ -400,6 +443,8 @@ class LiveMicrophoneStreamer {
     }
 
     if (!this.speaking) {
+      this.preBuffer.push(payload);
+      this.preBuffer = this.preBuffer.slice(-4);
       if (chunk.rms >= startThreshold) {
         this.speaking = true;
         this.silenceMs = 0;
@@ -413,11 +458,17 @@ class LiveMicrophoneStreamer {
           sensitivity: settings.sensitivity
         });
         this.sendMessage({ type: 'audio_start' });
+        // Flush del pre-buffer: el chunk actual ya está incluido.
+        for (const buffered of this.preBuffer) {
+          this.sendMessage({ type: 'audio_chunk', data: buffered.data, mimeType: 'audio/pcm;rate=16000' });
+        }
+        this.preBuffer = [];
         this.onState('Grabando tu turno…');
       }
       return;
     }
 
+    this.sendMessage({ type: 'audio_chunk', data: payload.data, mimeType: 'audio/pcm;rate=16000' });
     this.speechMs += chunk.durationMs;
     if (chunk.rms < continueThreshold) {
       this.silenceMs += chunk.durationMs;
@@ -603,8 +654,25 @@ const state = {
   audioSegment: null as { turnId: string; agentId: string; endReceived: boolean } | null,
   editingAgentId: null as string | null,
   selectedSpawnColor: AGENT_COLORS[0],
-  openTaskPanels: new Set<string>()
+  openTaskPanels: new Set<string>(),
+  settings: null as SettingsData | null,
+  settingsStatus: null as SettingsStatus | null,
+  settingsSaving: false
 };
+
+// Dirty tracking de Ajustes: clave del backend → valor que eligió el usuario
+// y todavía no guardó. Solo lo que está acá viaja en el PUT.
+const settingsPending = new Map<string, string>();
+let settingsBaseline: Record<string, string> = {};
+const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'stt.groqKey']);
+const SETTINGS_LANGUAGES: Array<{ value: string; label: string }> = [
+  { value: 'es', label: 'Español' },
+  { value: 'en', label: 'English' },
+  { value: 'pt', label: 'Português' },
+  { value: 'fr', label: 'Français' },
+  { value: 'it', label: 'Italiano' },
+  { value: 'de', label: 'Deutsch' }
+];
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) {
@@ -1012,13 +1080,19 @@ async function handleServerMessage(message: MeetingMessage) {
       markDirty('voice');
       break;
 
-    case 'user_audio_turn_final':
+    case 'user_audio_turn_final': {
       state.activeAudioTranscript = '';
       state.clientSpeechText = '';
       state.browserSpeech?.resetUtterance();
-      state.voiceStatus = 'Turno de voz enviado.';
+      const sourceLabels: Record<string, string> = {
+        local: 'Transcripto con Whisper local.',
+        groq: 'Transcripto con Groq.',
+        client: 'Reconocido por el navegador.'
+      };
+      state.voiceStatus = sourceLabels[message.source] || 'Turno de voz enviado.';
       markDirty('voice');
       break;
+    }
 
     case 'audio_transcription_status':
       state.voiceStatus = message.message;
@@ -1380,7 +1454,10 @@ function mountShell() {
     <div class="view view-home" id="viewHome">
       <div class="home-inner">
         <header class="home-head">
-          <p class="eyebrow">Equipo · simulador de empresas</p>
+          <div class="home-head-top">
+            <p class="eyebrow">Equipo · simulador de empresas</p>
+            <button class="btn ghost sm" data-action="open-settings" type="button" title="Claves, voz y transcripción">${gearIcon()}Ajustes</button>
+          </div>
           <h1>Simulaciones</h1>
           <p class="lead">Cada empresa es un mundo aparte: su equipo, sus reuniones y su memoria. Entrá a una para conversar por voz o texto con sus empleados.</p>
         </header>
@@ -1403,6 +1480,7 @@ function mountShell() {
             <span class="mode-badge" id="modeBadge" hidden title="Sin claves API: los agentes responden simulados">Demo</span>
             <div class="status" id="connectionStatus" role="status"><span aria-hidden="true"></span>Conectando…</div>
             <button class="btn ghost" data-action="open-meetings" type="button">Reuniones</button>
+            <button class="icon-btn" data-action="open-settings" type="button" aria-label="Ajustes" title="Ajustes">${gearIcon()}</button>
             <button class="icon-btn" data-action="open-company-edit" type="button" aria-label="Editar empresa" title="Editar empresa">${pencilIcon()}</button>
             <button class="icon-btn danger" data-action="archive-company" type="button" aria-label="Archivar empresa" title="Archivar empresa">${archiveIcon()}</button>
           </div>
@@ -1650,6 +1728,32 @@ function mountShell() {
         </div>
       </section>
     </div>
+
+    <div class="modal center" id="settingsModal">
+      <div class="modal-backdrop" data-action="close-settings"></div>
+      <section class="modal-panel wide settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <header class="modal-head">
+          <div class="settings-head-title">
+            ${gearIcon()}
+            <div>
+              <h2 id="settingsTitle">Ajustes</h2>
+              <p class="settings-head-sub">Claves de API y datos privados: todo queda en tu máquina.</p>
+            </div>
+          </div>
+          <button class="icon-btn" data-action="close-settings" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <form id="settingsForm" class="modal-form">
+          <div class="modal-body settings-body" id="settingsBody">
+            <p class="muted">Cargando ajustes…</p>
+          </div>
+          <footer class="modal-foot settings-foot">
+            <span class="save-status" id="settingsSaveStatus" role="status" aria-live="polite"></span>
+            <button type="button" class="btn ghost" data-action="close-settings">Cerrar</button>
+            <button type="submit" class="btn primary" id="settingsSaveBtn" disabled>Guardar cambios</button>
+          </footer>
+        </form>
+      </section>
+    </div>
   `;
 
   const turnInput = byId<HTMLTextAreaElement>('turnInput');
@@ -1803,6 +1907,23 @@ function handleDelegatedClick(event: Event) {
       break;
     }
 
+    // ── Ajustes ──
+    case 'open-settings':
+      void openSettingsModal();
+      break;
+    case 'close-settings':
+      closeModal('settingsModal');
+      break;
+    case 'settings-retry':
+      void refreshSettings();
+      break;
+    case 'settings-clear-key':
+      void clearSettingsKey(target.dataset.key || '');
+      break;
+    case 'toggle-secret':
+      toggleSecretVisibility(target);
+      break;
+
     // ── Drawers ──
     case 'open-meetings':
       void openMeetingsDrawer();
@@ -1912,6 +2033,12 @@ function handleDelegatedSubmit(event: Event) {
     return;
   }
 
+  if (form.id === 'settingsForm') {
+    event.preventDefault();
+    void saveSettings();
+    return;
+  }
+
   if (form.classList.contains('task-add-form')) {
     event.preventDefault();
     const agentId = form.dataset.agentId;
@@ -1934,6 +2061,10 @@ function handleDelegatedChange(event: Event) {
     }
     return;
   }
+  if (checkbox.dataset?.settingKey) {
+    onSettingsFieldChange(checkbox as HTMLInputElement | HTMLSelectElement);
+    return;
+  }
   if (checkbox.id === 'asrLocale') {
     saveAsrLocale((checkbox as unknown as HTMLSelectElement).value);
   }
@@ -1943,6 +2074,10 @@ function handleDelegatedInput(event: Event) {
   const input = event.target as HTMLInputElement;
   if (input.dataset?.micSetting) {
     updateMicSetting(input.dataset.micSetting, Number(input.value));
+    return;
+  }
+  if (input.dataset?.settingKey) {
+    onSettingsFieldChange(input);
   }
 }
 
@@ -2362,6 +2497,393 @@ async function openMeetingsDrawer() {
   } catch {
     list.innerHTML = '<p class="muted">No pude cargar las reuniones.</p>';
   }
+}
+
+// ── Modal de Ajustes (claves de API y datos privados) ───────────────────
+// Tres secciones (Cerebro / Oído / Voz) con estado desde /api/settings y
+// /api/settings/status. Dirty tracking en settingsPending: el PUT lleva
+// SOLO lo que el usuario cambió; los inputs de clave vacíos nunca pisan
+// una clave guardada (para eso está “Quitar clave”, que manda '').
+
+const SETTINGS_SECRET_INPUT_IDS: Record<string, string> = {
+  'llm.apiKey': 'setLlmKey',
+  'stt.groqKey': 'setGroqKey'
+};
+
+async function openSettingsModal() {
+  settingsPending.clear();
+  state.settingsSaving = false;
+  byId('settingsBody').innerHTML = '<p class="muted">Cargando ajustes…</p>';
+  setSettingsSaveStatus('');
+  syncSettingsSaveButton();
+  openModal('settingsModal');
+  trace('settings_opened', { view: state.view });
+  await refreshSettings();
+}
+
+async function refreshSettings() {
+  try {
+    const [settingsData, statusData] = await Promise.all([
+      apiJson<{ settings: SettingsData }>('/api/settings'),
+      apiJson<SettingsStatus>('/api/settings/status')
+    ]);
+    state.settings = settingsData.settings;
+    state.settingsStatus = statusData;
+    renderSettingsBody();
+  } catch (error) {
+    byId('settingsBody').innerHTML = `
+      <div class="grid-note">
+        <p class="muted">No pude cargar los ajustes. ¿Está corriendo el servidor?</p>
+        <button class="btn ghost sm" data-action="settings-retry" type="button">Reintentar</button>
+      </div>
+    `;
+    trace('settings_load_failed', { error: getClientError(error) });
+  }
+}
+
+// Valor efectivo de un campo: lo que el usuario cambió (sin guardar) o lo
+// guardado. Así un re-render nunca pisa una edición en curso.
+function settingsValue(key: string, fallback: string) {
+  return settingsPending.get(key) ?? fallback;
+}
+
+function sttChipInfo(provider: string): { tone: 'ok' | 'warn' | 'err' | 'off'; text: string } {
+  const status = state.settingsStatus;
+  if (provider === 'browser') {
+    return { tone: 'off', text: 'Reconocimiento del navegador' };
+  }
+  if (provider === 'groq') {
+    if (settingsPending.has('stt.groqKey')) {
+      return { tone: 'ok', text: 'Clave lista — guardá los cambios' };
+    }
+    return status?.stt.groqConfigured
+      ? { tone: 'ok', text: 'Clave de Groq guardada ✓' }
+      : { tone: 'warn', text: 'Falta la clave de Groq' };
+  }
+  return status?.stt.localHealthy
+    ? { tone: 'ok', text: 'Whisper local activo ✓' }
+    : { tone: 'err', text: 'Whisper local no responde' };
+}
+
+function renderSttProviderCard(value: string, title: string, description: string, selected: string) {
+  return `
+    <label class="radio-card">
+      <input type="radio" name="settingsSttProvider" value="${value}" data-setting-key="stt.provider" ${selected === value ? 'checked' : ''} />
+      <span class="radio-card-body">
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(description)}</small>
+      </span>
+    </label>
+  `;
+}
+
+function renderLanguageOptions(current: string) {
+  const known = SETTINGS_LANGUAGES.some((lang) => lang.value === current);
+  return [
+    ...(known ? [] : [`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>`]),
+    ...SETTINGS_LANGUAGES.map((lang) => `
+      <option value="${lang.value}" ${lang.value === current ? 'selected' : ''}>${lang.label} (${lang.value})</option>
+    `)
+  ].join('');
+}
+
+function renderSettingsBody() {
+  const settings = state.settings;
+  const status = state.settingsStatus;
+  if (!settings) {
+    return;
+  }
+
+  settingsBaseline = {
+    'llm.model': settings.llm.model,
+    'stt.provider': settings.stt.provider,
+    'stt.whisperModel': settings.stt.whisperModel,
+    'stt.language': settings.stt.language,
+    'tts.language': settings.tts.language
+  };
+
+  const llmConfigured = status?.llm.configured ?? settings.llm.apiKeySet;
+  const model = settingsValue('llm.model', settings.llm.model);
+  const provider = settingsValue('stt.provider', settings.stt.provider);
+  const whisperModel = settingsValue('stt.whisperModel', settings.stt.whisperModel);
+  const sttLanguage = settingsValue('stt.language', settings.stt.language);
+  const ttsLanguage = settingsValue('tts.language', settings.tts.language);
+  const sttChip = sttChipInfo(provider);
+
+  byId('settingsBody').innerHTML = `
+    <section class="settings-section" aria-labelledby="setLlmTitle">
+      <header class="settings-section-head">
+        <span class="settings-icon" aria-hidden="true">🧠</span>
+        <div class="settings-section-titles">
+          <h3 id="setLlmTitle">Cerebro <span class="settings-sub">· procesamiento de lenguaje</span></h3>
+          <p class="settings-desc">Los empleados piensan con MiniMax.</p>
+        </div>
+        ${llmConfigured
+          ? '<span class="status-chip ok">Configurado ✓</span>'
+          : '<span class="status-chip warn">Falta la clave — los empleados responden en modo simulación</span>'}
+      </header>
+      <div class="settings-fields">
+        <div class="form-field">
+          <label for="setLlmKey">Clave de API de MiniMax</label>
+          <div class="secret-row">
+            <input type="password" id="setLlmKey" class="form-control" data-setting-key="llm.apiKey"
+              autocomplete="off" spellcheck="false"
+              placeholder="${settings.llm.apiKeySet
+                ? `${escapeHtml(settings.llm.apiKeyMasked)} (guardada — escribí para reemplazarla)`
+                : 'Pegá acá tu clave de MiniMax'}" />
+            <button type="button" class="icon-btn reveal-btn" data-action="toggle-secret" data-target="setLlmKey" aria-label="Mostrar clave" aria-pressed="false" title="Mostrar clave">${eyeIcon()}</button>
+            ${settings.llm.apiKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="llm.apiKey">Quitar clave</button>' : ''}
+          </div>
+          <p class="hint">Con esta clave los empleados piensan de verdad. Sin ella, responden en modo simulación.</p>
+        </div>
+        <div class="form-field">
+          <label for="setLlmModel">Modelo</label>
+          <select id="setLlmModel" class="form-control" data-setting-key="llm.model">
+            ${settings.llm.modelOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === model ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section" aria-labelledby="setSttTitle">
+      <header class="settings-section-head">
+        <span class="settings-icon" aria-hidden="true">🎙️</span>
+        <div class="settings-section-titles">
+          <h3 id="setSttTitle">Oído <span class="settings-sub">· transcripción de tu voz</span></h3>
+          <p class="settings-desc">Lo que decís se convierte en texto con Whisper, el modelo open source de OpenAI.</p>
+        </div>
+        <span class="status-chip ${sttChip.tone}" id="sttChip">${escapeHtml(sttChip.text)}</span>
+      </header>
+      <div class="settings-fields">
+        <div class="radio-cards" role="radiogroup" aria-label="Quién transcribe tu voz">
+          ${renderSttProviderCard('local', 'Whisper local', 'Corre en tu máquina. Privado y gratis.', provider)}
+          ${renderSttProviderCard('groq', 'Groq', 'Whisper en la nube de Groq: más rápido, necesita clave.', provider)}
+          ${renderSttProviderCard('browser', 'Navegador', 'Reconocimiento del navegador; requiere Chrome.', provider)}
+        </div>
+        <div class="form-field" id="sttLocalExtra" ${provider === 'local' ? '' : 'hidden'}>
+          <label for="setWhisperModel">Modelo de Whisper</label>
+          <select id="setWhisperModel" class="form-control" data-setting-key="stt.whisperModel">
+            ${settings.stt.whisperModelOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === whisperModel ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+          </select>
+          <p class="hint">Más grande = más preciso y más lento. “small” es un buen equilibrio.</p>
+        </div>
+        <div class="form-field" id="sttGroqExtra" ${provider === 'groq' ? '' : 'hidden'}>
+          <label for="setGroqKey">Clave de API de Groq</label>
+          <div class="secret-row">
+            <input type="password" id="setGroqKey" class="form-control" data-setting-key="stt.groqKey"
+              autocomplete="off" spellcheck="false"
+              placeholder="${settings.stt.groqKeySet
+                ? `${escapeHtml(settings.stt.groqKeyMasked)} (guardada — escribí para reemplazarla)`
+                : 'Pegá acá tu clave de Groq (gsk_…)'}" />
+            <button type="button" class="icon-btn reveal-btn" data-action="toggle-secret" data-target="setGroqKey" aria-label="Mostrar clave" aria-pressed="false" title="Mostrar clave">${eyeIcon()}</button>
+            ${settings.stt.groqKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="stt.groqKey">Quitar clave</button>' : ''}
+          </div>
+        </div>
+        <div class="form-field" id="sttLangField" ${provider === 'browser' ? 'hidden' : ''}>
+          <label for="setSttLang">Idioma de transcripción</label>
+          <select id="setSttLang" class="form-control" data-setting-key="stt.language">
+            ${renderLanguageOptions(sttLanguage)}
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section" aria-labelledby="setTtsTitle">
+      <header class="settings-section-head">
+        <span class="settings-icon" aria-hidden="true">🔊</span>
+        <div class="settings-section-titles">
+          <h3 id="setTtsTitle">Voz <span class="settings-sub">· cómo hablan los empleados</span></h3>
+          <p class="settings-desc">Las voces se generan con Supertonic, 100% local.</p>
+        </div>
+        ${status?.tts.healthy
+          ? '<span class="status-chip ok">Supertonic activo ✓</span>'
+          : '<span class="status-chip err">Supertonic no responde</span>'}
+      </header>
+      <div class="settings-fields">
+        <div class="form-field">
+          <label for="setTtsLang">Idioma de las voces</label>
+          <select id="setTtsLang" class="form-control" data-setting-key="tts.language">
+            ${renderLanguageOptions(ttsLanguage)}
+          </select>
+          <p class="hint">Cada empleado elige su propia voz en su editor (panel Equipo → lápiz).</p>
+        </div>
+      </div>
+    </section>
+
+    <p class="settings-privacy"><span aria-hidden="true">🔒</span>Tus claves se guardan solo en la base local de esta app (SQLite en tu máquina). Nunca salen de acá salvo hacia el proveedor correspondiente.</p>
+  `;
+
+  // Los valores tipeados en inputs secretos nunca van al HTML: se reponen acá.
+  for (const [key, inputId] of Object.entries(SETTINGS_SECRET_INPUT_IDS)) {
+    const input = document.getElementById(inputId) as HTMLInputElement | null;
+    const pendingValue = settingsPending.get(key);
+    if (input && pendingValue) {
+      input.value = pendingValue;
+    }
+  }
+  syncSettingsSaveButton();
+}
+
+function onSettingsFieldChange(el: HTMLInputElement | HTMLSelectElement) {
+  const key = el.dataset.settingKey || '';
+  if (!key || !state.settings) {
+    return;
+  }
+  if (el instanceof HTMLInputElement && el.type === 'radio' && !el.checked) {
+    return;
+  }
+
+  if (SETTINGS_SECRET_KEYS.has(key)) {
+    const typed = el.value.trim();
+    if (typed) {
+      settingsPending.set(key, typed);
+    } else {
+      // Vacío = dejar la clave guardada como está (borrar es “Quitar clave”).
+      settingsPending.delete(key);
+    }
+  } else if (el.value !== (settingsBaseline[key] ?? '')) {
+    settingsPending.set(key, el.value);
+  } else {
+    settingsPending.delete(key);
+  }
+
+  if (key === 'stt.provider') {
+    syncSttConditionalFields(el.value);
+  }
+  if (key === 'stt.groqKey') {
+    syncSttChip();
+  }
+  setSettingsSaveStatus('');
+  syncSettingsSaveButton();
+}
+
+function syncSttConditionalFields(provider: string) {
+  byId('sttLocalExtra').hidden = provider !== 'local';
+  byId('sttGroqExtra').hidden = provider !== 'groq';
+  byId('sttLangField').hidden = provider === 'browser';
+  syncSttChip();
+}
+
+function syncSttChip() {
+  const chip = document.getElementById('sttChip');
+  if (!chip || !state.settings) {
+    return;
+  }
+  const provider = settingsValue('stt.provider', state.settings.stt.provider);
+  const info = sttChipInfo(provider);
+  chip.className = `status-chip ${info.tone}`;
+  chip.textContent = info.text;
+}
+
+function syncSettingsSaveButton() {
+  const button = document.getElementById('settingsSaveBtn') as HTMLButtonElement | null;
+  if (!button) {
+    return;
+  }
+  button.disabled = settingsPending.size === 0 || state.settingsSaving;
+  button.textContent = state.settingsSaving ? 'Guardando…' : 'Guardar cambios';
+
+  const statusEl = document.getElementById('settingsSaveStatus');
+  if (!statusEl || state.settingsSaving) {
+    return;
+  }
+  if (settingsPending.size > 0 && !statusEl.textContent) {
+    statusEl.className = 'save-status';
+    statusEl.textContent = settingsPending.size === 1
+      ? '1 cambio sin guardar'
+      : `${settingsPending.size} cambios sin guardar`;
+  } else if (settingsPending.size === 0 && statusEl.textContent?.includes('sin guardar')) {
+    statusEl.textContent = '';
+  }
+}
+
+function setSettingsSaveStatus(message: string, tone: 'ok' | 'error' | '' = '') {
+  const statusEl = document.getElementById('settingsSaveStatus');
+  if (!statusEl) {
+    return;
+  }
+  statusEl.className = `save-status${tone === 'ok' ? ' is-ok' : tone === 'error' ? ' is-error' : ''}`;
+  statusEl.textContent = message;
+}
+
+async function saveSettings() {
+  if (settingsPending.size === 0 || state.settingsSaving) {
+    return;
+  }
+  state.settingsSaving = true;
+  syncSettingsSaveButton();
+  setSettingsSaveStatus('Guardando…');
+  const patch = Object.fromEntries(settingsPending);
+  try {
+    const data = await apiJson<{ applied: string[]; settings: SettingsData }>('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: patch })
+    });
+    state.settings = data.settings;
+    settingsPending.clear();
+    trace('settings_saved', { keys: data.applied });
+    try {
+      state.settingsStatus = await apiJson<SettingsStatus>('/api/settings/status');
+    } catch {
+      // El guardado ya está hecho; los chips quedan con el último estado conocido.
+    }
+    state.settingsSaving = false;
+    renderSettingsBody();
+    setSettingsSaveStatus('Cambios guardados ✓', 'ok');
+    upsertAlert('settings', 'Ajustes', 'Cambios guardados: aplican al instante, sin reiniciar.', 'ok', 2600);
+  } catch (error) {
+    state.settingsSaving = false;
+    setSettingsSaveStatus(`No pude guardar: ${getClientError(error)}`, 'error');
+    trace('settings_save_failed', { error: getClientError(error) });
+  }
+  syncSettingsSaveButton();
+}
+
+async function clearSettingsKey(key: string) {
+  if (!SETTINGS_SECRET_KEYS.has(key)) {
+    return;
+  }
+  const label = key === 'llm.apiKey' ? 'la clave de MiniMax' : 'la clave de Groq';
+  const confirmed = window.confirm(`¿Quitar ${label} guardada en esta app? Si existe una clave en el archivo .env se vuelve a usar esa.`);
+  if (!confirmed) {
+    return;
+  }
+  try {
+    const data = await apiJson<{ settings: SettingsData }>('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { [key]: '' } })
+    });
+    state.settings = data.settings;
+    settingsPending.delete(key);
+    trace('settings_key_cleared', { key });
+    try {
+      state.settingsStatus = await apiJson<SettingsStatus>('/api/settings/status');
+    } catch {
+      // Chips con el último estado conocido.
+    }
+    renderSettingsBody();
+    setSettingsSaveStatus('Clave quitada.', 'ok');
+    const input = document.getElementById(SETTINGS_SECRET_INPUT_IDS[key]) as HTMLInputElement | null;
+    input?.focus();
+  } catch (error) {
+    setSettingsSaveStatus(`No pude quitar la clave: ${getClientError(error)}`, 'error');
+  }
+}
+
+function toggleSecretVisibility(button: HTMLElement) {
+  const input = document.getElementById(button.dataset.target || '') as HTMLInputElement | null;
+  if (!input) {
+    return;
+  }
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  button.setAttribute('aria-pressed', String(show));
+  const label = show ? 'Ocultar clave' : 'Mostrar clave';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerHTML = show ? eyeOffIcon() : eyeIcon();
 }
 
 // ── Tarjetas de empleados ───────────────────────────────────────────────
@@ -2896,6 +3418,16 @@ function base64ToBytes(base64: string) {
   return bytes;
 }
 
+function base64FromArrayBuffer(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
 function getClientError(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -3018,6 +3550,18 @@ function bookIcon() {
 
 function closeIcon() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
+}
+
+function gearIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.62.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96c-.5-.38-1.04-.7-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.24-1.12.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.58-.24 1.12-.56 1.62-.94l2.39.96c.21.1.48.01.61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z"/></svg>`;
+}
+
+function eyeIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>`;
+}
+
+function eyeOffIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.82 11.82 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7ZM2.71 3.16a1 1 0 0 0-1.42 1.41l1.97 1.97A11.77 11.77 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.52 0 2.98-.3 4.32-.82l2.72 2.72a1 1 0 0 0 1.42-1.42L2.71 3.16ZM12 17a5 5 0 0 1-5-5c0-.77.18-1.5.49-2.14l1.57 1.57a3 3 0 0 0 3.51 3.51l1.57 1.57c-.64.31-1.37.49-2.14.49Z"/></svg>`;
 }
 
 function chevronIcon() {
