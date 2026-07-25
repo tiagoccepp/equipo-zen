@@ -2,7 +2,7 @@ import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
-import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripTaskTags } from './text.js';
+import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
@@ -79,8 +79,11 @@ export class LiveAgentRuntime {
         });
     };
 
-    const handleDelta = (delta) => {
+    const handleDelta = (rawDelta) => {
       if (silenced) return;
+      // Limpieza de caracteres de otro alfabeto antes de mostrar y de hablar.
+      let delta = stripForeignScript(rawDelta);
+      if (!delta) return;
 
       if (!probeDone) {
         probeBuffer += delta;

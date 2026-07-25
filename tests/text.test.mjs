@@ -9,7 +9,7 @@ import {
   isSilenceResponse,
   normalize,
   stripTaskTags
-, createTagFilter } from '../server/lib/text.js';
+, createTagFilter, stripForeignScript } from '../server/lib/text.js';
 
 test('normalize quita acentos y puntuación pero conserva ?', () => {
   assert.equal(normalize('¿Qué opinás, Julió?'), 'que opinas julio?');
@@ -75,4 +75,27 @@ test('un corchete abierto que nunca cierra no se traga el final del mensaje', ()
   let visible = filtro.push('Quedó pendiente [revisar');
   visible += filtro.flush();
   assert.equal(visible, 'Quedó pendiente [revisar');
+});
+
+test('los caracteres de otro alfabeto no llegan a la pantalla ni a la voz', () => {
+  // Casos REALES que MiniMax dejó en el diario (~1% de las respuestas).
+  assert.equal(
+    stripForeignScript('Depende de qué tan在三 estén los tests'),
+    'Depende de qué tan estén los tests'
+  );
+  assert.equal(
+    stripForeignScript('¡Buenas! Acá，期待 a ver qué sale.'),
+    '¡Buenas! Acá, a ver qué sale.'
+  );
+  // Se reemplaza por espacio, no por vacío: si no, dos palabras quedan pegadas.
+  assert.equal(
+    stripForeignScript('¿Qué的手臂们andan armando?'),
+    '¿Qué andan armando?'
+  );
+});
+
+test('el español normal no se toca', () => {
+  const texto = 'Mañana revisamos el diseño: ¿te parece a las 10? Señalá los pendientes.';
+  assert.equal(stripForeignScript(texto), texto);
+  assert.equal(stripForeignScript(''), '');
 });

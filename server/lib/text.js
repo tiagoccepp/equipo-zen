@@ -2,6 +2,7 @@
 // silencio: los tags [TAREA_*] se conservan para que el parser de tareas
 // corra incluso cuando la respuesta hablada es SILENCIO.
 export function cleanAgentText(value, agentName = '') {
+  value = stripForeignScript(value);
   let text = String(value || '').trim();
   text = text.replace(/^```(?:json|text|markdown)?/i, '').replace(/```$/i, '').trim();
   if (agentName) {
@@ -9,6 +10,25 @@ export function cleanAgentText(value, agentName = '') {
   }
   text = text.replace(/^(julio|tomasa)\s*:\s*/i, '').trim();
   return text;
+}
+
+// MiniMax cuela caracteres chinos/japoneses en medio de una frase en español
+// (~1% de las respuestas, medido). Las reglas del prompt lo bajan pero no lo
+// eliminan, así que se limpian del texto: se reemplaza cada tramo por un
+// espacio —no por vacío— para no pegar dos palabras, y la puntuación de ancho
+// completo pasa a su equivalente.
+const ESCRITURA_AJENA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g;
+const PUNTUACION_ANCHA = { '，': ',', '。': '.', '！': '!', '？': '?', '：': ':', '；': ';', '（': '(', '）': ')', '、': ',' };
+
+export function stripForeignScript(value) {
+  let text = String(value || '');
+  if (!text) {
+    return text;
+  }
+  text = text.replace(/[，。！？：；（）、]/g, (c) => PUNTUACION_ANCHA[c] || ' ');
+  text = text.replace(ESCRITURA_AJENA, ' ');
+  // El espacio que queda no puede duplicarse ni despegar la puntuación.
+  return text.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.;:!?])/g, '$1');
 }
 
 export function stripTaskTags(value) {
