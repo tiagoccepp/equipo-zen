@@ -94,6 +94,11 @@ la app siga abierta.
   los textos enormes y rota el archivo por tamaño.
 - Se apaga con `SESSION_LOG=0`.
 
+Para comprobar a mano que la interrupción corta el audio de verdad, con el
+sistema levantado: mandá un turno, y en cuanto lleguen los primeros
+`agent_audio_chunk` mandá `{"type":"interrupt","reason":"barge_in"}` — el
+servidor responde `agent_interrupted` y deja de enviar audio en el acto.
+
 Para ver el prompt exacto que recibe un empleado (con su oficio, sus límites,
 lo aprendido y el estado del trabajo en curso): `GET /api/agents/<id>/prompt-preview`.
 Entre el diario y ese preview se reconstruye cualquier caso que haya fallado.
