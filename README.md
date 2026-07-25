@@ -93,3 +93,7 @@ la app siga abierta.
 - Nunca escribe claves (las tapa aunque aparezcan dentro de un texto), recorta
   los textos enormes y rota el archivo por tamaño.
 - Se apaga con `SESSION_LOG=0`.
+
+Para ver el prompt exacto que recibe un empleado (con su oficio, sus límites,
+lo aprendido y el estado del trabajo en curso): `GET /api/agents/<id>/prompt-preview`.
+Entre el diario y ese preview se reconstruye cualquier caso que haya fallado.
