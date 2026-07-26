@@ -81,8 +81,11 @@ type MeetingListItem = {
 type SettingsData = {
   llm: {
     provider: string;
+    providerOptions?: Array<{ id: string; label: string }>;
     apiKeySet: boolean;
     apiKeyMasked: string;
+    deepseekKeySet?: boolean;
+    deepseekKeyMasked?: string;
     model: string;
     modelOptions: string[];
   };
@@ -991,7 +994,14 @@ const state = {
 // y todavía no guardó. Solo lo que está acá viaja en el PUT.
 const settingsPending = new Map<string, string>();
 let settingsBaseline: Record<string, string> = {};
-const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'stt.groqKey']);
+const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'stt.groqKey']);
+
+// Qué modelos ofrece cada proveedor (el servidor manda la lista del activo;
+// esto permite repintar al cambiar el selector sin ir y volver al servidor).
+const LLM_MODELS_BY_PROVIDER: Record<string, string[]> = {
+  minimax: ['MiniMax-M2', 'MiniMax-M2.1', 'MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M3'],
+  deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro']
+};
 const SETTINGS_LANGUAGES: Array<{ value: string; label: string }> = [
   { value: 'es', label: 'Español' },
   { value: 'en', label: 'English' },
@@ -4107,6 +4117,8 @@ async function borrarReunionesPasadas(cuantas: number) {
 
 const SETTINGS_SECRET_INPUT_IDS: Record<string, string> = {
   'llm.apiKey': 'setLlmKey',
+  'llm.deepseekKey': 'setDeepseekKey',
+  'llm.provider': 'setLlmProvider',
   'stt.groqKey': 'setGroqKey'
 };
 
@@ -4205,6 +4217,7 @@ function renderSettingsBody() {
   };
 
   const llmConfigured = status?.llm.configured ?? settings.llm.apiKeySet;
+  const proveedor = settings.llm.provider || 'minimax';
   const model = settingsValue('llm.model', settings.llm.model);
   const provider = settingsValue('stt.provider', settings.stt.provider);
   const whisperModel = settingsValue('stt.whisperModel', settings.stt.whisperModel);
@@ -4218,7 +4231,7 @@ function renderSettingsBody() {
         <span class="settings-icon" aria-hidden="true">🧠</span>
         <div class="settings-section-titles">
           <h3 id="setLlmTitle">Cerebro <span class="settings-sub">· procesamiento de lenguaje</span></h3>
-          <p class="settings-desc">Los empleados piensan con MiniMax.</p>
+          <p class="settings-desc">Con qué modelo piensan los empleados.</p>
         </div>
         ${llmConfigured
           ? '<span class="status-chip ok">Configurado ✓</span>'
@@ -4226,6 +4239,15 @@ function renderSettingsBody() {
       </header>
       <div class="settings-fields">
         <div class="form-field">
+          <label for="setLlmProvider">Proveedor</label>
+          <select id="setLlmProvider" class="form-control" data-setting-key="llm.provider">
+            ${(settings.llm.providerOptions || [{ id: 'minimax', label: 'MiniMax' }]).map((option) => `
+              <option value="${escapeHtml(option.id)}" ${option.id === proveedor ? 'selected' : ''}>${escapeHtml(option.label)}</option>
+            `).join('')}
+          </select>
+          <p class="hint">Cada uno guarda su propia clave: podés cambiar de proveedor y volver sin pegarla de nuevo.</p>
+        </div>
+        <div class="form-field" ${proveedor === 'minimax' ? '' : 'hidden'}>
           <label for="setLlmKey">Clave de API de MiniMax</label>
           <div class="secret-row">
             <input type="password" id="setLlmKey" class="form-control" data-setting-key="llm.apiKey"
@@ -4236,13 +4258,29 @@ function renderSettingsBody() {
             <button type="button" class="icon-btn reveal-btn" data-action="toggle-secret" data-target="setLlmKey" aria-label="Mostrar clave" aria-pressed="false" title="Mostrar clave">${eyeIcon()}</button>
             ${settings.llm.apiKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="llm.apiKey">Quitar clave</button>' : ''}
           </div>
-          <p class="hint">Con esta clave los empleados piensan de verdad. Sin ella, responden en modo simulación.</p>
+          <p class="hint">Se saca en minimax.io. Sin ella, los empleados responden en modo simulación.</p>
+        </div>
+        <div class="form-field" ${proveedor === 'deepseek' ? '' : 'hidden'}>
+          <label for="setDeepseekKey">Clave de API de DeepSeek</label>
+          <div class="secret-row">
+            <input type="password" id="setDeepseekKey" class="form-control" data-setting-key="llm.deepseekKey"
+              autocomplete="off" spellcheck="false"
+              placeholder="${settings.llm.deepseekKeySet
+                ? `${escapeHtml(settings.llm.deepseekKeyMasked || '')} (guardada — escribí para reemplazarla)`
+                : 'Pegá acá tu clave de DeepSeek'}" />
+            <button type="button" class="icon-btn reveal-btn" data-action="toggle-secret" data-target="setDeepseekKey" aria-label="Mostrar clave" aria-pressed="false" title="Mostrar clave">${eyeIcon()}</button>
+            ${settings.llm.deepseekKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="llm.deepseekKey">Quitar clave</button>' : ''}
+          </div>
+          <p class="hint">Se saca en platform.deepseek.com.</p>
         </div>
         <div class="form-field">
           <label for="setLlmModel">Modelo</label>
           <select id="setLlmModel" class="form-control" data-setting-key="llm.model">
             ${settings.llm.modelOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === model ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}
           </select>
+          ${proveedor === 'deepseek'
+            ? '<p class="hint"><strong>Flash</strong> es rápido y barato, para conversar. <strong>Pro</strong> razona más: conviene para el trabajo pesado.</p>'
+            : ''}
         </div>
       </div>
     </section>
@@ -4362,6 +4400,18 @@ function onSettingsFieldChange(el: HTMLInputElement | HTMLSelectElement) {
   if (key === 'stt.provider') {
     syncSttConditionalFields(el.value);
   }
+
+  // Cambiar de proveedor cambia qué clave se pide y qué modelos hay: la
+  // sección se repinta al toque, sin esperar a guardar, o quedarías eligiendo
+  // DeepSeek con la lista de modelos de MiniMax.
+  if (key === 'llm.provider' && state.settings) {
+    const opciones = LLM_MODELS_BY_PROVIDER[el.value] || [];
+    state.settings.llm.provider = el.value;
+    state.settings.llm.modelOptions = opciones;
+    state.settings.llm.model = opciones[0] || state.settings.llm.model;
+    settingsPending.set('llm.model', state.settings.llm.model);
+    renderSettingsBody();
+  }
   if (key === 'stt.groqKey') {
     syncSttChip();
   }
@@ -4456,7 +4506,9 @@ async function clearSettingsKey(key: string) {
   if (!SETTINGS_SECRET_KEYS.has(key)) {
     return;
   }
-  const label = key === 'llm.apiKey' ? 'la clave de MiniMax' : 'la clave de Groq';
+  const label = key === 'llm.apiKey' ? 'la clave de MiniMax'
+    : key === 'llm.deepseekKey' ? 'la clave de DeepSeek'
+    : 'la clave de Groq';
   const confirmed = window.confirm(`¿Quitar ${label} guardada en esta app? Si existe una clave en el archivo .env se vuelve a usar esa.`);
   if (!confirmed) {
     return;

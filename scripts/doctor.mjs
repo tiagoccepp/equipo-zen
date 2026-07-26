@@ -75,20 +75,33 @@ anotar(
   'npm install'
 );
 
-// ── Clave del modelo ────────────────────────────────────────────────────
-let clave = process.env.MINIMAX_API_KEY || '';
-if (!clave && (await existe('.env'))) {
-  const env = await readFile(path.join(raiz, '.env'), 'utf-8');
-  clave = (env.match(/^MINIMAX_API_KEY=(.+)$/m) || [])[1]?.trim() || '';
+// ── Claves de los proveedores de razonamiento ───────────────────────────
+const env = (await existe('.env')) ? await readFile(path.join(raiz, '.env'), 'utf-8') : '';
+function claveDe(nombre) {
+  return (process.env[nombre] || (env.match(new RegExp(`^${nombre}=(.+)$`, 'm')) || [])[1] || '').trim();
 }
-if (clave) {
-  anotar('ok', 'Clave de MiniMax', `configurada (termina en …${clave.slice(-4)})`);
+
+const proveedores = [
+  { nombre: 'MiniMax', variable: 'MINIMAX_API_KEY', donde: 'minimax.io' },
+  { nombre: 'DeepSeek', variable: 'DEEPSEEK_API_KEY', donde: 'platform.deepseek.com' }
+];
+const configurados = proveedores.filter((p) => claveDe(p.variable));
+
+if (configurados.length > 0) {
+  anotar(
+    'ok',
+    'Cerebro configurado',
+    configurados.map((p) => `${p.nombre} (…${claveDe(p.variable).slice(-4)})`).join(', ')
+  );
+  for (const p of proveedores.filter((x) => !claveDe(x.variable))) {
+    anotar('aviso', `Sin clave de ${p.nombre}`, 'no vas a poder elegirlo en Ajustes', `${p.variable}=tu-clave en .env (se saca en ${p.donde})`);
+  }
 } else {
   anotar(
     'falla',
-    'Falta la clave de MiniMax',
-    'sin ella los empleados no piensan ni trabajan',
-    'Copiá .env.example a .env y poné MINIMAX_API_KEY=tu-clave (se saca en minimax.io)'
+    'Falta la clave del modelo',
+    'sin ninguna, los empleados no piensan ni trabajan',
+    'Copiá .env.example a .env y poné MINIMAX_API_KEY o DEEPSEEK_API_KEY'
   );
 }
 

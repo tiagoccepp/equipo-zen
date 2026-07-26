@@ -1,12 +1,13 @@
 import {
-  MINIMAX_API_URL,
-  MINIMAX_MODELS,
   RESPONSE_TIMEOUT_MS
 } from './config.js';
 import { logEvent } from './session-log.js';
+import { getLlmModels, getLlmProviderConfig } from './settings.js';
 import { getErrorText, getShortError } from './text.js';
 
-// Cliente MiniMax (endpoint OpenAI-compatible: /v1/chat/completions).
+// Cliente de razonamiento. MiniMax y DeepSeek exponen el mismo endpoint
+// OpenAI-compatible (/chat/completions, Bearer, parámetro `thinking`), así que
+// el proveedor activo solo cambia la URL, la clave y la lista de modelos.
 // - streaming SSE con delta.content
 // - thinking deshabilitado por defecto (reuniones = baja latencia); los
 //   bloques <think>…</think> se filtran defensivamente igual.
@@ -19,7 +20,9 @@ function buildBody(options, stream) {
     messages: options.messages,
     stream,
     temperature: options.temperature ?? 0.7,
-    max_completion_tokens: options.maxTokens ?? 3000,
+    // Cada proveedor llama distinto al tope de salida: MiniMax usa
+    // max_completion_tokens y DeepSeek max_tokens (el otro lo ignora callado).
+    [getLlmProviderConfig().tokenParam || 'max_completion_tokens']: options.maxTokens ?? 3000,
     thinking: { type: options.thinking || 'disabled' }
   });
 }
@@ -74,7 +77,8 @@ async function requestChat(key, options, stream) {
   options.signal?.addEventListener('abort', abortListener, { once: true });
 
   try {
-    const response = await fetch(MINIMAX_API_URL, {
+    const provider = getLlmProviderConfig();
+    const response = await fetch(provider.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -85,7 +89,7 @@ async function requestChat(key, options, stream) {
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new Error(`MiniMax HTTP ${response.status}: ${detail.slice(0, 300)}`);
+      throw new Error(`${provider.label} HTTP ${response.status}: ${detail.slice(0, 300)}`);
     }
     return response;
   } finally {
@@ -122,9 +126,9 @@ async function* sseEvents(response) {
 // onDelta(texto, acumulado). Devuelve { text, model, aborted?, partial? }.
 export async function streamChat(keyRing, options, onDelta) {
   if (!keyRing.hasKeys()) {
-    throw new Error(`No hay claves MiniMax configuradas para ${options.scope}.`);
+    throw new Error(`No hay claves de ${getLlmProviderConfig().label} configuradas para ${options.scope}.`);
   }
-  const models = options.models || MINIMAX_MODELS;
+  const models = options.models || getLlmModels();
   let lastError = null;
 
   for (const model of models) {
@@ -166,7 +170,7 @@ export async function streamChat(keyRing, options, onDelta) {
           // Vacío = el modelo gastó el presupuesto pensando o falló la
           // generación: NO es culpa de la clave (sin cooldown); se
           // reintenta y luego se prueba el siguiente modelo.
-          lastError = new Error(`MiniMax ${model} devolvió stream vacío.`);
+          lastError = new Error(`${getLlmProviderConfig().label} ${model} devolvió stream vacío.`);
           keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
           continue;
         }
@@ -214,15 +218,15 @@ export async function streamChat(keyRing, options, onDelta) {
     modelos: (options.models || []).join(','),
     error: getErrorText(lastError).slice(0, 400)
   });
-  throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
+  throw lastError || new Error(`La clave de ${getLlmProviderConfig().label} fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 
 // Llamada no-streaming (router/observador/reflexión). Devuelve texto limpio.
 export async function completeChat(keyRing, options) {
   if (!keyRing.hasKeys()) {
-    throw new Error(`No hay claves MiniMax configuradas para ${options.scope}.`);
+    throw new Error(`No hay claves de ${getLlmProviderConfig().label} configuradas para ${options.scope}.`);
   }
-  const models = options.models || MINIMAX_MODELS;
+  const models = options.models || getLlmModels();
   let lastError = null;
 
   for (const model of models) {
@@ -242,7 +246,7 @@ export async function completeChat(keyRing, options) {
             : ''
         );
         if (!text) {
-          lastError = new Error(`MiniMax ${model} devolvió respuesta vacía.`);
+          lastError = new Error(`${getLlmProviderConfig().label} ${model} devolvió respuesta vacía.`);
           keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
           continue;
         }
@@ -278,7 +282,7 @@ export async function completeChat(keyRing, options) {
     modelos: (options.models || []).join(','),
     error: getErrorText(lastError).slice(0, 400)
   });
-  throw lastError || new Error(`La clave de MiniMax fue rechazada (revisala en Ajustes) — ${options.scope}.`);
+  throw lastError || new Error(`La clave de ${getLlmProviderConfig().label} fue rechazada (revisala en Ajustes) — ${options.scope}.`);
 }
 
 function isModelNotFound(error) {

@@ -37,6 +37,57 @@ export const MINIMAX_LEARNING_MODELS = uniqueModelList([
   ...MINIMAX_MODELS
 ]);
 
+// ── Proveedores de razonamiento ──────────────────────────────────────────
+//
+// Los dos hablan el formato de OpenAI (mismo /chat/completions, mismo Bearer,
+// misma forma del parámetro `thinking`), así que el cliente es uno solo y lo
+// único que cambia es a dónde apunta, con qué clave y con qué modelos.
+export const LLM_PROVIDERS = {
+  minimax: {
+    id: 'minimax',
+    label: 'MiniMax',
+    url: MINIMAX_API_URL,
+    envKey: 'MINIMAX_API_KEY',
+    settingKey: 'llm.apiKey',
+    defaultModel: MINIMAX_MODEL,
+    models: MINIMAX_MODELS,
+    // La serie M piensa igual con esto en 'disabled', pero se pide.
+    thinking: 'disabled',
+    tokenParam: 'max_completion_tokens'
+  },
+  deepseek: {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    url: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions',
+    envKey: 'DEEPSEEK_API_KEY',
+    settingKey: 'llm.deepseekKey',
+    defaultModel: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
+    models: uniqueModelList([
+      process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
+      'deepseek-v4-flash',
+      'deepseek-v4-pro'
+    ]),
+    // Ojo: en DeepSeek el pensamiento viene ENCENDIDO por defecto, y el tope
+    // de salida se llama max_tokens (max_completion_tokens lo ignora).
+    thinking: 'disabled',
+    tokenParam: 'max_tokens'
+  }
+};
+
+export const DEFAULT_LLM_PROVIDER = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'minimax';
+
+export function collectProviderKeys(providerId) {
+  const provider = LLM_PROVIDERS[providerId];
+  if (!provider) {
+    return [];
+  }
+  if (providerId === 'minimax') {
+    return collectApiKeys();
+  }
+  const raw = process.env[provider.envKey] || '';
+  return raw.split(',').map((value) => value.trim()).filter(Boolean);
+}
+
 // ── Supertonic (voz local) ───────────────────────────────────────────────
 export const SUPERTONIC_URL = process.env.SUPERTONIC_URL || 'http://127.0.0.1:7788';
 export const SUPERTONIC_LANGUAGE = process.env.SUPERTONIC_LANGUAGE || 'es';
