@@ -978,6 +978,7 @@ const state = {
   // Web recién terminada esperando que el /work confirme dónde vive.
   pendingPreview: null as { taskId: string; path: string; agentName: string; at: number } | null,
   closingSummary: null as ClosingSummary | null,
+  startingWork: false,
   endingMeeting: false,
   settings: null as SettingsData | null,
   settingsStatus: null as SettingsStatus | null,
@@ -1296,6 +1297,19 @@ async function handleServerMessage(message: MeetingMessage) {
       openClosingModal();
       markDirty('work');
       break;
+
+    case 'work_started': {
+      state.startingWork = false;
+      syncStartWorkButton();
+      if (message.tasks === 0) {
+        upsertAlert('start-work', 'Trabajo', message.note, 'working', 5200);
+      } else {
+        upsertAlert('start-work', message.goalTitle || 'Trabajo', message.note, 'ok', 4200);
+        setWsSection('tasks');
+      }
+      void refreshWork();
+      break;
+    }
 
     case 'work_event':
       handleWorkEvent(message);
@@ -1732,6 +1746,8 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     byId('alerts').innerHTML = renderAlerts();
   },
   agents() {
+    // El botón depende de cuántas tareas repartidas hay sin arrancar.
+    syncStartWorkButton();
     const container = byId('agents');
     container.innerHTML = state.agents.length
       ? state.agents.map(renderAgent).join('')
@@ -2338,6 +2354,7 @@ function mountShell() {
             <button class="btn ghost sm" type="submit">Guardar</button>
           </form>
           <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
+          <button class="btn sm" id="startWorkBtn" data-action="start-work" type="button" disabled>Forzar a trabajar</button>
           <button class="btn primary sm end-meeting-btn" id="endMeetingBtn" data-action="end-meeting" type="button" disabled title="La CEO repasa lo asignado y, si confirmás, el equipo se pone a trabajar de verdad">Finalizar reunión</button>
         </div>
 
@@ -3081,6 +3098,14 @@ function handleDelegatedClick(event: Event) {
       }
       break;
     }
+
+    case 'start-work':
+      if (!state.startingWork) {
+        state.startingWork = true;
+        syncStartWorkButton();
+        send({ type: 'start_work' });
+      }
+      break;
 
     case 'close-meetings':
       closeModal('meetingsModal');
@@ -4692,6 +4717,32 @@ function syncEndMeetingButton() {
   if (!button) return;
   button.disabled = !state.connected || state.endingMeeting;
   button.textContent = state.endingMeeting ? 'Preparando cierre…' : 'Finalizar reunión';
+  syncStartWorkButton();
+}
+
+// El equipo "está listo" cuando tiene trabajo repartido que todavía no
+// arrancó. Ahí el botón invita; el resto del tiempo queda igual, ofreciendo
+// forzarlos (y si no hay nada asignado, no hace nada y lo dice).
+function pendingWorkCount(): number {
+  return state.agents.reduce(
+    (total, agent) => total + (agent.tasks || []).filter((task) => !task.completed && !(task as { goalId?: string }).goalId).length,
+    0
+  );
+}
+
+function syncStartWorkButton() {
+  const button = document.getElementById('startWorkBtn') as HTMLButtonElement | null;
+  if (!button) return;
+  const pendientes = pendingWorkCount();
+  const listos = pendientes > 0;
+  button.disabled = !state.connected || state.startingWork;
+  button.classList.toggle('is-ready', listos && !state.startingWork);
+  button.textContent = state.startingWork
+    ? 'Arrancando…'
+    : listos ? 'Comenzar a trabajar' : 'Forzar a trabajar';
+  button.title = listos
+    ? `${pendientes} ${pendientes === 1 ? 'tarea repartida' : 'tareas repartidas'}: el equipo arranca en segundo plano sin cerrar la reunión`
+    : 'Nadie tiene tareas asignadas todavía: si lo tocás, no va a pasar nada';
 }
 
 function sectionFromTab(tab?: string): WsSection {

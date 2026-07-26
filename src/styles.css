@@ -4684,3 +4684,15 @@ summary:focus-visible,
   border-color: color-mix(in oklab, var(--danger) 45%, transparent);
   background: color-mix(in oklab, var(--danger) 8%, transparent);
 }
+
+/* "Comenzar a trabajar": cuando hay trabajo repartido, el botón invita sin
+   robarle protagonismo a Finalizar reunión. */
+.btn.is-ready {
+  border-color: color-mix(in oklab, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+
+.btn.is-ready:hover,
+.btn.is-ready:focus-visible {
+  background: color-mix(in oklab, var(--ok) 10%, transparent);
+}

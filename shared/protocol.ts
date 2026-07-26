@@ -160,6 +160,9 @@ export type ClientMessage =
   | { type: 'set_scenario'; text: string }
   | { type: 'end_meeting' }
   | { type: 'confirm_end_meeting' }
+  // Poner al equipo a trabajar SIN cerrar la reunión: se usa lo que ya
+  // tienen asignado; si no hay tareas, no pasa nada.
+  | { type: 'start_work' }
   | { type: 'add_task'; agentId: string; text: string }
   | { type: 'toggle_task'; agentId: string; taskId: string; completed: boolean }
   | { type: 'delete_task'; agentId: string; taskId: string };
@@ -196,6 +199,13 @@ export type ServerMessage =
       refinements: Array<{ agentName: string; need: string }>;
     }
   | { type: 'work_event'; kind: string; [key: string]: unknown }
+  | {
+      type: 'work_started';
+      // 0 = nadie tenía nada asignado; el botón no hace nada y se avisa.
+      tasks: number;
+      goalTitle: string | null;
+      note: string;
+    }
   | { type: 'meeting_warmup_start' }
   | { type: 'meeting_warmup_complete'; ok: boolean; failures: number }
   | { type: 'agents_updated'; agents: PublicAgent[] }
@@ -397,6 +407,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
 
     case 'end_meeting':
     case 'confirm_end_meeting':
+    case 'start_work':
       return { ok: true, message: { type: value.type } };
 
     case 'set_scenario': {

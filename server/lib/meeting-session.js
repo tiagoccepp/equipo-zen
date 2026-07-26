@@ -155,7 +155,8 @@ export class MeetingSession {
         id: task.id,
         text: task.text,
         completed: task.completed,
-        createdAt: task.createdAt
+        createdAt: task.createdAt,
+        goalId: task.goalId || null
       });
     }
 
@@ -605,6 +606,11 @@ export class MeetingSession {
       void this.prepareMeetingClose().catch((error) => {
         this.send({ type: 'error', message: 'No pude preparar el cierre de la reunión.', detail: getShortError(error) });
       });
+      return;
+    }
+
+    if (message.type === 'start_work') {
+      this.startWorkNow();
       return;
     }
 
@@ -1219,6 +1225,67 @@ export class MeetingSession {
 
       followups += 1;
     }
+  }
+
+  // "Comenzar a trabajar": el equipo arranca con lo que YA tiene asignado, sin
+  // cerrar la reunión ni pedir confirmación hablada. Si nadie tiene nada, no
+  // pasa nada — se avisa y listo.
+  startWorkNow() {
+    this.reassignCeoDeliverables();
+
+    const pendientes = [];
+    for (const agent of this.sessionAgents) {
+      for (const task of agent.tasks || []) {
+        if (!task.completed && !task.goalId) {
+          pendientes.push({ agent, task });
+        }
+      }
+    }
+
+    if (pendientes.length === 0) {
+      this.send({
+        type: 'work_started',
+        tasks: 0,
+        goalTitle: null,
+        note: 'Nadie tiene tareas asignadas todavía: pediles algo concreto y volvé a tocar el botón.'
+      });
+      this.logTelemetry('start_work_empty', {});
+      return;
+    }
+
+    // Todo lo pendiente entra: el botón promete que se ponen a trabajar con lo
+    // que tienen, no que alguien decida por ellos qué merece hacerse. Sin
+    // llamada al modelo, para que responda en el acto.
+    const aTrabajar = pendientes;
+
+    const titulo = (this.meeting?.scenario_text || '').trim().slice(0, 110)
+      || `Trabajo de ${new Date().toLocaleDateString('es-AR')}`;
+    const goal = this.store.createGoal({
+      companyId: this.company.id,
+      meetingId: this.meeting.id,
+      title: titulo,
+      description: 'Arrancado a mano desde la reunión, con lo que el equipo ya tenía asignado.'
+    });
+
+    for (const { task } of aTrabajar) {
+      this.store.assignTaskToGoal(task.id, goal.id, { kind: 'entregable' });
+      task.goalId = goal.id;
+    }
+
+    logEvent('trabajo_arrancado', {
+      meetingId: this.meeting.id,
+      companyId: this.company.id,
+      proyecto: goal.title,
+      tareas: aTrabajar.map(({ agent, task }) => `${agent.name}: ${task.text}`)
+    });
+    this.logTelemetry('start_work', { goalId: goal.id, tasks: aTrabajar.length });
+    this.send({
+      type: 'work_started',
+      tasks: aTrabajar.length,
+      goalTitle: goal.title,
+      note: `${aTrabajar.length} ${aTrabajar.length === 1 ? 'tarea' : 'tareas'} en marcha. Seguí conversando: el equipo trabaja en segundo plano.`
+    });
+    this.broadcastAgentsUpdated();
   }
 
   // "Finalizar reunión": la CEO repasa en voz alta quién quedó con qué

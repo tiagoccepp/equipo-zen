@@ -616,7 +616,9 @@ export class Store {
         agentId: row.agent_id,
         text: row.text,
         completed: Boolean(row.completed),
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        // Saber si ya está en un proyecto evita volver a encolarla.
+        goalId: row.goal_id || null
       }));
   }
 

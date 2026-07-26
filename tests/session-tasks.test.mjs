@@ -430,3 +430,48 @@ test('lo que sí es de la CEO se queda con ella', async () => {
   assert.equal(session.reassignCeoDeliverables().length, 0);
   assert.equal(ceo.tasks.length, 1);
 });
+
+test('"Comenzar a trabajar": el equipo arranca con lo que ya tiene, sin cerrar la reunión', async () => {
+  const { socket, session, store, julioId, tomasaId } = newSession();
+
+  // Sin nada asignado el botón no hace nada, pero lo dice.
+  session.startWorkNow();
+  const vacio = socket.sent.filter((m) => m.type === 'work_started').at(-1);
+  assert.equal(vacio.tasks, 0);
+  assert.match(vacio.note, /tareas asignadas/i);
+  assert.equal(store.workQueue(session.company.id).length, 0);
+
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'armar el informe de stock' });
+  await session.handleClientMessage({ type: 'add_task', agentId: tomasaId, text: 'revisar las rutas de reparto' });
+
+  const reunionAntes = session.meeting.id;
+  session.startWorkNow();
+
+  const arranque = socket.sent.filter((m) => m.type === 'work_started').at(-1);
+  assert.equal(arranque.tasks, 2, 'arrancan las dos');
+  assert.ok(arranque.goalTitle, 'el trabajo queda bajo un proyecto');
+  assert.equal(session.meeting.id, reunionAntes, 'la reunión sigue abierta');
+
+  const cola = store.workQueue(session.company.id);
+  assert.equal(cola.length, 2);
+});
+
+test('tocar el botón dos veces no encola la misma tarea de nuevo', async () => {
+  const { session, store, julioId } = newSession();
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'armar el informe' });
+
+  session.startWorkNow();
+  session.startWorkNow();
+
+  assert.equal(store.workQueue(session.company.id).length, 1, 'sigue habiendo una sola');
+});
+
+test('lo ya completado no vuelve a la cola', async () => {
+  const { session, store, julioId } = newSession();
+  await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'algo viejo' });
+  const julio = session.sessionAgents.find((a) => a.id === julioId);
+  julio.tasks[0].completed = true;
+
+  session.startWorkNow();
+  assert.equal(store.workQueue(session.company.id).length, 0);
+});
