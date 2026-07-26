@@ -239,6 +239,39 @@ const MIGRATIONS = [
   // su manual de procedimientos.
   `
   ALTER TABLE agents ADD COLUMN craft TEXT;
+  `,
+
+  // v7: una tarea puede quedar sin reunión. Al borrar una reunión pasada, lo
+  // que produjo trabajo sobrevive desligado; con meeting_id NOT NULL no había
+  // forma de soltarlo y el borrado fallaba contra la clave foránea.
+  `
+  CREATE TABLE tasks_nuevo (
+    id             TEXT PRIMARY KEY,
+    meeting_id     TEXT REFERENCES meetings(id),
+    agent_id       TEXT NOT NULL,
+    text           TEXT NOT NULL,
+    completed      INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    completed_at   TEXT,
+    goal_id        TEXT,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    blocked_reason TEXT,
+    result_summary TEXT,
+    run_count      INTEGER NOT NULL DEFAULT 0,
+    kind           TEXT NOT NULL DEFAULT 'entregable',
+    reviewer_id    TEXT,
+    review_status  TEXT,
+    parent_task_id TEXT
+  );
+  INSERT INTO tasks_nuevo SELECT
+    id, meeting_id, agent_id, text, completed, created_at, completed_at,
+    goal_id, status, blocked_reason, result_summary, run_count, kind,
+    reviewer_id, review_status, parent_task_id
+  FROM tasks;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_nuevo RENAME TO tasks;
+  CREATE INDEX idx_tasks_meeting ON tasks(meeting_id, agent_id);
+  CREATE INDEX idx_tasks_goal ON tasks(goal_id, status);
   `
 ];
 

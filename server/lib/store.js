@@ -512,6 +512,45 @@ export class Store {
     `).all(meetingId, limit);
   }
 
+  // Borrar una reunión = borrar la CONVERSACIÓN y su registro. Lo que se
+  // produjo a partir de ella (proyectos, entregables, tareas ya asignadas a
+  // un proyecto) sobrevive: es trabajo, no charla. Las tareas sueltas, que
+  // solo existieron en esa reunión, se van con ella.
+  deleteMeeting(meetingId) {
+    const meeting = this.getMeeting(meetingId);
+    if (!meeting) {
+      return null;
+    }
+
+    const turnos = this.db.prepare('SELECT COUNT(*) AS c FROM turns WHERE meeting_id = ?').get(meetingId).c;
+    const sueltas = this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').get(meetingId).c;
+    const conservadas = this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NOT NULL').get(meetingId).c;
+
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
+      // Las que sí produjeron trabajo se desligan de la reunión, no se borran.
+      this.db.prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('UPDATE goals SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
+      this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meetingId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
+    this.logChange('user', 'meeting', meetingId, 'delete', { turnos, tareasBorradas: sueltas, tareasConservadas: conservadas });
+    return { meetingId, companyId: meeting.company_id, turnos, tareasBorradas: sueltas, tareasConservadas: conservadas };
+  }
+
+  closedMeetings(companyId) {
+    return this.db.prepare("SELECT id FROM meetings WHERE company_id = ? AND status != 'active' ORDER BY created_at").all(companyId).map((row) => row.id);
+  }
+
   // ── Tareas ─────────────────────────────────────────────────────────────
 
   insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null, kind = 'entregable', parentTaskId = null, reviewerId = null }) {

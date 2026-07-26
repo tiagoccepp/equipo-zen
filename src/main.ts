@@ -2709,6 +2709,7 @@ function mountShell() {
         <div class="modal-body" id="meetingsList">
           <p class="muted">Cargando reuniones…</p>
         </div>
+        <footer class="modal-foot" id="meetingsPurge"></footer>
       </section>
     </div>
 
@@ -3059,6 +3060,28 @@ function handleDelegatedClick(event: Event) {
     case 'open-meetings':
       void openMeetingsDrawer();
       break;
+    case 'delete-meeting': {
+      const meetingId = target.dataset.meetingId;
+      const titulo = target.dataset.meetingTitle || 'esa reunión';
+      const turnos = Number(target.dataset.meetingTurns || 0);
+      if (meetingId && window.confirm(
+        `¿Borrar “${titulo}”?\n\nSe va la conversación (${turnos} ${turnos === 1 ? 'turno' : 'turnos'}) y su registro.\nLos proyectos y entregables que salieron de ella NO se tocan.`
+      )) {
+        void borrarReunion(meetingId, titulo);
+      }
+      break;
+    }
+
+    case 'purge-meetings': {
+      const cuantas = Number(target.dataset.count || 0);
+      if (cuantas > 0 && window.confirm(
+        `¿Borrar las ${cuantas} reuniones pasadas de esta empresa?\n\nSe van sus conversaciones y sus registros.\nLos proyectos y entregables NO se tocan. Esto no se puede deshacer.`
+      )) {
+        void borrarReunionesPasadas(cuantas);
+      }
+      break;
+    }
+
     case 'close-meetings':
       closeModal('meetingsModal');
       break;
@@ -3984,6 +4007,7 @@ async function openMeetingsDrawer() {
   byId('meetingsTitle').textContent = state.company ? `Reuniones de ${state.company.name}` : 'Reuniones';
   openModal('meetingsModal');
   const list = byId('meetingsList');
+  byId('meetingsPurge').innerHTML = '';
   list.innerHTML = '<p class="muted">Cargando reuniones…</p>';
   try {
     const query = state.companyId ? `?companyId=${encodeURIComponent(state.companyId)}` : '';
@@ -3992,6 +4016,10 @@ async function openMeetingsDrawer() {
       list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas en esta empresa. Cuando cierres una con “Nueva reunión”, va a quedar acá para retomarla.</p>';
       return;
     }
+    const cerradas = data.meetings.filter((meeting) => meeting.id !== state.meetingId).length;
+    byId('meetingsPurge').innerHTML = cerradas > 1
+      ? `<button class="btn ghost sm danger-ghost" data-action="purge-meetings" data-count="${cerradas}" type="button">Borrar las ${cerradas} reuniones pasadas</button>`
+      : '';
     list.innerHTML = data.meetings.map((meeting) => `
       <div class="meeting-row ${meeting.id === state.meetingId ? 'is-current' : ''}">
         <div class="meeting-row-info">
@@ -4001,11 +4029,48 @@ async function openMeetingsDrawer() {
         </div>
         ${meeting.id === state.meetingId
           ? '<span class="muted current-tag">actual</span>'
-          : `<button class="btn ghost sm" data-action="resume-meeting" data-meeting-id="${escapeHtml(meeting.id)}" type="button">Retomar</button>`}
+          : `<span class="meeting-row-actions">
+              <button class="btn ghost sm" data-action="resume-meeting" data-meeting-id="${escapeHtml(meeting.id)}" type="button">Retomar</button>
+              <button class="btn ghost sm danger-ghost" data-action="delete-meeting" data-meeting-id="${escapeHtml(meeting.id)}"
+                data-meeting-title="${escapeHtml(meeting.title || meeting.scenario_name || 'Reunión sin título')}"
+                data-meeting-turns="${meeting.turn_count}" type="button">Borrar</button>
+            </span>`}
       </div>
     `).join('');
   } catch {
     list.innerHTML = '<p class="muted">No pude cargar las reuniones.</p>';
+  }
+}
+
+// Borrar una reunión pasada: se va la charla y su registro; el trabajo que
+// salió de ella queda.
+async function borrarReunion(meetingId: string, titulo: string) {
+  try {
+    const r = await apiJson<{ turnos: number; registros: number; tareasConservadas: number }>(
+      `/api/meetings/${encodeURIComponent(meetingId)}`,
+      { method: 'DELETE' }
+    );
+    const conservadas = r.tareasConservadas
+      ? ` Se conservaron ${r.tareasConservadas} ${r.tareasConservadas === 1 ? 'tarea' : 'tareas'} con proyecto.`
+      : '';
+    upsertAlert('meeting-delete', titulo, `Reunión borrada (${r.turnos} ${r.turnos === 1 ? 'turno' : 'turnos'}).${conservadas}`, 'ok', 3600);
+    await openMeetingsDrawer();
+  } catch (error) {
+    upsertAlert('meeting-delete', titulo, `No pude borrarla: ${getClientError(error)}`, 'error', 4200);
+  }
+}
+
+async function borrarReunionesPasadas(cuantas: number) {
+  if (!state.companyId) return;
+  try {
+    const r = await apiJson<{ reuniones: number; turnos: number }>(
+      `/api/companies/${encodeURIComponent(state.companyId)}/meetings`,
+      { method: 'DELETE' }
+    );
+    upsertAlert('meetings-purge', 'Reuniones', `Borré ${r.reuniones} ${r.reuniones === 1 ? 'reunión' : 'reuniones'} y sus registros.`, 'ok', 3600);
+    await openMeetingsDrawer();
+  } catch (error) {
+    upsertAlert('meetings-purge', 'Reuniones', `No pude borrarlas: ${getClientError(error)}`, 'error', 4200);
   }
 }
 

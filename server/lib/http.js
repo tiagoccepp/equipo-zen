@@ -13,8 +13,9 @@ import {
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
 import { renderLearningsSection } from './learning.js';
+import { isMeetingLive } from './meeting-session.js';
 import { applySuggestion } from './reflection.js';
-import { listLogDays, logDirectory, readLog } from './session-log.js';
+import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
 import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
@@ -66,7 +67,7 @@ export function createApp({ store }) {
     if (origin && ALLOWED_ORIGINS.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
     }
     res.setHeader('Vary', 'Origin');
     if (req.method === 'OPTIONS') {
@@ -432,6 +433,41 @@ export function createApp({ store }) {
     }
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
     res.json({ meeting, turns: store.recentTurns(meeting.id, limit), tasks: store.tasksForMeeting(meeting.id) });
+  });
+
+  // Borrar una reunión pasada: se va la conversación y su registro. Lo que
+  // produjo trabajo (proyectos y sus tareas) sobrevive, desligado.
+  app.delete('/api/meetings/:id', async (req, res) => {
+    const meeting = store.getMeeting(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ error: 'reunión no encontrada' });
+    }
+    if (isMeetingLive(meeting.id)) {
+      return res.status(409).json({ error: 'estás sentado en esa reunión: abrí otra antes de borrarla' });
+    }
+    const resultado = store.deleteMeeting(meeting.id);
+    const registros = await deleteLogEntries({ meetingId: meeting.id }).catch(() => 0);
+    res.json({ ...resultado, registros });
+  });
+
+  // Borrado en bloque de lo que ya pasó en una empresa.
+  app.delete('/api/companies/:id/meetings', async (req, res) => {
+    const company = store.getCompany(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    // Todas las de la empresa menos en la que hay alguien ahora mismo.
+    const ids = store.listMeetings(200, company.id)
+      .map((m) => m.id)
+      .filter((id) => !isMeetingLive(id));
+    let turnos = 0;
+    let registros = 0;
+    for (const id of ids) {
+      const r = store.deleteMeeting(id);
+      turnos += r?.turnos || 0;
+      registros += await deleteLogEntries({ meetingId: id }).catch(() => 0);
+    }
+    res.json({ reuniones: ids.length, turnos, registros });
   });
 
   app.patch('/api/meetings/:id', (req, res) => {

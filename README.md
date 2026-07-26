@@ -100,6 +100,19 @@ App local de un solo usuario: bind en loopback, CORS con allowlist, validación 
 
 > El vault Obsidian (`00 - Index` … `08 - Roadmap`) describe una arquitectura vieja (era Gemini, pre-empresas). La referencia vigente es este README + el código.
 
+## Borrar reuniones pasadas
+
+Desde **Reuniones** (en el encabezado de la empresa) se borra cualquier reunión
+salvo en la que estés sentado, y hay un botón para borrar todas las pasadas de
+una. Qué se va y qué queda:
+
+- **Se va**: la conversación (turnos), la reunión en sí, su telemetría, su
+  resumen y sus entradas en el diario.
+- **Queda**: los proyectos y entregables que salieron de ella, con sus tareas.
+  Es trabajo, no charla — las tareas simplemente dejan de apuntar a la reunión.
+- Las tareas que nunca llegaron a un proyecto sí se borran: solo existían en esa
+  conversación.
+
 ## Diario de la empresa (logs)
 
 Todo lo que pasa queda registrado en `server/data/logs/AAAA-MM-DD.jsonl`, en

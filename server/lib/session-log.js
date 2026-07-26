@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { rootDir } from './config.js';
@@ -125,6 +125,43 @@ export async function listLogDays() {
     .filter((name) => name.endsWith('.jsonl'))
     .sort()
     .reverse();
+}
+
+// Borra del diario todo lo de una reunión. Reescribe los archivos del día
+// sin esas líneas: si se borra la reunión, su registro también se va.
+export async function deleteLogEntries({ meetingId }) {
+  if (!meetingId) {
+    return 0;
+  }
+  await flushLog();
+  const files = await listLogDays();
+  let borradas = 0;
+  for (const name of files) {
+    const ruta = path.join(LOG_DIR, name);
+    const raw = await readFile(ruta, 'utf-8').catch(() => null);
+    if (raw === null) {
+      continue;
+    }
+    const quedan = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        if (JSON.parse(line).meetingId === meetingId) {
+          borradas += 1;
+          continue;
+        }
+      } catch {
+        // Línea corrupta: se conserva tal cual.
+      }
+      quedan.push(line);
+    }
+    if (borradas > 0) {
+      await writeFile(ruta, quedan.length ? `${quedan.join('\n')}\n` : '', 'utf-8');
+    }
+  }
+  return borradas;
 }
 
 // Lectura para el endpoint HTTP: las últimas N entradas del día pedido,

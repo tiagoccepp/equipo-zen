@@ -4667,3 +4667,20 @@ summary:focus-visible,
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
+
+/* Borrar es destructivo: se ve, pero no compite con la acción principal. */
+.meeting-row-actions {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.btn.danger-ghost {
+  color: var(--danger);
+}
+
+.btn.danger-ghost:hover,
+.btn.danger-ghost:focus-visible {
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+  background: color-mix(in oklab, var(--danger) 8%, transparent);
+}

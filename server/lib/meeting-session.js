@@ -40,6 +40,12 @@ const PERSISTED_TELEMETRY_TYPES = new Set([
 // que intente retomar la misma reunión recibe una reunión nueva.
 const activeSessionsByMeeting = new Map();
 
+// ¿Hay alguien sentado en esa reunión ahora mismo? Es la única que no se
+// puede borrar; el resto son pasado, estén marcadas activas o no.
+export function isMeetingLive(meetingId) {
+  return activeSessionsByMeeting.has(meetingId);
+}
+
 // Difusión a todas las sesiones vivas de una empresa (eventos de trabajo).
 export function broadcastToCompany(companyId, payload) {
   for (const session of activeSessionsByMeeting.values()) {
