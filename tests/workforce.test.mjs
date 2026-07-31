@@ -6,19 +6,23 @@ import path from 'node:path';
 
 import { Store } from '../server/lib/store.js';
 import {
+  anotarEnBitacora,
   applyEdit,
   extractFileContent,
+  leerTokens,
+  projectDir,
   readProjectState,
   safeWorkspacePath,
   splitBeforeHeredoc,
   Workforce
 } from '../server/lib/workforce.js';
+import { mkdirSync } from 'node:fs';
 
 const companyTemplates = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
 function newCompany() {
   const store = new Store(':memory:');
-  const template = companyTemplates.templates.find((t) => t.id === 'tecnologia');
+  const template = companyTemplates.templates.find((t) => t.id === 'web');
   const company = store.createCompanyFromTemplate(template, 'test');
   const events = [];
   const workforce = new Workforce(store, { hasKeys: () => false }, {
@@ -156,18 +160,27 @@ test('un proyecto vacío no arrastra identidad de nadie', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('dos empleados no trabajan a la vez sobre el mismo proyecto', async () => {
+test('dos empleados no trabajan a la vez sobre el mismo proyecto', async (t) => {
   // Bruno y Delia escribiendo index.html en paralelo se sobreescribían.
   const { store, company, workforce } = newCompany();
   const team = store.listAgents({ companyId: company.id });
   const meeting = store.createMeeting({ companyId: company.id });
   const goal = store.createGoal({ companyId: company.id, meetingId: meeting.id, title: 'Web nueva' });
 
-  for (const nombre of ['Bruno', 'Sofía']) {
-    const agente = team.find((a) => a.name === nombre);
-    const id = store.insertTask(meeting.id, agente.id, { text: `parte de ${nombre}` });
+  // Dos que produzcan, sin depender de los nombres de una plantilla concreta.
+  const productores = team.filter((a) => a.role === 'worker').slice(0, 2);
+  assert.equal(productores.length, 2, 'la plantilla tiene que traer al menos dos personas que produzcan');
+  for (const agente of productores) {
+    const id = store.insertTask(meeting.id, agente.id, { text: `parte de ${agente.name}` });
     store.assignTaskToGoal(id, goal.id, { kind: 'entregable' });
   }
+
+  // El contrato ya está escrito: si no, la spec de fase 1 bloquearía la
+  // construcción y lo que se mediría sería esa compuerta, no el arbitraje.
+  const dir = projectDir(company.id, goal.slug);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'PROYECTO.md'), '## Qué construimos\nUna web.\n');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   // Se intercepta la ejecución: interesa el arbitraje, no el trabajo real.
   const arrancadas = [];
@@ -231,4 +244,22 @@ test('editar avisa con precisión cuando no puede aplicar el cambio', () => {
   assert.throws(() => applyEdit(archivo, '<p>tres</p>', 'x'), /no está en el archivo/);
   assert.throws(() => applyEdit(archivo, '<p>uno</p>', 'x'), /aparece 2 veces/);
   assert.throws(() => applyEdit(archivo, '   ', 'x'), /vacío/);
+});
+
+test('la bitácora acumula lo que dejó cada uno', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'equipo-bitacora-'));
+
+  await anotarEnBitacora(dir, { agente: 'Bruno', tarea: 'Armar la home', resumen: 'Hice el hero y el pie.' });
+  await anotarEnBitacora(dir, {
+    agente: 'Delfina', tarea: 'Ajustar el color', resumen: 'Unifiqué la paleta.', pendiente: 'falta el modo oscuro'
+  });
+
+  const texto = readFileSync(path.join(dir, 'BITACORA.md'), 'utf-8');
+  assert.match(texto, /Bruno/);
+  assert.match(texto, /Hice el hero/);
+  assert.match(texto, /Delfina/);
+  assert.match(texto, /falta el modo oscuro/);
+  assert.equal(texto.match(/# Bitácora del proyecto/g).length, 1, 'una sola cabecera');
+
+  rmSync(dir, { recursive: true, force: true });
 });

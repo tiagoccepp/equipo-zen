@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   ORB_TONE,
+  OrbField,
   colorHue,
   followEnergy,
   harmonizeOrbColor,
@@ -166,4 +167,43 @@ test('la amplitud sube rápido y baja despacio (sin titileo entre sílabas)', ()
 test('un dt absurdo (pestaña trabada) no dispara la animación', () => {
   assert.equal(followEnergy(0, 1, 10), 1);
   assert.equal(followEnergy(0.5, 0.5, -1), 0.5);
+});
+
+// ── El anillo de "está trabajando" ───────────────────────────────────────
+// Lo que hace visible que el equipo sigue produciendo aunque nadie hable.
+
+test('las esferas saben quién está trabajando y quién no', () => {
+  const campo = Object.create(OrbField.prototype);
+  campo.workingIds = new Set();
+  campo.kick = () => {};
+
+  campo.setWorking(['a', 'b']);
+  assert.equal(campo.isWorking('a'), true);
+  assert.equal(campo.isWorking('c'), false);
+
+  campo.setWorking(['b']);
+  assert.equal(campo.isWorking('a'), false, 'el que terminó deja de tener el anillo');
+  assert.equal(campo.isWorking('b'), true);
+});
+
+test('repetir el mismo conjunto no despierta el bucle de dibujo al pedo', () => {
+  const campo = Object.create(OrbField.prototype);
+  campo.workingIds = new Set();
+  let despertadas = 0;
+  campo.kick = () => { despertadas += 1; };
+
+  campo.setWorking(['a']);
+  assert.equal(despertadas, 1);
+  campo.setWorking(['a']);
+  assert.equal(despertadas, 1, 'sin cambios, no se repinta');
+  campo.setWorking(['a', 'b']);
+  assert.equal(despertadas, 2);
+});
+
+test('que nadie trabaje es un estado válido, no un error', () => {
+  const campo = Object.create(OrbField.prototype);
+  campo.workingIds = new Set(['a']);
+  campo.kick = () => {};
+  campo.setWorking([]);
+  assert.equal(campo.isWorking('a'), false);
 });

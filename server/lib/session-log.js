@@ -111,10 +111,6 @@ export function flushLog() {
   return queue;
 }
 
-export function setLogEnabled(value) {
-  enabled = Boolean(value);
-}
-
 export function logDirectory() {
   return LOG_DIR;
 }

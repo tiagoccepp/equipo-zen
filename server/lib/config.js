@@ -22,21 +22,16 @@ export const ALLOWED_ORIGINS = new Set(
 
 // ── MiniMax (razonamiento) ───────────────────────────────────────────────
 export const MINIMAX_API_URL = process.env.MINIMAX_API_URL || 'https://api.minimax.io/v1/chat/completions';
-export const MINIMAX_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M2.5';
+// Catálogo completo, del más nuevo al más viejo. Es una sola lista porque hace
+// dos trabajos a la vez: lo que ofrece el desplegable de Ajustes y la cadena de
+// repuesto cuando un modelo falla. Cuando eran dos listas distintas, elegir M3
+// en la UI se guardaba pero al leerlo no figuraba acá y se caía al default.
+export const MINIMAX_CATALOG = ['MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2'];
+export const MINIMAX_MODEL = process.env.MINIMAX_MODEL || MINIMAX_CATALOG[0];
 export const MINIMAX_MODELS = uniqueModelList([
   MINIMAX_MODEL,
-  'MiniMax-M2.5',
-  'MiniMax-M2'
+  ...MINIMAX_CATALOG
 ]);
-export const MINIMAX_ROUTER_MODELS = uniqueModelList([
-  process.env.MINIMAX_ROUTER_MODEL || MINIMAX_MODEL,
-  ...MINIMAX_MODELS
-]);
-export const MINIMAX_LEARNING_MODELS = uniqueModelList([
-  process.env.MINIMAX_LEARNING_MODEL || MINIMAX_MODEL,
-  ...MINIMAX_MODELS
-]);
-
 // ── Proveedores de razonamiento ──────────────────────────────────────────
 //
 // Los dos hablan el formato de OpenAI (mismo /chat/completions, mismo Bearer,
@@ -102,9 +97,6 @@ export const AUDIO_MIME_TYPE = 'audio/pcm;rate=16000';
 export const TELEMETRY_MAX_EVENTS = 800;
 export const TELEMETRY_TEXT_LIMIT = 4000;
 export const DB_PATH = process.env.DB_PATH || path.join(rootDir, 'server', 'data', 'meetings.db');
-
-// Backend de agentes: 'auto' usa stream con claves y mock sin claves.
-export const AGENT_BACKEND = (process.env.AGENT_BACKEND || 'auto').toLowerCase();
 
 // ── Auto-aprendizaje: kill-switches ('0' desactiva) ─────────────────────
 export const LEARNING_ENABLED = process.env.LEARNING_ENABLED !== '0';

@@ -141,7 +141,7 @@ export interface SpawnAgentPayload {
 }
 
 export type ClientMessage =
-  | { type: 'hello'; meetingId?: string; companyId?: string }
+  | { type: 'hello'; meetingId?: string; companyId?: string; goalId?: string }
   | { type: 'interrupt'; turnId?: string; agentId?: string; reason: 'barge_in' | 'manual'; playedMs?: number }
   | { type: 'playback_complete'; turnId: string; agentId: string }
   | { type: 'user_turn'; text: string }
@@ -151,6 +151,12 @@ export type ClientMessage =
   | { type: 'audio_end'; transcriptHint?: string }
   | { type: 'audio_cancel'; reason?: string; speechMs?: number }
   | { type: 'audio_stop' }
+  // El cliente declara si QUIERE voz. Fuera del modo llamada no la quiere: sin
+  // esto el servidor sintetizaba en todos los turnos igual, gastaba Supertonic
+  // y serializaba las respuestas por el SpeakerGate para un audio que nadie oía.
+  | { type: 'set_voice'; enabled: boolean }
+  // ¿El equipo arranca solo apenas se reparte una tarea en la reunión?
+  | { type: 'set_auto_work'; enabled: boolean }
   | { type: 'reset' }
   | { type: 'health' }
   | { type: 'spawn_agent'; agent: SpawnAgentPayload }
@@ -174,6 +180,9 @@ export type ServerMessage =
       meetingId: string;
       resumed: boolean;
       company: PublicCompany;
+      // El proyecto en el que vive la reunión: acota el contexto que reciben
+      // los agentes y es la clave con la que el cliente guarda la reunión.
+      project?: { id: string; title: string; slug: string; brief: string; stack: string } | null;
       agents: PublicAgent[];
       scenario: MeetingScenario;
       turns: PublicTurn[];
@@ -182,6 +191,7 @@ export type ServerMessage =
       mode?: 'live' | 'stream' | 'mock';
       agentBackends?: Record<string, string>;
     }
+  | { type: 'auto_work_changed'; enabled: boolean }
   | { type: 'meeting_reset' }
   | { type: 'scenario_updated'; scenario: MeetingScenario }
   | {
@@ -305,13 +315,22 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
   }
 
   switch (value.type) {
+    case 'set_voice':
+      return { ok: true, message: { type: 'set_voice', enabled: Boolean(value.enabled) } };
+
+    case 'set_auto_work':
+      return { ok: true, message: { type: 'set_auto_work', enabled: Boolean(value.enabled) } };
+
     case 'hello': {
       const meetingId = optionalCappedString(value.meetingId, 40);
       const companyId = optionalCappedString(value.companyId, 40);
-      if (meetingId === null || companyId === null) {
+      // El proyecto en el que se abre la reunión: sin esto el validador lo
+      // descartaba en silencio y la reunión nacía huérfana.
+      const goalId = optionalCappedString(value.goalId, 40);
+      if (meetingId === null || companyId === null || goalId === null) {
         return { ok: false, error: 'hello inválido.' };
       }
-      return { ok: true, message: { type: 'hello', meetingId, companyId } };
+      return { ok: true, message: { type: 'hello', meetingId, companyId, goalId } };
     }
 
     case 'interrupt': {

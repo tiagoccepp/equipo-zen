@@ -324,6 +324,19 @@ const ORB_ALPHA_SPEAKING = 1;
 // Mientras habla alguien, el resto de la sala se corre un paso atrás.
 const ORB_FOCUS_DIM = 0.62;
 
+// ── Estado "trabajando" ────────────────────────────────────────────────
+// Un agente que está PRODUCIENDO en segundo plano no habla, pero tiene que
+// verse vivo: un arco fino que gira despacio alrededor de la esfera. Es
+// deliberadamente distinto de hablar (que late con la voz) y deliberadamente
+// lento — un giro rápido en el borde de la pantalla es ruido, no información.
+const WORK_ARC_SPEED = 0.85;
+const WORK_ARC_SWEEP = TAU * 0.26;
+const WORK_ARC_ALPHA = 0.55;
+const WORK_ARC_WIDTH = 2;
+const WORK_ARC_GAP = 1.1;
+// Quien trabaja no se apaga aunque otro esté hablando: sigue en foco.
+const ORB_FOCUS_WORKING = 0.9;
+
 type Orb = {
   id: string;
   sourceColor: string;
@@ -356,6 +369,8 @@ export class OrbField {
   private orbs: Orb[] = [];
   private theme: OrbTheme = 'light';
   private speakingId = '';
+  // Quiénes están produciendo AHORA, según los work_event del servidor.
+  private workingIds = new Set<string>();
   private reduced = false;
   private raf = 0;
   private lastAt = 0;
@@ -394,6 +409,23 @@ export class OrbField {
   // Reconstruye las nubes solo si cambió el elenco (id o color): sin esto,
   // cada mensaje del servidor reiniciaría las fases y las esferas pegarían
   // un salto.
+  // Los que están trabajando en segundo plano. Idempotente y barato: se llama
+  // en cada work_event.
+  setWorking(ids: string[]) {
+    const siguiente = new Set(ids);
+    if (siguiente.size === this.workingIds.size && [...siguiente].every((id) => this.workingIds.has(id))) {
+      return;
+    }
+    this.workingIds = siguiente;
+    // Con movimiento reducido el bucle está parado si nada viaja: hay que
+    // despertarlo para que el arco aparezca o desaparezca.
+    this.kick();
+  }
+
+  isWorking(agentId: string) {
+    return this.workingIds.has(agentId);
+  }
+
   setAgents(agents: OrbAgent[]) {
     const signature = agents.map((agent) => `${agent.id}:${agent.color}`).join('|');
     const current = this.orbs.map((orb) => `${orb.id}:${orb.sourceColor}`).join('|');
@@ -552,17 +584,25 @@ export class OrbField {
 
     for (const orb of this.orbs) {
       const speaking = orb.id === this.speakingId;
+      const working = this.workingIds.has(orb.id);
       // Con movimiento reducido la opacidad NO sigue la amplitud: seguir la voz
       // ahí sería un parpadeo, justo lo que hay que evitar. Sube una vez al
       // arrancar el turno y baja al terminarlo.
       orb.target = speaking ? (this.reduced ? 1 : energy) : 0;
       orb.energy = followEnergy(orb.energy, orb.target, dt);
-      const focusTarget = !this.speakingId || speaking ? 1 : ORB_FOCUS_DIM;
+      const focusTarget = !this.speakingId || speaking
+        ? 1
+        : working ? ORB_FOCUS_WORKING : ORB_FOCUS_DIM;
       orb.focus = followEnergy(orb.focus, focusTarget, dt);
       if (Math.abs(orb.target - orb.energy) > 0.002 || Math.abs(focusTarget - orb.focus) > 0.002) {
         animating = true;
       }
       this.drawOrb(ctx, orb);
+      if (working) {
+        this.drawWorkArc(ctx, orb);
+        // El arco gira: mientras haya alguien trabajando el bucle no para.
+        animating = true;
+      }
     }
 
     // En movimiento normal el bucle es continuo (flotación + rotación). En
@@ -573,6 +613,39 @@ export class OrbField {
       this.fpsValue = 0;
     }
   };
+
+  // El anillo de "está produciendo": un arco que recorre el borde. Con
+  // movimiento reducido no gira — queda un anillo punteado completo, que
+  // comunica lo mismo sin animación.
+  private drawWorkArc(ctx: CanvasRenderingContext2D, orb: Orb) {
+    const slot = orb.slot;
+    if (!slot) {
+      return;
+    }
+    const radio = slot.r * BASE_RADIUS_RATIO * 1.16;
+    ctx.save();
+    ctx.strokeStyle = orb.color;
+    ctx.globalAlpha = WORK_ARC_ALPHA * orb.focus;
+    ctx.lineWidth = WORK_ARC_WIDTH;
+    ctx.lineCap = 'round';
+    if (this.reduced) {
+      ctx.setLineDash([WORK_ARC_WIDTH * 2, WORK_ARC_WIDTH * 3]);
+      ctx.beginPath();
+      ctx.arc(slot.cx, slot.cy, radio, 0, TAU);
+      ctx.stroke();
+    } else {
+      const desde = (this.clock * WORK_ARC_SPEED + orb.phaseFloat) % TAU;
+      ctx.beginPath();
+      ctx.arc(slot.cx, slot.cy, radio, desde, desde + WORK_ARC_SWEEP);
+      ctx.stroke();
+      // Un segundo arco enfrentado: se lee como giro, no como recorte.
+      ctx.globalAlpha = WORK_ARC_ALPHA * 0.5 * orb.focus;
+      ctx.beginPath();
+      ctx.arc(slot.cx, slot.cy, radio + WORK_ARC_GAP, desde + Math.PI, desde + Math.PI + WORK_ARC_SWEEP * 0.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   private drawOrb(ctx: CanvasRenderingContext2D, orb: Orb) {
     const slot = orb.slot;

@@ -313,6 +313,62 @@ export function withTimeout(promise, timeoutMs, message) {
   });
 }
 
+// TODOS los objetos JSON de primer nivel que haya en el texto, en orden.
+//
+// Existe porque el modelo manda varias acciones en un solo mensaje —quiere leer
+// tres archivos de una— y el parser de abajo, con su `\{[\s\S]*\}` voraz, tomaba
+// de la primera llave a la última y quedaba JSON inválido. Resultado medido: 21
+// pasos de una corrida descartados como "sin JSON de acción" cuando el modelo
+// había respondido perfecto.
+export function parseJsonObjects(value) {
+  const text = stripThink(value);
+  if (!text) {
+    return [];
+  }
+  const sinCercas = text.replace(/```(?:json)?/g, '');
+  const objetos = [];
+  let profundidad = 0;
+  let inicio = -1;
+  let enTexto = false;
+  let escapado = false;
+
+  for (let i = 0; i < sinCercas.length; i += 1) {
+    const c = sinCercas[i];
+    if (enTexto) {
+      if (escapado) {
+        escapado = false;
+      } else if (c === '\\') {
+        escapado = true;
+      } else if (c === '"') {
+        enTexto = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      enTexto = true;
+    } else if (c === '{') {
+      if (profundidad === 0) {
+        inicio = i;
+      }
+      profundidad += 1;
+    } else if (c === '}') {
+      profundidad -= 1;
+      if (profundidad === 0 && inicio >= 0) {
+        try {
+          objetos.push(JSON.parse(sinCercas.slice(inicio, i + 1)));
+        } catch {
+          // Un objeto malformado no invalida a los demás.
+        }
+        inicio = -1;
+      }
+      if (profundidad < 0) {
+        profundidad = 0;
+      }
+    }
+  }
+  return objetos;
+}
+
 export function parseJsonFromModel(value) {
   const text = stripThink(value);
   if (!text) {

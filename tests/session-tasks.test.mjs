@@ -28,19 +28,25 @@ function newSession(store = newStore()) {
   const socket = fakeSocket();
   const session = new MeetingSession(socket, new ApiKeyRing([]), store);
   session.initMeeting(null);
-  const byName = (name) => session.sessionAgents.find((a) => a.name === name);
-  return { socket, session, store, julioId: byName('Julio').id, tomasaId: byName('Tomasa').id };
+  // Dos integrantes cualesquiera que produzcan: los tests son sobre el
+  // protocolo de tareas, no sobre quién está en la plantilla del momento.
+  const [uno, dos] = session.sessionAgents.filter((a) => a.role === 'worker');
+  return {
+    socket, session, store,
+    julioId: uno.id, julioName: uno.name,
+    tomasaId: dos.id, tomasaName: dos.name
+  };
 }
 
 test('SILENCIO + [TAREA_CREAR] crea la tarea aunque el agente calle', async () => {
-  const { socket, session, julioId } = newSession();
+  const { socket, session, julioId, julioName } = newSession();
   const julio = session.agents.get(julioId);
   julio.respond = async (_turn, emit) => {
     emit({ type: 'agent_silence', reason: 'protocolo' });
     return { rawText: 'SILENCIO [TAREA_CREAR: revisar stock del depósito]', text: '', audioChunks: [], usedMock: true };
   };
 
-  await session.processUserTurn('t1', 'julio fijate esto');
+  await session.processUserTurn('t1', `${julioName} fijate esto`);
 
   const julioAgent = session.sessionAgents.find((a) => a.id === julioId);
   assert.equal(julioAgent.tasks.length, 1);
@@ -53,7 +59,7 @@ test('SILENCIO + [TAREA_CREAR] crea la tarea aunque el agente calle', async () =
 });
 
 test('respuesta hablada con tag crea tarea y limpia el texto visible', async () => {
-  const { socket, session, julioId } = newSession();
+  const { socket, session, julioId, julioName } = newSession();
   const julio = session.agents.get(julioId);
   julio.respond = async () => ({
     rawText: 'Dale, lo agendo. [TAREA_CREAR: armar endpoint de cobranzas]',
@@ -62,7 +68,7 @@ test('respuesta hablada con tag crea tarea y limpia el texto visible', async () 
     usedMock: true
   });
 
-  await session.processUserTurn('t2', 'julio anotate armar el endpoint');
+  await session.processUserTurn('t2', `${julioName} anotate armar el endpoint`);
 
   const julioAgent = session.sessionAgents.find((a) => a.id === julioId);
   assert.equal(julioAgent.tasks.at(-1).text, 'armar endpoint de cobranzas');
@@ -72,27 +78,28 @@ test('respuesta hablada con tag crea tarea y limpia el texto visible', async () 
 });
 
 test('tag con destinatario por NOMBRE asigna la tarea al otro agente', async () => {
-  const { session, julioId, tomasaId } = newSession();
+  const { session, julioId, tomasaId, tomasaName } = newSession();
   const julio = session.agents.get(julioId);
+  const tag = `Eso lo ve ${tomasaName}. [TAREA_CREAR: ${tomasaName}: validar stock físico]`;
   julio.respond = async () => ({
-    rawText: 'Eso lo ve Tomasa. [TAREA_CREAR: Tomasa: validar stock físico]',
-    text: 'Eso lo ve Tomasa. [TAREA_CREAR: Tomasa: validar stock físico]',
+    rawText: tag,
+    text: tag,
     audioChunks: [],
     usedMock: true
   });
 
-  await session.processUserTurn('t3', 'julio coordiná la validación');
+  await session.processUserTurn('t3', `${session.sessionAgents.find((a) => a.id === julioId).name} coordiná la validación`);
 
   const tomasa = session.sessionAgents.find((a) => a.id === tomasaId);
   assert.equal(tomasa.tasks.at(-1).text, 'validar stock físico');
 });
 
 test('spawn_agent: cap de agentes y dedup por nombre', async () => {
-  const { socket, session } = newSession();
+  const { socket, session, julioName } = newSession();
 
   await session.handleClientMessage({
     type: 'spawn_agent',
-    agent: { name: 'Julio', title: 'Otro', aliases: [], domains: [], boundaries: [], initialTasks: [] }
+    agent: { name: julioName, title: 'Otro', aliases: [], domains: [], boundaries: [], initialTasks: [] }
   });
   assert.ok(socket.sent.some((m) => m.type === 'error' && /Ya hay un agente llamado/.test(m.message)));
 
@@ -219,11 +226,11 @@ test('un pedido explícito de crear algo se construye aunque la CEO dude', async
 });
 
 test('una etiqueta con dos nombres crea la tarea para los dos', async () => {
-  const { session, store, julioId, tomasaId } = newSession();
+  const { session, store, julioId, julioName, tomasaId, tomasaName } = newSession();
 
-  // El modelo escribe naturalmente "Julio y Tomasa": antes se descartaba
+  // El modelo escribe naturalmente "Fulana y Mengano": antes se descartaba
   // entera y el trabajo pedido se perdía sin dejar rastro.
-  session.processAgentTaskCommands(julioId, 'Lo vemos. [TAREA_CREAR: Julio y Tomasa: preparar el informe de stock]');
+  session.processAgentTaskCommands(julioId, `Lo vemos. [TAREA_CREAR: ${julioName} y ${tomasaName}: preparar el informe de stock]`);
 
   const deJulio = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === julioId);
   const deTomasa = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === tomasaId);
@@ -233,10 +240,10 @@ test('una etiqueta con dos nombres crea la tarea para los dos', async () => {
 });
 
 test('la misma tarea repetida en dos turnos no se duplica', async () => {
-  const { session, store, julioId } = newSession();
+  const { session, store, julioId, julioName } = newSession();
 
-  session.processAgentTaskCommands(julioId, '[TAREA_CREAR: Julio: definir el alcance]');
-  session.processAgentTaskCommands(julioId, 'Como decía, [TAREA_CREAR: Julio: definir el alcance]');
+  session.processAgentTaskCommands(julioId, `[TAREA_CREAR: ${julioName}: definir el alcance]`);
+  session.processAgentTaskCommands(julioId, `Como decía, [TAREA_CREAR: ${julioName}: definir el alcance]`);
 
   const tareas = store.tasksForMeeting(session.meeting.id).filter((t) => t.agentId === julioId);
   assert.equal(tareas.length, 1, 'el tablero no se llena de tareas idénticas');
@@ -360,12 +367,12 @@ test('set_scenario actualiza el contexto que ven los prompts', async () => {
   assert.equal(session.meeting.scenario_text, 'Sprint de migración del sistema de pedidos');
   assert.ok(socket.sent.some((m) => m.type === 'scenario_updated'));
   assert.ok(session.promptContext().scenario.text.includes('Objetivo de esta reunión: Sprint de migración del sistema de pedidos'));
-  assert.ok(session.promptContext().scenario.name.includes('Distribuidora Norte'));
+  assert.ok(session.promptContext().scenario.name.includes(session.company.name));
 });
 
 test('paciencia: mensajes seguidos se agregan en UN solo ruteo', async () => {
   process.env.USER_TURN_SETTLE_MS = '2600';
-  const { socket, session, julioId } = newSession();
+  const { socket, session, julioId, julioName } = newSession();
   const julio = session.agents.get(julioId);
   const received = [];
   julio.respond = async (turn) => {
@@ -373,7 +380,7 @@ test('paciencia: mensajes seguidos se agregan en UN solo ruteo', async () => {
     return { rawText: 'ok', text: 'ok', audioChunks: [], usedMock: true };
   };
 
-  session.enqueueUserTurn('Julio, tengo que contarte algo del sistema', 'text');
+  session.enqueueUserTurn(`${julioName}, tengo que contarte algo del sistema`, 'text');
   await new Promise((r) => setTimeout(r, 120));
   session.enqueueUserTurn('lavar los platos', 'text');
 
@@ -402,23 +409,25 @@ test('paciencia: un conector al final extiende la espera', () => {
 });
 
 test('la CEO coordina: un entregable en su mano pasa a quien tiene el oficio', async () => {
-  const { session, store } = newSession();
+  const { session } = newSession();
   const ceo = session.sessionAgents.find((a) => a.role === 'ceo');
-  const julio = session.sessionAgents.find((a) => a.name === 'Julio');
 
   // Como pasó de verdad: la jefa quedó con la web del desarrollador y la
   // reescribía entera con su propio estilo.
   await session.handleClientMessage({
     type: 'add_task',
     agentId: ceo.id,
-    text: 'crear la página web del catálogo con el software nuevo'
+    text: 'crear la página web del catálogo con html y css'
   });
 
   const movidas = session.reassignCeoDeliverables();
   assert.equal(movidas.length, 1, 'la tarea se movió');
-  assert.equal(movidas[0].a, julio.name, 'quedó en quien tiene las skills');
   assert.equal(ceo.tasks.filter((t) => !t.completed).length, 0);
-  assert.ok(julio.tasks.some((t) => t.text.includes('página web del catálogo')));
+
+  // Fue a parar a alguien cuyas skills coinciden con lo pedido, no a cualquiera.
+  const destino = session.sessionAgents.find((a) => a.name === movidas[0].a);
+  assert.ok(destino.domains.some((d) => /html|css|front|web/.test(d)), 'quedó en quien tiene el oficio');
+  assert.ok(destino.tasks.some((t) => t.text.includes('página web del catálogo')));
 });
 
 test('lo que sí es de la CEO se queda con ella', async () => {
@@ -474,4 +483,19 @@ test('lo ya completado no vuelve a la cola', async () => {
 
   session.startWorkNow();
   assert.equal(store.workQueue(session.company.id).length, 0);
+});
+
+
+// Lo que la CEO propone como archivo destino tiene que ser un archivo de
+// verdad: "Figma" o una ruta que escapa del proyecto no pueden pasar.
+test('el archivo destino de un entregable se sanea', () => {
+  const ok = ['index.html', 'css/estilos.css', 'app.js', './menu.json'];
+  for (const valor of ok) {
+    assert.ok(MeetingSession.normalizeTargetFile(valor), `${valor} tendría que valer`);
+  }
+  const mal = ['Figma', 'un prototipo', '/etc/passwd', '../fuera.html', '.env', '', null, undefined];
+  for (const valor of mal) {
+    assert.equal(MeetingSession.normalizeTargetFile(valor), null, `${valor} no puede pasar`);
+  }
+  assert.equal(MeetingSession.normalizeTargetFile('./menu.json'), 'menu.json');
 });

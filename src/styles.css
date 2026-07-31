@@ -4108,8 +4108,52 @@ select.form-control {
   width: min(820px, 100%);
 }
 
-.browser-stage[data-viewport='mobile'] .browser-frame {
-  width: min(390px, 100%);
+/* Marcos de dispositivo: fijan ANCHO Y ALTO reales, así el responsive se ve
+   con el scroll del teléfono y no como un iframe angosto infinitamente alto.
+   El marco es sobrio a propósito — es una herramienta de trabajo, no una
+   maqueta de tienda. */
+.browser-stage[data-viewport='iphone'],
+.browser-stage[data-viewport='pixel'] {
+  align-items: flex-start;
+  padding: var(--s-5) var(--s-3);
+}
+
+.browser-stage[data-viewport='iphone'] .browser-frame,
+.browser-stage[data-viewport='pixel'] .browser-frame {
+  flex: none;
+  border: 10px solid var(--ink);
+  box-shadow: var(--shadow-2);
+}
+
+.browser-stage[data-viewport='iphone'] .browser-frame {
+  width: 390px;
+  height: 844px;
+  min-height: 0;
+  border-radius: 44px;
+}
+
+.browser-stage[data-viewport='pixel'] .browser-frame {
+  width: 412px;
+  height: 915px;
+  min-height: 0;
+  border-radius: 28px;
+}
+
+/* En una pantalla que no da la altura, el marco se achica en proporción en
+   vez de desbordar. */
+@media (max-height: 1000px) {
+  .browser-stage[data-viewport='iphone'] .browser-frame,
+  .browser-stage[data-viewport='pixel'] .browser-frame {
+    transform: scale(0.78);
+    transform-origin: top center;
+    margin-bottom: -20%;
+  }
+}
+
+.device-group {
+  display: flex;
+  gap: var(--s-2);
+  margin-left: auto;
 }
 
 .browser-text {
@@ -4695,4 +4739,218 @@ summary:focus-visible,
 .btn.is-ready:hover,
 .btn.is-ready:focus-visible {
   background: color-mix(in oklab, var(--ok) 10%, transparent);
+}
+
+/* ── Vista de empresa: sus proyectos ─────────────────────────────────────
+   Mismo lenguaje que el listado de simulaciones (sin tarjeta, el hover lava
+   el fondo), pero cada proyecto suma su barra de avance y su acción de
+   borrado, que aparece recién al acercarse. */
+
+.cv-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-bottom: var(--s-3);
+}
+
+.cv-identity h1 {
+  margin: 0;
+}
+
+.cv-industry {
+  margin: 2px 0 0;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+.cv-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-5);
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: var(--s-2);
+  margin-top: var(--s-6);
+}
+
+.project-card {
+  position: relative;
+  border-radius: var(--r-l);
+  transition: background var(--dur-1) var(--ease);
+}
+
+.project-card:hover {
+  background: var(--wash);
+}
+
+.project-card-open {
+  display: grid;
+  gap: var(--s-2);
+  width: 100%;
+  padding: var(--s-4);
+  border: 0;
+  border-radius: var(--r-l);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-card-open h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.project-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.project-card-brief {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.project-card-meta {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+
+/* La barra de avance es un dato, no un adorno: 3px y sin animación de entrada. */
+.project-card-bar {
+  display: block;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--wash-strong);
+  overflow: hidden;
+}
+
+.project-card-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--company-color, var(--accent));
+  transition: width var(--dur-2) var(--ease);
+}
+
+/* El borrado no compite con abrir el proyecto: aparece al acercarse y con
+   el foco de teclado, nunca de entrada. */
+.project-card-del {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+
+.project-card:hover .project-card-del,
+.project-card-del:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .project-card-del {
+    opacity: 1;
+  }
+}
+
+/* ── El emulador dentro de la app ────────────────────────────────────────
+   La pantalla del dispositivo llega como PNG y se dibuja en el mismo marco
+   que las vistas de teléfono, para que la transición no sorprenda. */
+
+.device-live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.device-screen {
+  display: block;
+  width: auto;
+  max-height: min(78vh, 900px);
+  border: 10px solid var(--ink);
+  border-radius: 28px;
+  background: #000;
+  box-shadow: var(--shadow-2);
+  /* El puntero es el dedo: sin selección ni gestos del navegador encima. */
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.device-keys {
+  display: flex;
+  gap: var(--s-4);
+}
+
+.device-hint {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+/* ── "Está trabajando ahora" ─────────────────────────────────────────────
+   Un agente produciendo en segundo plano no habla, pero tiene que verse. El
+   punto gira despacio en vez de latir: latir ya significa "hablando". */
+
+.agent-state.working {
+  color: var(--ok);
+}
+
+.work-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  animation: work-spin 1.1s linear infinite;
+}
+
+@keyframes work-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Sin animación, el punto queda como anillo lleno: comunica lo mismo. */
+@media (prefers-reduced-motion: reduce) {
+  .work-dot {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.7;
+  }
+}
+
+.agent.is-working {
+  border-color: color-mix(in oklab, var(--ok) 30%, transparent);
+}
+
+/* El freno de mano del arranque automático: presente pero sin competir con
+   los botones de acción. */
+.auto-work {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-work input {
+  accent-color: var(--accent);
+  cursor: pointer;
 }

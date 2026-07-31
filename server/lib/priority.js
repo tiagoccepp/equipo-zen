@@ -48,6 +48,3 @@ export function hasLiveSession() {
   return liveSessions > 0;
 }
 
-export function priorityStatus() {
-  return { activeTurns, lastTurnEndedAt, liveSessions };
-}

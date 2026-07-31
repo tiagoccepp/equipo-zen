@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 
 import { openDatabase } from './db.js';
+import { normalizeStack } from './playbooks.js';
 
 function now() {
   return new Date().toISOString();
@@ -63,6 +64,7 @@ function rowToCompany(row) {
     emoji: row.emoji,
     color: row.color,
     scenario: row.scenario,
+    stack: row.stack || 'web',
     status: row.status,
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at
@@ -93,7 +95,7 @@ export class Store {
 
     const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM companies').get();
     if (count === 0) {
-      const template = companyTemplates.templates.find((item) => item.id === 'distribuidora') || companyTemplates.templates[0];
+      const template = companyTemplates.templates.find((item) => item.id === 'web') || companyTemplates.templates[0];
       const orphanAgents = this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE company_id IS NULL").get().count;
       if (orphanAgents > 0) {
         // DB pre-v2: adoptar lo existente bajo la empresa default.
@@ -119,9 +121,9 @@ export class Store {
     const id = nanoid(10);
     const at = now();
     this.db.prepare(`
-      INSERT INTO companies (id, name, industry, emoji, color, scenario, status, created_at, last_active_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
-    `).run(id, data.name, data.industry || '', data.emoji || '🏢', data.color || '#4c6ef5', data.scenario || '', at, at);
+      INSERT INTO companies (id, name, industry, emoji, color, scenario, stack, status, created_at, last_active_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(id, data.name, data.industry || '', data.emoji || '🏢', data.color || '#4c6ef5', data.scenario || '', data.stack || 'web', at, at);
     this.logChange(actor, 'company', id, 'create', { name: data.name });
     return this.getCompany(id);
   }
@@ -399,13 +401,13 @@ export class Store {
 
   // ── Reuniones ──────────────────────────────────────────────────────────
 
-  createMeeting({ companyId, scenarioName = null, scenarioText = null } = {}) {
+  createMeeting({ companyId, goalId = null, scenarioName = null, scenarioText = null } = {}) {
     const id = nanoid(10);
     const at = now();
     this.db.prepare(`
-      INSERT INTO meetings (id, company_id, scenario_name, scenario_text, status, created_at, last_active_at)
-      VALUES (?, ?, ?, ?, 'active', ?, ?)
-    `).run(id, companyId || null, scenarioName, scenarioText, at, at);
+      INSERT INTO meetings (id, company_id, goal_id, scenario_name, scenario_text, status, created_at, last_active_at)
+      VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(id, companyId || null, goalId, scenarioName, scenarioText, at, at);
 
     for (const agent of this.listAgents({ companyId })) {
       this.db.prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agent.id);
@@ -457,6 +459,15 @@ export class Store {
       meetingId
     );
     return this.getMeeting(meetingId);
+  }
+
+  // Una reunión huérfana (de antes de los proyectos, o creada sin uno) se cuelga
+  // del proyecto en el que se está trabajando. Solo si no tenía: nunca se le
+  // roba una reunión a otro proyecto.
+  attachMeetingToGoal(meetingId, goalId) {
+    const result = this.db.prepare('UPDATE meetings SET goal_id = ? WHERE id = ? AND goal_id IS NULL')
+      .run(goalId, meetingId);
+    return result.changes === 1;
   }
 
   closeMeeting(meetingId) {
@@ -553,12 +564,12 @@ export class Store {
 
   // ── Tareas ─────────────────────────────────────────────────────────────
 
-  insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null, kind = 'entregable', parentTaskId = null, reviewerId = null }) {
+  insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null, kind = 'entregable', parentTaskId = null, reviewerId = null, phase = null }) {
     const taskId = id || 'task-' + nanoid(6);
     this.db.prepare(`
-      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, completed_at, kind, parent_task_id, reviewer_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(taskId, meetingId, agentId, text, completed ? 1 : 0, createdAt || now(), completed ? now() : null, kind, parentTaskId, reviewerId);
+      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, completed_at, kind, parent_task_id, reviewer_id, phase)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(taskId, meetingId, agentId, text, completed ? 1 : 0, createdAt || now(), completed ? now() : null, kind, parentTaskId, reviewerId, phase ?? 2);
     return taskId;
   }
 
@@ -652,22 +663,42 @@ export class Store {
     return this.db.prepare('SELECT * FROM goals WHERE company_id = ? ORDER BY created_at DESC').all(companyId);
   }
 
+  // Un proyecto se da por CUMPLIDO solo si además de no quedar nada en curso,
+  // alguien entregó algo. Sin la segunda condición, un proyecto donde todas
+  // las tareas se trabaron se anunciaba como "meta cumplida" — el peor aviso
+  // posible: dice que salió bien justo cuando no salió nada.
   completeGoalIfDone(goalId) {
-    const remaining = this.db.prepare(
-      "SELECT COUNT(*) AS count FROM tasks WHERE goal_id = ? AND status IN ('pending','in_progress')"
-    ).get(goalId).count;
-    if (remaining === 0) {
-      this.db.prepare("UPDATE goals SET status = 'done', completed_at = ? WHERE id = ? AND status = 'active'").run(now(), goalId);
-      return this.getGoal(goalId)?.status === 'done';
+    const { pendientes, hechas } = this.db.prepare(`
+      SELECT
+        SUM(CASE WHEN status IN ('pending','in_progress') THEN 1 ELSE 0 END) AS pendientes,
+        SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS hechas
+      FROM tasks WHERE goal_id = ?
+    `).get(goalId);
+    if ((pendientes || 0) > 0 || (hechas || 0) === 0) {
+      return false;
     }
-    return false;
+    this.db.prepare("UPDATE goals SET status = 'done', completed_at = ? WHERE id = ? AND status = 'active'").run(now(), goalId);
+    return this.getGoal(goalId)?.status === 'done';
   }
 
   // Las tareas que NO son entregables (acuerdos, seguimientos) quedan
   // registradas como 'noted': se ven en el tablero pero nadie las "trabaja".
-  assignTaskToGoal(taskId, goalId, { kind = 'entregable' } = {}) {
+  assignTaskToGoal(taskId, goalId, { kind = 'entregable', phase = null, targetFile = null } = {}) {
     const status = kind === 'decision' || kind === 'seguimiento' ? 'noted' : 'pending';
-    this.db.prepare('UPDATE tasks SET goal_id = ?, status = ?, kind = ? WHERE id = ?').run(goalId, status, kind, taskId);
+    this.db.prepare('UPDATE tasks SET goal_id = ?, status = ?, kind = ?, phase = ?, target_file = ? WHERE id = ?')
+      .run(goalId, status, kind, phase ?? 2, targetFile, taskId);
+  }
+
+  // Quién es dueño de cada archivo del proyecto: el esquema real, tal como
+  // quedó repartido. Es lo que se le muestra a cada uno para que no invente
+  // archivos al lado de los que ya tienen dueño.
+  fileOwnersForGoal(goalId) {
+    return this.db.prepare(`
+      SELECT t.target_file AS file, t.agent_id, t.status, a.name
+      FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
+      WHERE t.goal_id = ? AND t.target_file IS NOT NULL AND t.kind = 'entregable'
+      ORDER BY t.created_at
+    `).all(goalId);
   }
 
   // Checkout atómico: un solo worker puede tomar la tarea (semántica issue).
@@ -687,17 +718,206 @@ export class Store {
     `).run(status, summary, blockedReason, status, status, now(), taskId);
   }
 
+  // Ordenada por fase y después por fecha. (La fase 1 existía para una tarea
+  // de contrato que se comía una corrida entera produciendo documentos; se
+  // eliminó. La columna queda porque sirve para priorizar sin migrar.)
   workQueue(companyId) {
     return this.db.prepare(`
       SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id
       WHERE g.company_id = ? AND g.status = 'active' AND t.status = 'pending'
         AND t.kind IN ('entregable', 'revision', 'refinamiento')
-      ORDER BY t.created_at
+      ORDER BY t.phase, t.created_at
     `).all(companyId);
+  }
+
+  // La ola abierta de un proyecto: la fase más baja que todavía tiene trabajo
+  // sin terminar. Nadie de una ola posterior arranca hasta que ésta cierre.
+  //
+  // Es lo que reemplaza al viejo candado por proyecto. Ese candado no era solo
+  // un candado: era la FILA que garantizaba que el que entra ve lo que dejó el
+  // anterior. Al bajarlo a nivel archivo se ganó paralelismo y se perdió esa
+  // garantía — cuatro agentes sobre un proyecto vacío no ven tokens.css porque
+  // todavía no existe, y cada uno inventa su propia paleta.
+  //
+  // Las tareas 'blocked' y 'done' no cuentan: una ola trabada se abre sola.
+  faseAbierta(goalId) {
+    const fila = this.db.prepare(`
+      SELECT MIN(phase) AS fase FROM tasks
+      WHERE goal_id = ? AND status IN ('pending','in_progress')
+        AND kind IN ('entregable','spec')
+    `).get(goalId);
+    return fila?.fase ?? null;
   }
 
   tasksForGoal(goalId) {
     return this.db.prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY created_at').all(goalId);
+  }
+
+  // ── Proyectos (la unidad de trabajo) ───────────────────────────────────
+  //
+  // Un proyecto es un goal de kind 'proyecto' con carpeta propia. Adentro
+  // viven sus reuniones, sus tareas y su actividad: es el contexto que
+  // recibe el agente cuando trabaja, en vez de "toda la empresa".
+
+  createProject({ companyId, title, brief = '', stack = '' }) {
+    const goal = this.createGoal({
+      companyId,
+      title,
+      description: brief,
+      kind: 'proyecto'
+    });
+    // Sin stack explícito, el proyecto hereda el nicho de su empresa: un
+    // estudio Android no hace proyectos web salvo que se lo pidan. Se normaliza
+    // para que un valor inventado no deje al equipo sin playbook.
+    const elegido = normalizeStack(stack || this.getCompany(companyId)?.stack);
+    this.db.prepare('UPDATE goals SET brief = ?, stack = ? WHERE id = ?')
+      .run(String(brief).slice(0, 4000), elegido, goal.id);
+    return this.getGoal(goal.id);
+  }
+
+  listProjects(companyId, { includeArchived = false } = {}) {
+    const rows = this.db.prepare(`
+      SELECT g.*,
+        (SELECT COUNT(*) FROM meetings m WHERE m.goal_id = g.id)                        AS meeting_count,
+        (SELECT COUNT(*) FROM tasks t WHERE t.goal_id = g.id)                           AS task_count,
+        (SELECT COUNT(*) FROM tasks t WHERE t.goal_id = g.id AND t.status = 'done')     AS done_count,
+        (SELECT MAX(w.started_at) FROM work_runs w
+           JOIN tasks t ON t.id = w.task_id WHERE t.goal_id = g.id)                     AS last_run_at
+      FROM goals g
+      WHERE g.company_id = ? AND g.kind = 'proyecto' ${includeArchived ? '' : 'AND g.archived_at IS NULL'}
+      ORDER BY g.created_at DESC
+    `).all(companyId);
+    return rows;
+  }
+
+  updateProject(goalId, patch) {
+    const goal = this.getGoal(goalId);
+    if (!goal) {
+      return null;
+    }
+    // El alta rechaza el nombre vacío; renombrar tenía que hacer lo mismo. Con
+    // `patch.title ?? goal.title`, un título en blanco (el PATCH manda
+    // title.trim()) borraba el nombre y el proyecto quedaba sin nada que
+    // mostrar en la lista. Vacío = "no lo toques", no "dejalo sin nombre".
+    const titulo = String(patch.title ?? '').trim() || goal.title;
+    this.db.prepare('UPDATE goals SET title = ?, brief = ?, description = ?, stack = ? WHERE id = ?').run(
+      titulo,
+      patch.brief ?? goal.brief,
+      patch.brief ?? goal.description,
+      normalizeStack(patch.stack ?? goal.stack),
+      goalId
+    );
+    this.logChange('user', 'goal', goalId, 'update', patch);
+    return this.getGoal(goalId);
+  }
+
+  // LO QUE PIDIÓ EL USUARIO, con sus palabras, en las reuniones de este
+  // proyecto. Es la fuente de verdad de qué hay que construir: el título de la
+  // tarea es una derivación y se pierde el matiz ("de sushi", "con parallax",
+  // "súper animada"). Sin esto el equipo inventaba un proyecto genérico.
+  userRequestForGoal(goalId, limit = 12) {
+    return this.db.prepare(`
+      SELECT t.text FROM turns t
+      JOIN meetings m ON m.id = t.meeting_id
+      WHERE m.goal_id = ? AND t.kind = 'user'
+      ORDER BY t.id DESC LIMIT ?
+    `).all(goalId, limit).reverse().map((row) => row.text);
+  }
+
+  meetingsForProject(goalId) {
+    return this.db.prepare(`
+      SELECT id, company_id, goal_id, title, scenario_name, status, created_at,
+             last_active_at, closed_at, turn_count, summary
+      FROM meetings WHERE goal_id = ? ORDER BY last_active_at DESC
+    `).all(goalId);
+  }
+
+  runsForProject(goalId, limit = 30) {
+    return this.db.prepare(`
+      SELECT w.id, w.task_id, w.agent_id, w.started_at, w.ended_at, w.status, w.summary, w.artifacts_json
+      FROM work_runs w JOIN tasks t ON t.id = w.task_id
+      WHERE t.goal_id = ? ORDER BY w.id DESC LIMIT ?
+    `).all(goalId, limit).map((row) => ({ ...row, artifacts: parseJsonColumn(row.artifacts_json, []) }));
+  }
+
+  commentsForProject(goalId, limit = 60) {
+    return this.db.prepare(`
+      SELECT c.* FROM task_comments c JOIN tasks t ON t.id = c.task_id
+      WHERE t.goal_id = ? ORDER BY c.created_at DESC, c.rowid DESC LIMIT ?
+    `).all(goalId, limit);
+  }
+
+  // ¿Hay OTRO proyecto de la misma empresa apuntando a esta carpeta? Las metas
+  // anteriores a los proyectos quedaron todas con slug 'general' (migración v5),
+  // así que borrar una no puede llevarse los archivos de las demás.
+  slugSharedWithOthers(goalId) {
+    const goal = this.getGoal(goalId);
+    if (!goal) {
+      return false;
+    }
+    return Boolean(this.db.prepare(
+      'SELECT 1 FROM goals WHERE company_id = ? AND slug = ? AND id != ? LIMIT 1'
+    ).get(goal.company_id, goal.slug, goalId));
+  }
+
+  // Borrar un proyecto SÍ se lleva todo lo suyo: sus reuniones con sus turnos,
+  // sus tareas, sus comentarios y sus corridas. Es lo contrario de borrar una
+  // reunión (que preserva el trabajo): acá el pedido es limpiar de verdad.
+  // La carpeta la borra quien llama, con el dato de si está compartida.
+  deleteProject(goalId) {
+    const goal = this.getGoal(goalId);
+    if (!goal) {
+      return null;
+    }
+    const meetingIds = this.db.prepare('SELECT id FROM meetings WHERE goal_id = ?').all(goalId).map((r) => r.id);
+    const conteos = {
+      reuniones: meetingIds.length,
+      tareas: this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE goal_id = ?').get(goalId).c,
+      corridas: this.db.prepare(
+        'SELECT COUNT(*) AS c FROM work_runs WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)'
+      ).get(goalId).c
+    };
+    const compartida = this.slugSharedWithOthers(goalId);
+
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM task_comments WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
+      this.db.prepare('DELETE FROM work_runs WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
+      this.db.prepare('DELETE FROM tasks WHERE goal_id = ?').run(goalId);
+      for (const meetingId of meetingIds) {
+        this.db.prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
+        // Tareas de esa reunión que nunca llegaron a un proyecto. Las que sí
+        // tienen meta (típicamente el registro de acuerdos que el cierre cuelga
+        // de la misma reunión) NO son de este proyecto: se desligan de la
+        // reunión, igual que en deleteMeeting. Sin el filtro, el registro de
+        // acuerdos sobrevivía al borrado pero quedaba vacío.
+        this.db.prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
+        this.db.prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+        this.db.prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
+        this.db.prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
+        this.db.prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
+      }
+      // Otros goals que apuntaban a estas reuniones quedan sin ella, no rotos.
+      this.db.prepare(
+        `UPDATE goals SET meeting_id = NULL WHERE meeting_id IN (SELECT id FROM meetings WHERE goal_id = ?)`
+      ).run(goalId);
+      this.db.prepare('DELETE FROM meetings WHERE goal_id = ?').run(goalId);
+      this.db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
+    this.logChange('user', 'goal', goalId, 'delete', { title: goal.title, ...conteos });
+    return {
+      goalId,
+      companyId: goal.company_id,
+      slug: goal.slug,
+      title: goal.title,
+      carpetaCompartida: compartida,
+      ...conteos
+    };
   }
 
   activeWorkCompanies() {

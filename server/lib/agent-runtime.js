@@ -52,6 +52,13 @@ export class LiveAgentRuntime {
     };
 
     const speakSentence = async (sentence) => {
+      // Sin modo llamada no hay voz. Antes se sintetizaba SIEMPRE: gastaba
+      // Supertonic en cada turno, sumaba latencia y —lo peor— tomaba el
+      // SpeakerGate, que serializa a los agentes de a uno para un audio que
+      // nadie estaba escuchando.
+      if (!this.meetingSession?.voiceEnabled) {
+        return;
+      }
       const spoken = stripTaskTags(sentence).trim();
       if (!spoken || signal?.aborted) {
         return;
@@ -340,6 +347,21 @@ export function buildSystemInstruction(agent, context = {}) {
 
   const workBlock = context.workSection ? [context.workSection, ''] : [];
 
+  // De qué estudio son y qué entregan. Sin esto la CEO de un estudio móvil
+  // ofrecía "una web que abra al toque" para un proyecto React Native, y el
+  // equipo terminaba construyendo lo que el nicho tiene prohibido.
+  const QUE_ENTREGA = {
+    web: 'una web que abre en el navegador (HTML, CSS y JS)',
+    'movil-rn': 'una APP MÓVIL multiplataforma con React Native, que se instala en el teléfono. NO una web',
+    android: 'una APP ANDROID NATIVA en Kotlin con Compose, que se instala en el teléfono. NO una web',
+    python: 'un programa en Python',
+    automatizacion: 'un proceso que corre solo'
+  };
+  const stackBlock = context.stack && QUE_ENTREGA[context.stack]
+    ? [`ESTE ESTUDIO ENTREGA: ${QUE_ENTREGA[context.stack]}.`,
+       'No ofrezcas otra cosa: es lo único que el equipo produce.', '']
+    : [];
+
   const learningsBlock = context.learningsSection
     ? [context.learningsSection, '']
     : [];
@@ -351,6 +373,7 @@ export function buildSystemInstruction(agent, context = {}) {
     participants,
     '',
     ...scenarioBlock,
+    ...stackBlock,
     ...workBlock,
     'TU ESPECIALIDAD:',
     agent.domains.join(', '),
@@ -399,6 +422,25 @@ export function buildSystemInstruction(agent, context = {}) {
     '- Si en la conversación ya se dijo qué es, para quién y en qué formato, NO preguntes más: delegá.',
     '- Ofrecé opciones concretas antes que preguntas abiertas: es más fácil elegir que inventar de cero.',
     '',
+    'LO TÉCNICO NO SE PREGUNTA, SE DECIDE:',
+    '',
+    'La persona con la que hablás no tiene por qué saber de tecnología, y preguntárselo la deja trabada.',
+    'Para eso está el equipo. NUNCA preguntes qué framework usar, si prefiere React, cómo guardar los datos,',
+    'qué base de datos, si quiere TypeScript, qué librería de gráficos, cómo hostearlo ni nada por el estilo.',
+    'Esas decisiones las tomás vos con tu criterio profesional. Si querés, contás qué elegiste en UNA línea',
+    'y en términos de lo que la persona va a ver: "lo hago en una sola página, así abre al toque" —',
+    'no "voy a usar HTML estático sin bundler".',
+    'Sí preguntás sobre el PRODUCTO: para quién es, qué tiene que lograr, qué sensación querés que deje.',
+    '',
+    'LO QUE EL EQUIPO PUEDE ENTREGAR:',
+    '',
+    'Archivos, y nada más que archivos, dentro de la carpeta del proyecto.',
+    'NO existe Figma, ni Photoshop, ni Notion, ni Canva, ni ninguna herramienta externa: no te comprometas',
+    'a un "prototipo en Figma" ni a un "mockup" — eso no se puede entregar y la tarea muere sin hacerse.',
+    'Si querés mostrar un diseño, el diseño ES la página funcionando.',
+    'Cuando te repartas el trabajo, que cada tarea sea UN archivo con UN dueño. "Definir la paleta" o',
+    '"implementar la animación" no son tareas propias: van adentro del archivo de quien lo escribe.',
+    '',
     ...(agent.role === 'ceo'
       ? [
           'COMO CEO, ADEMÁS:',
@@ -426,17 +468,22 @@ export function buildSystemInstruction(agent, context = {}) {
     '',
     '---',
     '',
-    'GESTIÓN DE TAREAS:',
+    'GESTIÓN DE TAREAS — LA ETIQUETA ES LO QUE HACE QUE EL TRABAJO EXISTA:',
     '',
-    'Conocés tus tareas y las recordás si te preguntan.',
-    'Si en la conversación se define una nueva tarea para vos:',
-    '→ Al final de tu respuesta agregá: [TAREA_CREAR: descripción breve]',
-    'Si la tarea es para un compañero: [TAREA_CREAR: NombreDelCompañero: descripción]',
+    'Decir "Iván se encarga de la pantalla" NO reparte nada: es una frase.',
+    'La tarea existe SOLO si va la etiqueta. Sin etiqueta, nadie trabaja y el',
+    'proyecto queda vacío — pasó de verdad y el usuario se quedó sin nada.',
+    '',
+    'Cada vez que nombrés a alguien para algo, agregá al final de tu respuesta:',
+    '  [TAREA_CREAR: NombreDelCompañero: qué tiene que producir]',
+    'Para vos mismo: [TAREA_CREAR: qué vas a producir]',
+    'Repartiste tres cosas → van las TRES etiquetas, una por línea.',
     '',
     'Si completás una tarea o se confirma que está hecha:',
-    '→ Al final de tu respuesta agregá: [TAREA_COMPLETAR: #número]',
+    '  [TAREA_COMPLETAR: #número]',
     '',
-    'Podés agregar varios tags en el mismo turno si corresponde.',
+    'Las etiquetas no se ven en pantalla: el usuario lee tu frase, el sistema lee',
+    'la etiqueta. Las dos cosas tienen que decir lo mismo.',
     '',
     '---',
     '',

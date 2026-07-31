@@ -272,6 +272,78 @@ const MIGRATIONS = [
   ALTER TABLE tasks_nuevo RENAME TO tasks;
   CREATE INDEX idx_tasks_meeting ON tasks(meeting_id, agent_id);
   CREATE INDEX idx_tasks_goal ON tasks(goal_id, status);
+  `,
+
+  // v8: el PROYECTO pasa a ser el contenedor. Antes las reuniones colgaban de
+  // la empresa y el proyecto era un subproducto de cerrarlas; ahora es al
+  // revés — se entra a un proyecto y adentro viven sus reuniones, sus tareas y
+  // su actividad. Así el agente recibe el contexto de UN proyecto y no el de
+  // toda la empresa, que es de donde venía que cada vuelta improvisara.
+  //
+  // 'phase' ordena la cola: hasta que no está escrita la spec (fase 1) no sale
+  // ninguna tarea de construcción (fase 2).
+  `
+  ALTER TABLE meetings ADD COLUMN goal_id TEXT REFERENCES goals(id);
+  ALTER TABLE goals ADD COLUMN stack       TEXT NOT NULL DEFAULT '';
+  ALTER TABLE goals ADD COLUMN brief       TEXT NOT NULL DEFAULT '';
+  ALTER TABLE goals ADD COLUMN archived_at TEXT;
+  ALTER TABLE tasks ADD COLUMN phase       INTEGER NOT NULL DEFAULT 2;
+  CREATE INDEX idx_meetings_goal ON meetings(goal_id, last_active_at);
+
+  -- 1) La reunión que YA parió un proyecto se cuelga de ese proyecto.
+  UPDATE meetings SET goal_id = (
+    SELECT g.id FROM goals g WHERE g.meeting_id = meetings.id ORDER BY g.created_at LIMIT 1
+  )
+  WHERE EXISTS (SELECT 1 FROM goals g WHERE g.meeting_id = meetings.id);
+
+  -- 2) Para las que quedaron sueltas hace falta un proyecto 'General' por
+  --    empresa. 'general' es justo la carpeta donde migrateLegacyLayout()
+  --    ya deja los archivos que se escribieron antes de los proyectos.
+  INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at, kind, slug, stack, brief)
+  SELECT 'goal-general-' || c.id, c.id, NULL, 'General',
+         'Reuniones y trabajo anteriores a la organización por proyecto.',
+         'active', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'proyecto', 'general', '', ''
+  FROM companies c
+  WHERE EXISTS (SELECT 1 FROM meetings m WHERE m.company_id = c.id AND m.goal_id IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.company_id = c.id AND g.slug = 'general');
+
+  -- 3) Y ahí van las huérfanas. Ninguna reunión queda sin padre.
+  UPDATE meetings SET goal_id = (
+    SELECT g.id FROM goals g WHERE g.company_id = meetings.company_id AND g.slug = 'general' LIMIT 1
+  )
+  WHERE goal_id IS NULL AND company_id IS NOT NULL;
+  `,
+
+  // v9: el nicho de la empresa (web, automatizacion, movil-rn, android). Define
+  // qué playbook recibe el equipo cuando trabaja y con qué marco de dispositivo
+  // se previsualiza. Los proyectos heredan el de su empresa.
+  //
+  `
+  ALTER TABLE companies ADD COLUMN stack TEXT NOT NULL DEFAULT 'web';
+  `,
+
+  // v10: el catálogo pasa a ser solo de estudios técnicos, así que las empresas
+  // de otros rubros se ARCHIVAN: salen del listado pero su equipo, sus reuniones
+  // y su workspace quedan intactos y se restauran desde "Archivadas".
+  `
+  UPDATE companies SET status = 'archived'
+  WHERE status = 'active'
+    AND industry NOT IN (
+      'Tecnología', 'Desarrollo web', 'Automatizaciones',
+      'Apps móviles (React Native)', 'Apps Android nativas'
+    );
+  `,
+
+  // v11: cada entregable declara QUÉ ARCHIVO produce.
+  //
+  // Sin esto el equipo repartía por disciplina — "definir la paleta",
+  // "implementar el parallax", "revisar prolijidad" — y esas tareas no
+  // mapean a ningún archivo propio: el motor exige producir uno para dar la
+  // tarea por hecha, así que agotaban los 12 pasos y quedaban bloqueadas.
+  // Con el archivo declarado, el reparto queda anclado al esquema real del
+  // proyecto y cada quien sabe qué le toca escribir.
+  `
+  ALTER TABLE tasks ADD COLUMN target_file TEXT;
   `
 ];
 

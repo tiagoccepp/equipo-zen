@@ -15,7 +15,9 @@ import { ReflectionRunner } from './reflection.js';
 import { registerSession, unregisterSession } from './priority.js';
 import { logEvent } from './session-log.js';
 import { AgentRouter } from './router.js';
-import { renderWorkSection } from './workforce.js';
+import { inferirArchivo } from './inferir-archivo.js';
+import { disponible as disenoDisponible, esAgenteDeDiseno } from './openpencil.js';
+import { listProjectFilesFor, renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { CaptureTranscriberRuntime } from './transcriber.js';
@@ -73,8 +75,18 @@ export class MeetingSession {
     this.keyRing = keyRingInstance;
     this.store = store;
 
+    // ¿El usuario quiere oír a los agentes? Solo en modo llamada. Arranca en
+    // false: una reunión por texto no sintetiza una sola palabra.
+    this.voiceEnabled = false;
+    // ¿El equipo arranca a trabajar apenas se reparte una tarea, sin esperar
+    // el cierre de la reunión? Sí por defecto — es el comportamiento de una
+    // empresa de verdad. El usuario lo puede apagar desde la barra.
+    this.autoWork = process.env.AUTO_WORK !== '0';
     // Se inicializan en initMeeting() cuando llega el hello del cliente.
     this.company = null;
+    // El proyecto en el que vive esta reunión: acota el contexto que reciben
+    // los agentes a UN proyecto en vez de a toda la empresa.
+    this.project = null;
     this.meeting = null;
     this.memory = null;
     this.sessionAgents = [];
@@ -109,7 +121,7 @@ export class MeetingSession {
     return new LiveAgentRuntime(agent, this.keyRing, this.memory, this);
   }
 
-  initMeeting(requestedMeetingId = null, requestedCompanyId = null) {
+  initMeeting(requestedMeetingId = null, requestedCompanyId = null, requestedGoalId = null) {
     // Resolver la empresa: la pedida, o la más activa como fallback.
     this.company = (requestedCompanyId ? this.store.getCompany(requestedCompanyId) : null)
       || this.store.listCompanies()[0]
@@ -123,10 +135,25 @@ export class MeetingSession {
     if (meeting && activeSessionsByMeeting.has(meeting.id)) {
       meeting = null;
     }
+    // Una reunión de OTRO proyecto no se reanuda acá: si se reanudaba, todo lo
+    // que se hablara terminaba en un proyecto distinto del que estás mirando.
+    if (meeting && requestedGoalId && meeting.goal_id && meeting.goal_id !== requestedGoalId) {
+      meeting = null;
+    }
     const resumed = Boolean(meeting);
     if (!meeting) {
-      meeting = this.store.createMeeting({ companyId: this.company.id });
+      meeting = this.store.createMeeting({ companyId: this.company.id, goalId: requestedGoalId || null });
+    } else if (requestedGoalId && !meeting.goal_id) {
+      // Reunión anterior a los proyectos (o creada sin uno): la adopta el
+      // proyecto en el que estás. Sin esto quedaba huérfana para siempre y el
+      // trabajo se iba a un proyecto fantasma con nombre de fecha.
+      this.store.attachMeetingToGoal(meeting.id, requestedGoalId);
+      meeting = this.store.getMeeting(meeting.id);
     }
+
+    // La reunión vive DENTRO de un proyecto: es lo que acota el contexto que
+    // reciben los agentes.
+    this.project = meeting.goal_id ? this.store.getGoal(meeting.goal_id) : null;
 
     this.meeting = meeting;
     activeSessionsByMeeting.set(meeting.id, this);
@@ -187,6 +214,9 @@ export class MeetingSession {
       meetingId: meeting.id,
       resumed,
       company: this.company,
+      project: this.project
+        ? { id: this.project.id, title: this.project.title, slug: this.project.slug, brief: this.project.brief, stack: this.project.stack }
+        : null,
       agents: this.publicAgents(),
       scenario: { name: this.company.name, text: meeting.scenario_text },
       turns: restoredTurns,
@@ -228,7 +258,9 @@ export class MeetingSession {
       scenario: this.company
         ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
         : null,
-      workSection: renderWorkSection(this.store, this.company?.id),
+      workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
+      // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
+      stack: this.project?.stack || this.company?.stack || null,
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
     };
   }
@@ -264,7 +296,9 @@ export class MeetingSession {
       scenario: this.company
         ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
         : null,
-      workSection: renderWorkSection(this.store, this.company?.id),
+      workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
+      // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
+      stack: this.project?.stack || this.company?.stack || null,
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
     };
   }
@@ -334,7 +368,7 @@ export class MeetingSession {
 
     if (message.type === 'hello') {
       if (!this.meeting) {
-        this.initMeeting(message.meetingId || null, message.companyId || null);
+        this.initMeeting(message.meetingId || null, message.companyId || null, message.goalId || null);
       }
       return;
     }
@@ -452,9 +486,28 @@ export class MeetingSession {
         this.pendingUser = null;
       }
       const companyId = this.company?.id || null;
+      // La reunión nueva se abre en el MISMO proyecto: reiniciar no es salirse.
+      const goalId = this.project?.id || null;
       this.closeCurrentMeeting('user_reset');
       this.send({ type: 'meeting_reset' });
-      this.initMeeting(null, companyId);
+      this.initMeeting(null, companyId, goalId);
+      return;
+    }
+
+    if (message.type === 'set_auto_work') {
+      this.autoWork = Boolean(message.enabled);
+      this.logTelemetry('auto_work_mode', { enabled: this.autoWork });
+      this.send({ type: 'auto_work_changed', enabled: this.autoWork });
+      return;
+    }
+
+    if (message.type === 'set_voice') {
+      this.voiceEnabled = Boolean(message.enabled);
+      this.logTelemetry('voice_mode', { enabled: this.voiceEnabled });
+      if (!this.voiceEnabled) {
+        // Al salir de la llamada se corta lo que estuviera sonando.
+        this.gate.flush('voice_off');
+      }
       return;
     }
 
@@ -717,8 +770,100 @@ export class MeetingSession {
       return false;
     }
     const newTaskId = this.store.insertTask(this.meeting.id, agent.id, { text: texto });
-    agent.tasks.push({ id: newTaskId, text: texto, completed: false, createdAt: new Date().toISOString() });
+    const tarea = { id: newTaskId, text: texto, completed: false, createdAt: new Date().toISOString(), goalId: null };
+    agent.tasks.push(tarea);
+
+    // AUTO-ARRANQUE: la tarea entra a la cola en el momento en que se reparte,
+    // sin esperar a que el usuario cierre la reunión. Es lo que hace que el
+    // equipo se sienta una empresa y no un formulario: se hablan, se reparten
+    // y ya hay alguien produciendo mientras la charla sigue.
+    if (this.autoWork && this.project) {
+      // El archivo se infiere acá y no se deja en null: una tarea sin archivo
+      // toma el proyecto ENTERO en exclusiva y el equipo vuelve a trabajar de
+      // a uno, justo lo contrario de lo que busca el arranque automático.
+      const clase = this.claseDeTareaPara(agent, texto);
+      this.store.assignTaskToGoal(newTaskId, this.project.id, {
+        kind: clase.kind,
+        targetFile: clase.kind === 'entregable'
+          ? (clase.archivo || this.elegirArchivoPara(texto))
+          : null,
+        phase: this.elegirOlaPara()
+      });
+      tarea.goalId = this.project.id;
+      this.send({
+        type: 'work_event',
+        kind: 'task_queued',
+        taskId: newTaskId,
+        agentId: agent.id,
+        agentName: agent.name,
+        text: texto
+      });
+      this.logTelemetry('task_auto_queued', { agentId: agent.id, taskId: newTaskId });
+      logEvent('tarea_encolada_en_vivo', {
+        meetingId: this.meeting?.id,
+        proyecto: this.project.title,
+        agente: agent.name,
+        tarea: texto
+      });
+    }
     return true;
+  }
+
+  // Qué archivo le toca a una tarea repartida en vivo. Mira lo que ya existe
+  // en el proyecto y lo que ya tiene dueño, para no mandar a dos a lo mismo.
+  // Qué ola le toca. En un proyecto VACÍO el primero que entra define el
+  // contrato (paleta, estructura) y trabaja solo: los demás lo consumen. Con
+  // el proyecto ya arrancado, todos van juntos.
+  elegirOlaPara() {
+    if (!this.project) {
+      return 2;
+    }
+    const hayArchivos = listProjectFilesFor(this.company.id, this.project.slug).length > 0;
+    if (hayArchivos) {
+      return 2;
+    }
+    const yaHayPrimera = this.store.tasksForGoal(this.project.id)
+      .some((t) => t.phase === 1 && t.status !== 'blocked');
+    return yaHayPrimera ? 2 : 1;
+  }
+
+  // Qué CLASE de tarea es, según el oficio de quien la recibe. Sin esto todo se
+  // encolaba como 'entregable' y las tareas que no producen archivos —el QA que
+  // revisa, el de talento que refina, la diseñadora que diseña en su
+  // herramienta— agotaban los pasos buscando un archivo que escribir y quedaban
+  // trabadas. Pasó tal cual en FASA.
+  claseDeTareaPara(agent, texto) {
+    if (agent.role === 'contratista') {
+      return { kind: 'refinamiento', archivo: null };
+    }
+    const oficio = `${agent.title} ${(agent.domains || []).join(' ')}`.toLowerCase();
+    const pide = String(texto || '').toLowerCase();
+
+    // QA: revisa lo que otros entregan, y esa revisión la crea el motor SOLO
+    // cuando hay un entregable terminado (requestReview). Una tarea de revisión
+    // repartida en la reunión no tiene todavía qué revisar: si se encola como
+    // 'revision' muere al instante con "sin tarea original". Queda ANOTADA.
+    if (/\bqa\b|calidad|testing/.test(oficio) && !/escrib|document|plan de prueba/.test(pide)) {
+      return { kind: 'seguimiento', archivo: null };
+    }
+
+    // Diseño: su entregable es el archivo de diseño, no código. Con OpenPencil
+    // disponible diseña ahí; sin él, cae a los tokens del nicho.
+    if (esAgenteDeDiseno(agent)) {
+      return { kind: 'entregable', archivo: disenoDisponible() ? 'diseno.op' : null };
+    }
+
+    return { kind: 'entregable', archivo: null };
+  }
+
+  elegirArchivoPara(texto, tomadosExtra = null) {
+    if (!this.project) {
+      return null;
+    }
+    const tomados = tomadosExtra
+      || new Set(this.store.fileOwnersForGoal(this.project.id).map((d) => d.file));
+    const existentes = listProjectFilesFor(this.company.id, this.project.slug);
+    return inferirArchivo(texto, this.project.stack, existentes, tomados);
   }
 
   processAgentTaskCommands(agentId, text) {
@@ -817,6 +962,25 @@ export class MeetingSession {
     const verb = /\b(crear|cre[aá]|armar|arm[aá]|hacer|hac[eé]|construir|desarrollar|disen(ar|[aá])|escribir|escrib[ií]|redactar|redact[aá]|preparar|prepar[aá]|generar|maquetar|programar|implementar|documentar|montar)\b/;
     const object = /\b(pagina|web|sitio|landing|portada|html|css|app|prototipo|mockup|documento|informe|reporte|plan|propuesta|presupuesto|guion|articulo|texto|manual|instructivo|checklist|planilla|tablero|dashboard|catalogo|presentacion|borrador|resumen escrito)\b/;
     return verb.test(normalized) && object.test(normalized);
+  }
+
+  // Archivo destino de un entregable, saneado. Devuelve null si no es una ruta
+  // usable: mejor sin archivo que con uno inventado tipo "Figma" o "/etc/passwd".
+  static normalizeTargetFile(value) {
+    const raw = String(value || '').trim().replace(/^\.\//, '');
+    if (!raw || raw.length > 120) {
+      return null;
+    }
+    // Nada de rutas absolutas, escapes ni ocultos: el sandbox lo rechazaría
+    // después, pero acá el pedido ni siquiera llega a crearse mal.
+    if (raw.startsWith('/') || raw.includes('..') || raw.split('/').some((p) => p.startsWith('.'))) {
+      return null;
+    }
+    // Tiene que parecer un archivo con extensión, no una herramienta ni una idea.
+    if (!/^[\w./-]+\.[a-z0-9]{2,6}$/i.test(raw)) {
+      return null;
+    }
+    return raw;
   }
 
   // ¿El mensaje parece a medio terminar? (termina en conector o coma) →
@@ -1258,17 +1422,39 @@ export class MeetingSession {
     // llamada al modelo, para que responda en el acto.
     const aTrabajar = pendientes;
 
-    const titulo = (this.meeting?.scenario_text || '').trim().slice(0, 110)
-      || `Trabajo de ${new Date().toLocaleDateString('es-AR')}`;
-    const goal = this.store.createGoal({
+    // El trabajo va al proyecto en el que estamos, no a uno nuevo: la reunión
+    // vive DENTRO del proyecto. Solo si por algún motivo no hay (reunión vieja
+    // sin migrar) se crea uno al vuelo.
+    const goal = this.project || this.store.createGoal({
       companyId: this.company.id,
       meetingId: this.meeting.id,
-      title: titulo,
+      title: (this.meeting?.scenario_text || '').trim().slice(0, 110)
+        || `Trabajo de ${new Date().toLocaleDateString('es-AR')}`,
       description: 'Arrancado a mano desde la reunión, con lo que el equipo ya tenía asignado.'
     });
 
+    // El proyecto se queda con el pedido del usuario si todavía no tenía: es lo
+    // que se ve en su tarjeta y lo que da contexto a quien trabaje después.
+    if (!goal.brief) {
+      const pedido = this.store.userRequestForGoal(goal.id).join(' ').trim();
+      if (pedido) {
+        this.store.updateProject(goal.id, { brief: pedido.slice(0, 1000) });
+      }
+    }
+
+    // Cada uno con SU archivo: repartir sin archivos hacía que el botón de
+    // "poner a trabajar" cancelara el paralelismo que gana el cierre formal.
+    const tomados = new Set(this.store.fileOwnersForGoal(goal.id).map((d) => d.file));
     for (const { task } of aTrabajar) {
-      this.store.assignTaskToGoal(task.id, goal.id, { kind: 'entregable' });
+      const archivo = this.elegirArchivoPara(task.text, tomados);
+      if (archivo) {
+        tomados.add(archivo);
+      }
+      this.store.assignTaskToGoal(task.id, goal.id, {
+        kind: 'entregable',
+        targetFile: archivo,
+        phase: this.elegirOlaPara()
+      });
       task.goalId = goal.id;
     }
 
@@ -1312,11 +1498,17 @@ export class MeetingSession {
         continue;
       }
       const palabras = new Set(String(task.text).toLowerCase().split(/[^\p{L}0-9]+/u).filter((w) => w.length > 3));
+      // Empate en 0 = el pedido no nombró ninguna tecnología ("la landing del
+      // catálogo de plantas"), que es como habla cualquiera. Antes se la quedaba
+      // la CEO y terminaba escribiendo el archivo: exactamente lo que esta
+      // función existe para evitar. Sin afinidad, gana el que menos cargado
+      // está — pero se va igual de las manos de la jefa.
+      const carga = (agent) => (agent.tasks || []).filter((item) => !item.completed).length;
       const elegido = candidatos
         .map((agent) => ({ agent, afinidad: agent.domains.filter((d) => palabras.has(String(d).toLowerCase())).length }))
-        .sort((a, b) => b.afinidad - a.afinidad)[0];
-      if (!elegido || elegido.afinidad === 0) {
-        continue; // Nadie encaja mejor: se la queda.
+        .sort((a, b) => b.afinidad - a.afinidad || carga(a.agent) - carga(b.agent))[0];
+      if (!elegido) {
+        continue;
       }
       this.store.reassignTask(task.id, elegido.agent.id);
       ceo.tasks = ceo.tasks.filter((item) => item.id !== task.id);
@@ -1363,9 +1555,19 @@ export class MeetingSession {
       transcript || '(vacía)',
       '',
       'CRITERIO IMPORTANTE — no inventes trabajo:',
-      '- "entregable" = hay que PRODUCIR algo concreto y revisable (una página, un documento, un plan escrito, un análisis).',
-      '- "decision" = un acuerdo o definición que ya quedó tomada en la reunión; no hay nada que construir.',
+      '- "entregable" = hay que ESCRIBIR UN ARCHIVO concreto del proyecto. Poné cuál en "file".',
+      '- "decision" = un acuerdo o definición que ya quedó tomada; no hay archivo que escribir.',
       '- "seguimiento" = algo para retomar más adelante o que depende de terceros; tampoco se construye ahora.',
+      '',
+      'REGLA DURA SOBRE LOS ARCHIVOS (esto es lo que hace que el trabajo llegue a algún lado):',
+      'El equipo SOLO produce archivos dentro de la carpeta del proyecto. No existe Figma, ni Photoshop,',
+      'ni Notion, ni ninguna herramienta externa: si una tarea dice "prototipo en Figma" o "mockup en X",',
+      'está mal planteada — reescribila como el archivo que hay que escribir.',
+      'Cada "entregable" nombra UN archivo y ese archivo tiene UN dueño. Dos personas no pueden tener',
+      'el mismo archivo: si el trabajo cae sobre el mismo archivo, es UNA sola tarea de UNA sola persona.',
+      'Las tareas que NO son un archivo — "definir la paleta", "elegir la tipografía", "pensar el enfoque",',
+      '"implementar la animación de X" — no son entregables: o forman parte del archivo de alguien, o son "decision".',
+      'Pensá primero qué archivos va a tener el proyecto y recién después quién escribe cada uno.',
       '- Si la reunión fue de alineación, presentación, dudas o charla, "producesWork" es false y NO se abre ningún proyecto.',
       'Ejemplos: "crear la página web institucional" → entregable. "escribir el plan de lanzamiento" → entregable.',
       '"quedamos en que el foco es retail" → decision. "revisar cómo viene el mercado el mes que viene" → seguimiento.',
@@ -1374,7 +1576,7 @@ export class MeetingSession {
       '',
       'Devolvé SOLO un JSON válido:',
       '{"producesWork":true|false,',
-      ' "tasks":[{"n":1,"kind":"entregable|decision|seguimiento"}],',
+      ' "tasks":[{"n":1,"kind":"entregable|decision|seguimiento","file":"ruta/del/archivo.html — solo si es entregable"}],',
       ' "goalTitle":"título corto del proyecto (o del acuerdo, si no hay trabajo)",',
       ' "goalDescription":"1-2 oraciones: qué se busca y por qué",',
       ' "spokenSummary":"tu repaso HABLADO en 2-5 oraciones, cálido y claro: qué quedó a cargo de cada uno o, si no hay nada que producir, qué se acordó; terminá preguntando si está bien así",',
@@ -1405,11 +1607,22 @@ export class MeetingSession {
     // Clasificación por número de tarea → tipo. Sin plan del modelo, se
     // asume entregable (comportamiento anterior) solo si hay tareas.
     const kindByIndex = new Map();
+    const fileByIndex = new Map();
+    // Un archivo, un dueño: si el plan pone a dos personas sobre el mismo
+    // archivo, la segunda pierde el suyo (se resuelve editando lo que dejó la
+    // primera, no escribiendo en paralelo).
+    const archivosTomados = new Set();
     for (const item of Array.isArray(plan?.tasks) ? plan.tasks : []) {
       const n = Number(item?.n);
       const kind = ['entregable', 'decision', 'seguimiento'].includes(item?.kind) ? item.kind : 'entregable';
-      if (Number.isFinite(n)) {
-        kindByIndex.set(n, kind);
+      if (!Number.isFinite(n)) {
+        continue;
+      }
+      kindByIndex.set(n, kind);
+      const file = MeetingSession.normalizeTargetFile(item?.file);
+      if (kind === 'entregable' && file && !archivosTomados.has(file)) {
+        archivosTomados.add(file);
+        fileByIndex.set(n, file);
       }
     }
     let cursor = 0;
@@ -1422,7 +1635,7 @@ export class MeetingSession {
         // construye aunque el modelo la haya rotulado como acuerdo. Negarse a
         // hacer lo que se pidió es peor que producir de más.
         const kind = proposed !== 'entregable' && MeetingSession.looksLikeDeliverable(text) ? 'entregable' : proposed;
-        return { text, kind };
+        return { text, kind, file: kind === 'entregable' ? (fileByIndex.get(cursor) || null) : null };
       })
     }));
 
@@ -1449,6 +1662,8 @@ export class MeetingSession {
       goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
       // La clasificación YA corregida: es la que se aplica al confirmar.
       kinds: classified.flatMap((a) => a.tasks).map((task, index) => [index + 1, task.kind]),
+      // Qué archivo escribe cada entregable: es el esquema del proyecto.
+      files: classified.flatMap((a) => a.tasks).map((task, index) => [index + 1, task.file]),
       refuerzos
     };
 
@@ -1485,17 +1700,21 @@ export class MeetingSession {
       return;
     }
 
-    // Sin nada que producir, la reunión deja un ACUERDO registrado (queda en
-    // el tablero como historia de la empresa) y nadie se pone a "trabajar".
-    const goal = this.store.createGoal({
-      companyId: this.company.id,
-      meetingId: this.meeting.id,
-      title: pending.goalTitle,
-      description: pending.goalDescription,
-      kind: pending.producesWork ? 'proyecto' : 'acuerdo'
-    });
+    // El trabajo entra al proyecto donde ocurrió la reunión. Los ACUERDOS
+    // (reuniones que no producen entregables) sí siguen creando su registro
+    // aparte: son historia de la empresa, no trabajo del proyecto.
+    const goal = (pending.producesWork && this.project)
+      ? this.project
+      : this.store.createGoal({
+        companyId: this.company.id,
+        meetingId: this.meeting.id,
+        title: pending.goalTitle,
+        description: pending.goalDescription,
+        kind: pending.producesWork ? 'proyecto' : 'acuerdo'
+      });
 
     const kindByIndex = new Map(pending.kinds || []);
+    const fileByIndex = new Map(pending.files || []);
     let cursor = 0;
     let taskCount = 0;
     for (const agent of this.sessionAgents) {
@@ -1503,7 +1722,7 @@ export class MeetingSession {
         if (!task.completed) {
           cursor += 1;
           const kind = pending.producesWork ? (kindByIndex.get(cursor) || 'entregable') : 'decision';
-          this.store.assignTaskToGoal(task.id, goal.id, { kind });
+          this.store.assignTaskToGoal(task.id, goal.id, { kind, targetFile: fileByIndex.get(cursor) || null });
           if (kind === 'entregable') {
             taskCount += 1;
           }
@@ -1525,9 +1744,10 @@ export class MeetingSession {
 
     this.logTelemetry('meeting_confirmed_close', { goalId: goal.id, tasks: taskCount });
     const companyId = this.company.id;
+    const goalId = this.project?.id || null;
     this.closeCurrentMeeting('finished_to_work');
     this.send({ type: 'meeting_reset' });
-    this.initMeeting(null, companyId);
+    this.initMeeting(null, companyId, goalId);
   }
 
   // Habla sintética de un agente fuera del flujo de respuesta (p.ej. el

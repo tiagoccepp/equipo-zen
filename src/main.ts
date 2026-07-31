@@ -188,6 +188,48 @@ type WorkData = {
   workspaceUrl: string;
 };
 
+// Una tarjeta del listado de proyectos de la empresa. Los conteos los arma
+// SQL (store.listProjects), así que el listado no necesita traer las tareas.
+type Project = {
+  id: string;
+  company_id: string;
+  title: string;
+  description: string;
+  brief: string;
+  stack: string;
+  status: string;
+  slug: string;
+  kind: string;
+  created_at: string;
+  completed_at: string | null;
+  archived_at: string | null;
+  meeting_count: number;
+  task_count: number;
+  done_count: number;
+  last_run_at: string | null;
+  files?: WorkFile[];
+  url?: string;
+};
+
+// Qué hay disponible para correr los entregables móviles en un dispositivo
+// real. Si falta la herramienta viene `motivo` y el botón se muestra
+// deshabilitado con esa explicación, nunca con un error crudo.
+type DeviceStatus = {
+  android: { disponible: boolean; motivo: string; avds: string[]; dispositivos: string[]; arrancado?: boolean };
+  ios: { disponible: boolean; motivo: string; dispositivos: Array<{ udid: string; nombre: string; arrancado: boolean }>; arrancado?: boolean };
+};
+
+// La respuesta de /api/projects/:goalId, que es la vista de UN proyecto.
+type ProjectDetail = {
+  project: Project & { files: WorkFile[]; url: string; tasks?: WorkTask[] };
+  company: { id: string; name: string; emoji: string; color: string } | null;
+  team: WorkMember[];
+  meetings: Array<{ id: string; title: string | null; status: string; created_at: string; last_active_at: string; turn_count: number; summary: string | null }>;
+  tasks: WorkTask[];
+  runs: WorkRun[];
+  comments: Array<WorkComment & { taskId: string }>;
+};
+
 type WorkFeedItem = {
   key: string;
   at: number;
@@ -209,10 +251,13 @@ const TASK_KIND_LABEL: Record<string, string> = {
 
 type WsSection = 'meeting' | 'tasks' | 'projects' | 'org' | 'activity';
 
+// Secciones DE UN PROYECTO. 'projects' conserva el id por compatibilidad con
+// el shell y el polling, pero ya no lista proyectos: muestra el entregable de
+// este, que es el único que hay acá adentro.
 const WS_SECTIONS: Array<{ id: WsSection; label: string; tab: string; pane: string }> = [
   { id: 'meeting', label: 'Reunión', tab: 'tabMeeting', pane: 'meetingView' },
   { id: 'tasks', label: 'Tareas', tab: 'tabTasks', pane: 'tasksView' },
-  { id: 'projects', label: 'Proyectos', tab: 'tabProjects', pane: 'projectsView' },
+  { id: 'projects', label: 'Vista previa', tab: 'tabProjects', pane: 'projectsView' },
   { id: 'org', label: 'Organigrama', tab: 'tabOrg', pane: 'orgView' },
   { id: 'activity', label: 'Actividad', tab: 'tabActivity', pane: 'activityView' }
 ];
@@ -234,10 +279,18 @@ const REVIEW_LABEL: Record<string, string> = {
   cambios: 'Cambios pedidos'
 };
 
-const VIEWPORTS: Array<{ id: 'desktop' | 'tablet' | 'mobile'; label: string; width: string }> = [
+// Los dos móviles fijan ANCHO Y ALTO reales del dispositivo y se dibujan
+// dentro de un marco: así el responsive se ve de verdad, con su scroll propio,
+// en vez de un iframe angosto pero infinitamente alto.
+// 'emulador' no es una medida: es el dispositivo de verdad, transmitido
+// dentro de la app. Se ve su pantalla y se lo puede tocar.
+type ViewportId = 'desktop' | 'tablet' | 'iphone' | 'pixel' | 'emulador';
+
+const VIEWPORTS: Array<{ id: ViewportId; label: string; width: string; marco?: boolean }> = [
   { id: 'desktop', label: 'Escritorio', width: 'todo el ancho' },
   { id: 'tablet', label: 'Tablet', width: '820 px' },
-  { id: 'mobile', label: 'Móvil', width: '390 px' }
+  { id: 'iphone', label: 'iPhone', width: '390 × 844', marco: true },
+  { id: 'pixel', label: 'Pixel', width: '412 × 915', marco: true }
 ];
 
 type ClosingSummary = {
@@ -352,19 +405,27 @@ function saveSetupDismissed() {
   }
 }
 
-function loadStoredMeetingId(companyId: string): string | undefined {
+// La reunión guardada se indexa por PROYECTO, no por empresa. Cuando se
+// indexaba por empresa, entrar a un proyecto reanudaba la última reunión de
+// otro proyecto: el trabajo terminaba en un proyecto que no era el que estabas
+// mirando.
+function meetingStorageKey(companyId: string, goalId?: string) {
+  return `${MEETING_STORAGE_PREFIX}${companyId}${goalId ? `:${goalId}` : ''}`;
+}
+
+function loadStoredMeetingId(companyId: string, goalId?: string): string | undefined {
   if (!companyId) return undefined;
   try {
-    return window.localStorage.getItem(`${MEETING_STORAGE_PREFIX}${companyId}`) || undefined;
+    return window.localStorage.getItem(meetingStorageKey(companyId, goalId)) || undefined;
   } catch {
     return undefined;
   }
 }
 
-function saveStoredMeetingId(companyId: string, meetingId: string) {
+function saveStoredMeetingId(companyId: string, meetingId: string, goalId?: string) {
   if (!companyId) return;
   try {
-    window.localStorage.setItem(`${MEETING_STORAGE_PREFIX}${companyId}`, meetingId);
+    window.localStorage.setItem(meetingStorageKey(companyId, goalId), meetingId);
   } catch {
     // localStorage puede fallar en modo privado; la reunión sigue en memoria.
   }
@@ -900,7 +961,10 @@ let bargeConfirmed = false;
 const initialMicSettings = loadMicSettings();
 
 const state = {
-  view: 'home' as 'home' | 'workspace',
+  // Tres niveles: las simulaciones → los proyectos de una empresa → adentro
+  // de un proyecto. El proyecto es la unidad de trabajo: sus reuniones, sus
+  // tareas y su actividad viven ahí y en ningún otro lado.
+  view: 'home' as 'home' | 'company' | 'workspace',
   companies: [] as Company[],
   companiesLoading: false,
   companiesError: false,
@@ -919,6 +983,13 @@ const state = {
   creatingCompany: false,
   company: null as Company | null,
   companyId: loadLastCompanyId(),
+  // Proyectos de la empresa abierta + el que se está trabajando.
+  projects: [] as Project[],
+  projectsLoading: false,
+  projectsError: false,
+  creatingProject: false,
+  project: null as Project | null,
+  projectMeetings: [] as ProjectDetail['meetings'],
   mode: 'mock' as 'stream' | 'mock',
   sessionId: '',
   meetingId: '',
@@ -970,13 +1041,19 @@ const state = {
   workError: false,
   workActive: false,
   workEvents: [] as WorkFeedItem[],
+  // Quiénes están PRODUCIENDO en este instante (task_started sin su cierre).
+  // Alimenta el anillo de las esferas en la llamada y el punto del panel.
+  workingAgents: new Set<string>(),
   // Tablero de tareas: filtros por empleado y por estado.
   taskFilterAgent: '',
   taskFilterStatus: '',
   // Navegador integrado: proyecto y archivo abiertos + ancho simulado.
   projectId: '',
   projectFile: '',
-  projectViewport: 'desktop' as 'desktop' | 'tablet' | 'mobile',
+  projectViewport: 'desktop' as ViewportId,
+  // Estado del emulador/simulador, para saber si ofrecer el botón.
+  devices: null as DeviceStatus | null,
+  openingDevice: '',
   projectReloads: 0,
   // Web recién terminada esperando que el /work confirme dónde vive.
   pendingPreview: null as { taskId: string; path: string; agentName: string; at: number } | null,
@@ -999,7 +1076,7 @@ const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'stt.groq
 // Qué modelos ofrece cada proveedor (el servidor manda la lista del activo;
 // esto permite repintar al cambiar el selector sin ir y volver al servidor).
 const LLM_MODELS_BY_PROVIDER: Record<string, string[]> = {
-  minimax: ['MiniMax-M2', 'MiniMax-M2.1', 'MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M3'],
+  minimax: ['MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2'],
   deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro']
 };
 const SETTINGS_LANGUAGES: Array<{ value: string; label: string }> = [
@@ -1087,8 +1164,15 @@ function connect() {
     socket.send(JSON.stringify({
       type: 'hello',
       companyId: state.companyId || undefined,
-      meetingId: loadStoredMeetingId(state.companyId)
+      // La reunión se abre DENTRO del proyecto: es lo que acota el contexto
+      // que reciben los agentes.
+      goalId: state.projectId || undefined,
+      meetingId: loadStoredMeetingId(state.companyId, state.projectId)
     }));
+    // El servidor arranca sin voz: si estabas en la llamada, se re-declara.
+    if (state.callMode) {
+      socket.send(JSON.stringify({ type: 'set_voice', enabled: true }));
+    }
     if (state.recording) {
       // El servidor es nuevo: re-preparar el transcriptor y el ASR local.
       socket.send(JSON.stringify({ type: 'audio_prepare' }));
@@ -1148,8 +1232,10 @@ function resetMeetingLocalState() {
   transcriptReset();
 }
 
+// Entrar a una empresa ya NO abre una reunión: muestra sus proyectos. La
+// reunión vive adentro de uno, que es lo que le da contexto acotado al equipo.
 function enterCompany(companyId: string, seed?: Company | null) {
-  state.view = 'workspace';
+  state.view = 'company';
   state.companyId = companyId;
   if (seed) {
     state.company = seed;
@@ -1157,6 +1243,24 @@ function enterCompany(companyId: string, seed?: Company | null) {
     state.company = null;
   }
   saveLastCompanyId(companyId);
+  state.projects = [];
+  state.project = null;
+  state.projectsError = false;
+  closeSocketSilently();
+  syncWorkPolling();
+  markDirty('view', 'company', 'projects');
+  trace('company_entered', { companyId });
+  void loadProjects(companyId);
+}
+
+function enterProject(goalId: string, seed?: Project | null) {
+  const companyId = state.companyId;
+  if (!companyId) {
+    return;
+  }
+  state.view = 'workspace';
+  state.project = seed || state.projects.find((project) => project.id === goalId) || null;
+  state.projectId = goalId;
   resetMeetingLocalState();
   closeSocketSilently();
   // El estado de supervisión es por empresa: arranca limpio.
@@ -1166,11 +1270,11 @@ function enterCompany(companyId: string, seed?: Company | null) {
   state.workError = false;
   state.workActive = false;
   state.workEvents = [];
+  state.workingAgents.clear();
   state.closingSummary = null;
   state.endingMeeting = false;
   state.taskFilterAgent = '';
   state.taskFilterStatus = '';
-  state.projectId = '';
   state.projectFile = '';
   state.projectReloads = 0;
   state.pendingPreview = null;
@@ -1179,10 +1283,104 @@ function enterCompany(companyId: string, seed?: Company | null) {
   workHtmlCache.clear();
   syncWorkPolling();
   markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work', 'setup');
-  trace('company_entered', { companyId });
+  trace('project_entered', { companyId, goalId });
   // Puede haber levantado (o caído) la voz desde la última vez.
   void refreshSetupStatus();
+  void loadDeviceStatus();
   connect();
+}
+
+// Volver del proyecto al listado de proyectos de su empresa.
+function leaveToCompany() {
+  if (state.recording) {
+    stopVoiceCapture();
+  }
+  state.audio.stop();
+  closeSocketSilently();
+  closeModal('closeMeetingModal');
+  state.callMode = false;
+  const companyId = state.companyId;
+  if (!companyId) {
+    leaveToHome();
+    return;
+  }
+  state.view = 'company';
+  state.project = null;
+  state.projectId = '';
+  stopDeviceStream();
+  syncWorkPolling();
+  markDirty('view', 'call', 'projects');
+  trace('back_to_company', { companyId });
+  void loadProjects(companyId);
+}
+
+async function loadProjects(companyId: string) {
+  state.projectsLoading = true;
+  state.projectsError = false;
+  markDirty('projects');
+  try {
+    const data = await apiJson<{ company: Company; projects: Project[] }>(
+      `/api/companies/${encodeURIComponent(companyId)}/projects`
+    );
+    if (state.companyId !== companyId) return;
+    state.projects = data.projects;
+    if (data.company && !state.company) {
+      state.company = data.company;
+      markDirty('company');
+    }
+  } catch {
+    if (state.companyId === companyId) {
+      state.projectsError = true;
+    }
+  } finally {
+    if (state.companyId === companyId) {
+      state.projectsLoading = false;
+    }
+  }
+  markDirty('projects');
+}
+
+async function createProject(title: string, brief: string) {
+  const companyId = state.companyId;
+  if (!companyId || state.creatingProject) return;
+  state.creatingProject = true;
+  markDirty('projects');
+  try {
+    const { project } = await apiJson<{ project: Project }>(
+      `/api/companies/${encodeURIComponent(companyId)}/projects`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, brief }) }
+    );
+    closeModal('newProjectModal');
+    state.creatingProject = false;
+    enterProject(project.id, project);
+  } catch (error) {
+    state.creatingProject = false;
+    markDirty('projects');
+    upsertAlert('project-create', 'Proyectos', `No pude crear el proyecto: ${error instanceof Error ? error.message : 'error'}`, 'error', 6000);
+  }
+}
+
+// Borrar un proyecto se lleva sus reuniones, sus tareas y su carpeta. Por eso
+// el pedido de confirmación escribe el nombre, como el archivado de empresas.
+async function deleteProject(goalId: string) {
+  const project = state.projects.find((item) => item.id === goalId);
+  if (!project) return;
+  try {
+    const resultado = await apiJson<{ reuniones: number; tareas: number; carpetaBorrada: boolean }>(
+      `/api/projects/${encodeURIComponent(goalId)}`,
+      { method: 'DELETE' }
+    );
+    closeModal('deleteProjectModal');
+    state.projects = state.projects.filter((item) => item.id !== goalId);
+    markDirty('projects');
+    const partes = [`${resultado.reuniones} ${resultado.reuniones === 1 ? 'reunión' : 'reuniones'}`];
+    if (resultado.tareas) {
+      partes.push(`${resultado.tareas} ${resultado.tareas === 1 ? 'tarea' : 'tareas'}`);
+    }
+    upsertAlert('project-delete', 'Proyectos', `Borré "${project.title}" y ${partes.join(', ')}.`, 'ok', 5000);
+  } catch (error) {
+    upsertAlert('project-delete', 'Proyectos', `No pude borrar el proyecto: ${error instanceof Error ? error.message : 'error'}`, 'error', 6000);
+  }
 }
 
 function leaveToHome() {
@@ -1240,7 +1438,7 @@ async function handleServerMessage(message: MeetingMessage) {
       state.companyId = message.company.id;
       state.mode = message.mode === 'mock' || (!message.mode && !message.liveMode) ? 'mock' : 'stream';
       saveLastCompanyId(message.company.id);
-      saveStoredMeetingId(message.company.id, message.meetingId);
+      saveStoredMeetingId(message.company.id, message.meetingId, message.project?.id);
       trace('meeting_ready', {
         model: message.model,
         liveMode: message.liveMode,
@@ -1678,6 +1876,7 @@ type Region =
   | 'micTuning'
   | 'micMeter'
   | 'scenario'
+  | 'projects'
   | 'work';
 
 const dirtyRegions = new Set<Region>();
@@ -1716,13 +1915,24 @@ function byId<T extends HTMLElement>(id: string): T {
 const REGION_RENDERERS: Record<Region, () => void> = {
   view() {
     byId('viewHome').hidden = state.view !== 'home';
+    byId('viewCompany').hidden = state.view !== 'company';
     byId('viewWorkspace').hidden = state.view !== 'workspace';
-    document.title = state.view === 'workspace' && state.company
-      ? `${state.company.name} — Equipo`
-      : 'Equipo — Simulaciones';
+    document.title = state.view === 'workspace' && state.project
+      ? `${state.project.title} — Equipo`
+      : state.view === 'company' && state.company
+        ? `${state.company.name} — Equipo`
+        : 'Equipo — Simulaciones';
   },
   home() {
     byId('companiesGrid').innerHTML = renderCompanies();
+  },
+  projects() {
+    const company = state.company;
+    byId('cvTile').textContent = company?.emoji || '🏢';
+    byId('cvName').textContent = company?.name || 'Cargando…';
+    byId('cvIndustry').textContent = company?.industry || '';
+    byId('viewCompany').style.setProperty('--company-color', company?.color || 'var(--accent)');
+    byId('projectsGrid').innerHTML = renderProjectCards();
   },
   archived() {
     // El <details> es estático: solo se repinta su cuerpo, así abrirlo/cerrarlo
@@ -1739,9 +1949,11 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   },
   company() {
     const company = state.company;
+    // El título del workspace es el PROYECTO; la empresa queda de subtítulo,
+    // porque el contexto de trabajo ahora es el proyecto y no la empresa.
     byId('wsTile').textContent = company?.emoji || '🏢';
-    byId('wsName').textContent = company?.name || 'Cargando…';
-    byId('wsIndustry').textContent = company?.industry || '';
+    byId('wsName').textContent = state.project?.title || company?.name || 'Cargando…';
+    byId('wsIndustry').textContent = state.project ? (company?.name || '') : (company?.industry || '');
     byId('viewWorkspace').style.setProperty('--company-color', company?.color || 'var(--accent)');
     const badge = byId('modeBadge');
     badge.hidden = state.mode !== 'mock';
@@ -1990,6 +2202,9 @@ function enterCallMode(source: string) {
     return;
   }
   state.callMode = true;
+  // Recién ahora el servidor sintetiza voz. Fuera de la llamada no se le pide
+  // una sola palabra a Supertonic.
+  send({ type: 'set_voice', enabled: true });
   trace('call_mode_entered', { source, agents: callAgents().length });
   markDirty('call');
   // El foco arranca en "Volver al chat": la salida siempre está a un Tab (o a
@@ -2021,6 +2236,9 @@ function exitCallMode(source: string, options: { stopMic?: boolean } = {}) {
     return;
   }
   state.callMode = false;
+  send({ type: 'set_voice', enabled: false });
+  // Lo que quedara sonando se corta: salir de la llamada es salir del audio.
+  state.audio.stop();
   window.clearTimeout(callFpsTimer);
   callFpsTimer = 0;
   trace('call_mode_left', { source, stopMic: Boolean(options.stopMic) });
@@ -2252,6 +2470,9 @@ function syncCallView() {
   }
 
   field?.setSpeaking(state.speakingAgentId);
+  // El anillo de "está produciendo": lo que hace visible que el equipo sigue
+  // trabajando aunque nadie esté hablando.
+  field?.setWorking([...state.workingAgents]);
   field?.start();
 }
 
@@ -2334,10 +2555,35 @@ function mountShell() {
       </div>
     </div>
 
+    <div class="view view-company" id="viewCompany" hidden>
+      <div class="home-inner">
+        <header class="home-head">
+          <div class="home-head-top">
+            <button class="btn ghost back-btn" data-action="go-home" type="button">← Simulaciones</button>
+            <button class="btn ghost sm" data-action="open-settings" type="button" title="Claves, voz y transcripción">${gearIcon()}Ajustes</button>
+          </div>
+          <div class="cv-identity">
+            <span class="company-tile" id="cvTile" aria-hidden="true">🏢</span>
+            <div>
+              <h1 id="cvName">Cargando…</h1>
+              <p class="cv-industry" id="cvIndustry"></p>
+            </div>
+          </div>
+          <p class="lead">Cada proyecto es su propio mundo: sus reuniones, sus tareas y sus entregables. Entrá a uno para trabajar ahí adentro.</p>
+          <div class="cv-actions">
+            <button class="btn primary" data-action="new-project" type="button">+ Nuevo proyecto</button>
+            <button class="icon-btn" data-action="open-company-edit" type="button" aria-label="Editar empresa" title="Editar empresa">${pencilIcon()}</button>
+            <button class="icon-btn danger" data-action="archive-company" type="button" aria-label="Archivar empresa" title="Archivar empresa">${archiveIcon()}</button>
+          </div>
+        </header>
+        <section id="projectsGrid" class="projects-grid" aria-label="Proyectos de la empresa"></section>
+      </div>
+    </div>
+
     <div class="view view-workspace" id="viewWorkspace" hidden>
       <div class="ws-inner">
         <header class="wsbar">
-          <button class="btn ghost back-btn" data-action="go-home" type="button">← Simulaciones</button>
+          <button class="btn ghost back-btn" data-action="go-company" type="button">← Proyectos</button>
           <div class="ws-identity">
             <span class="company-tile sm" id="wsTile" aria-hidden="true">🏢</span>
             <div class="ws-titles">
@@ -2350,8 +2596,6 @@ function mountShell() {
             <div class="status" id="connectionStatus" role="status"><span aria-hidden="true"></span>Conectando…</div>
             <button class="btn ghost" data-action="open-meetings" type="button">Reuniones</button>
             <button class="icon-btn" data-action="open-settings" type="button" aria-label="Ajustes" title="Ajustes">${gearIcon()}</button>
-            <button class="icon-btn" data-action="open-company-edit" type="button" aria-label="Editar empresa" title="Editar empresa">${pencilIcon()}</button>
-            <button class="icon-btn danger" data-action="archive-company" type="button" aria-label="Archivar empresa" title="Archivar empresa">${archiveIcon()}</button>
           </div>
         </header>
 
@@ -2364,6 +2608,13 @@ function mountShell() {
             <button class="btn ghost sm" type="submit">Guardar</button>
           </form>
           <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
+          <!-- El equipo arranca solo apenas se reparte una tarea. Esto es el
+               freno de mano: si querés hablar sin que nadie se ponga a
+               producir, lo apagás. -->
+          <label class="auto-work" title="El equipo empieza a trabajar apenas se reparte una tarea, sin esperar a que cierres la reunión">
+            <input type="checkbox" id="autoWorkToggle" checked />
+            <span>Arrancan solos</span>
+          </label>
           <button class="btn sm" id="startWorkBtn" data-action="start-work" type="button" disabled>Forzar a trabajar</button>
           <button class="btn primary sm end-meeting-btn" id="endMeetingBtn" data-action="end-meeting" type="button" disabled title="La CEO repasa lo asignado y, si confirmás, el equipo se pone a trabajar de verdad">Finalizar reunión</button>
         </div>
@@ -2451,11 +2702,11 @@ function mountShell() {
             </section>
 
             <section class="ws-pane projects-pane" id="projectsView" role="tabpanel" aria-labelledby="tabProjects" hidden>
-              <h2 class="sr-only">Proyectos y navegador integrado</h2>
+              <h2 class="sr-only">Entregable del proyecto</h2>
               <div class="projects-layout">
                 <aside class="projects-side" aria-labelledby="projectsSideTitle">
                   <div class="work-col-head">
-                    <h3 id="projectsSideTitle">Proyectos</h3>
+                    <h3 id="projectsSideTitle">Archivos</h3>
                     <a class="btn ghost sm" id="workspaceLink" href="#" target="_blank" rel="noopener" hidden>Carpeta ↗</a>
                   </div>
                   <div id="projectsList" class="projects-list"></div>
@@ -2464,8 +2715,27 @@ function mountShell() {
                   <h3 class="sr-only" id="browserTitle">Navegador integrado</h3>
                   <div class="browser-chrome" id="browserChrome"></div>
                   <div class="browser-stage" id="browserStage" data-viewport="desktop">
-                    <iframe class="browser-frame" id="browserFrame" title="Vista previa del proyecto" sandbox="allow-same-origin" hidden></iframe>
+                    <!-- allow-scripts SIN allow-same-origin: los entregables
+                         necesitan que su JS corra (acordeones, pestañas,
+                         formularios), pero el marco queda en un origen opaco y
+                         no puede tocar la app que lo contiene. Con los dos
+                         permisos juntos, la página podría sacarse el sandbox
+                         sola. Antes tenía solo allow-same-origin, así que
+                         NADA interactivo funcionaba en la vista previa. -->
+                    <iframe class="browser-frame" id="browserFrame" title="Vista previa del proyecto" sandbox="allow-scripts allow-forms allow-popups" hidden></iframe>
                     <pre class="browser-text" id="browserText" tabindex="0" hidden></pre>
+                    <!-- El emulador, DENTRO de la app: la pantalla del
+                         dispositivo llega como PNG y los clics vuelven como
+                         toques reales. No hace falta abrir otra ventana. -->
+                    <div class="device-live" id="deviceLive" hidden>
+                      <img class="device-screen" id="deviceScreen" alt="Pantalla del dispositivo" />
+                      <div class="device-keys" role="group" aria-label="Botones del dispositivo">
+                        <button class="icon-btn sm" type="button" data-action="device-key" data-key="atras" title="Atrás">◁</button>
+                        <button class="icon-btn sm" type="button" data-action="device-key" data-key="inicio" title="Inicio">○</button>
+                        <button class="icon-btn sm" type="button" data-action="device-key" data-key="recientes" title="Recientes">□</button>
+                      </div>
+                      <p class="device-hint" id="deviceHint"></p>
+                    </div>
                     <div class="browser-empty" id="browserEmpty"></div>
                   </div>
                 </section>
@@ -2588,6 +2858,50 @@ function mountShell() {
             <button type="submit" class="btn primary">Crear empresa</button>
           </footer>
         </form>
+      </section>
+    </div>
+
+    <div class="modal center" id="newProjectModal">
+      <div class="modal-backdrop" data-action="close-new-project"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="newProjectTitle">
+        <header class="modal-head">
+          <h2 id="newProjectTitle">Nuevo proyecto</h2>
+          <button class="icon-btn" data-action="close-new-project" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <form id="newProjectForm" class="modal-form">
+          <div class="modal-body">
+            <div class="form-field">
+              <label for="newProjectName">Nombre del proyecto</label>
+              <input type="text" id="newProjectName" class="form-control" maxlength="120" required
+                placeholder="Landing del restaurante" />
+            </div>
+            <div class="form-field">
+              <label for="newProjectBrief">¿Qué querés lograr?</label>
+              <textarea id="newProjectBrief" class="form-control" maxlength="4000" rows="4"
+                placeholder="Contalo con tus palabras: qué tiene que hacer, para quién es, qué sensación querés que deje. De lo técnico se encarga el equipo."></textarea>
+              <p class="hint">Esto es lo que va a leer el equipo antes de decidir cómo construirlo. No hace falta que sepas de tecnología.</p>
+            </div>
+          </div>
+          <footer class="modal-foot">
+            <button type="button" class="btn ghost" data-action="close-new-project">Cancelar</button>
+            <button type="submit" class="btn primary" id="newProjectSubmit">Crear proyecto</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal center" id="deleteProjectModal">
+      <div class="modal-backdrop" data-action="close-delete-project"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="deleteProjectTitle">
+        <header class="modal-head">
+          <h2 id="deleteProjectTitle">Eliminar proyecto</h2>
+          <button class="icon-btn" data-action="close-delete-project" type="button" aria-label="Cerrar">${closeIcon()}</button>
+        </header>
+        <div class="modal-body" id="deleteProjectBody"></div>
+        <footer class="modal-foot">
+          <button type="button" class="btn ghost" data-action="close-delete-project">Cancelar</button>
+          <button type="button" class="btn danger" data-action="confirm-delete-project">Eliminar todo</button>
+        </footer>
       </section>
     </div>
 
@@ -2908,9 +3222,42 @@ function handleDelegatedClick(event: Event) {
       break;
     }
 
-    // ── Workspace: empresa ──
+    // ── Proyectos ──
     case 'go-home':
       leaveToHome();
+      break;
+    case 'go-company':
+      leaveToCompany();
+      break;
+    case 'projects-retry':
+      if (state.companyId) {
+        void loadProjects(state.companyId);
+      }
+      break;
+    case 'open-project':
+      if (target.dataset.goalId) {
+        enterProject(target.dataset.goalId);
+      }
+      break;
+    case 'new-project':
+      openModal('newProjectModal');
+      window.setTimeout(() => byId<HTMLInputElement>('newProjectName').focus(), 60);
+      break;
+    case 'close-new-project':
+      closeModal('newProjectModal');
+      break;
+    case 'ask-delete-project':
+      if (target.dataset.goalId) {
+        openDeleteProjectModal(target.dataset.goalId);
+      }
+      break;
+    case 'close-delete-project':
+      closeModal('deleteProjectModal');
+      break;
+    case 'confirm-delete-project':
+      if (pendingProjectDelete) {
+        void deleteProject(pendingProjectDelete);
+      }
       break;
     case 'open-company-edit':
       openCompanyEditModal();
@@ -3000,6 +3347,10 @@ function handleDelegatedClick(event: Event) {
     case 'select-project':
       selectProject(target.dataset.goalId || '', target.dataset.filePath || '');
       break;
+    case 'select-file':
+      state.projectFile = target.dataset.file || '';
+      markDirty('work');
+      break;
     case 'open-preview':
       dismissAlert(target.dataset.alertId || '');
       selectProject(target.dataset.goalId || '', target.dataset.filePath || '');
@@ -3010,10 +3361,18 @@ function handleDelegatedClick(event: Event) {
       projectTextCache.clear();
       markDirty('work');
       break;
+    case 'device-key':
+      void sendDeviceInput({ type: 'key', key: target.dataset.key || 'inicio' });
+      break;
+    case 'open-in-device':
+      void openInDevice(target.dataset.platform === 'ios' ? 'ios' : 'android');
+      break;
     case 'browser-viewport': {
       const viewport = target.dataset.viewport;
-      if (viewport === 'desktop' || viewport === 'tablet' || viewport === 'mobile') {
-        state.projectViewport = viewport;
+      // 'emulador' no está en VIEWPORTS (se agrega solo si hay un dispositivo
+      // encendido), así que se acepta aparte.
+      if (viewport === 'emulador' || VIEWPORTS.some((v) => v.id === viewport)) {
+        state.projectViewport = viewport as ViewportId;
         markDirty('work');
       }
       break;
@@ -3170,7 +3529,7 @@ function handleDelegatedClick(event: Event) {
     case 'resume-meeting': {
       const meetingId = target.dataset.meetingId;
       if (meetingId && state.companyId) {
-        saveStoredMeetingId(state.companyId, meetingId);
+        saveStoredMeetingId(state.companyId, meetingId, state.projectId);
         closeModal('meetingsModal');
         resetMeetingLocalState();
         markDirty('agents', 'route', 'keys', 'voice', 'call', 'scenario');
@@ -3222,6 +3581,16 @@ function handleDelegatedSubmit(event: Event) {
     return;
   }
 
+  if (form.id === 'newProjectForm') {
+    event.preventDefault();
+    const title = byId<HTMLInputElement>('newProjectName').value.trim();
+    const brief = byId<HTMLTextAreaElement>('newProjectBrief').value.trim();
+    if (title) {
+      void createProject(title, brief);
+    }
+    return;
+  }
+
   if (form.id === 'settingsForm') {
     event.preventDefault();
     void saveSettings();
@@ -3245,6 +3614,15 @@ function handleDelegatedChange(event: Event) {
   if (checkbox.id === 'browserFileSelect') {
     state.projectFile = (checkbox as unknown as HTMLSelectElement).value;
     markDirty('work');
+    return;
+  }
+  if (checkbox.id === 'autoWorkToggle') {
+    send({ type: 'set_auto_work', enabled: checkbox.checked });
+    upsertAlert('auto-work', 'Equipo',
+      checkbox.checked
+        ? 'El equipo arranca solo apenas se reparta una tarea.'
+        : 'El equipo espera: nadie arranca hasta que lo pidas.',
+      'ok', 3000);
     return;
   }
   if (checkbox.id === 'taskFilterAgent' || checkbox.id === 'taskFilterStatus') {
@@ -4039,16 +4417,22 @@ async function openMemoryDrawer(agentId: string) {
 // ── Drawer de reuniones (historial de la empresa) ───────────────────────
 
 async function openMeetingsDrawer() {
-  byId('meetingsTitle').textContent = state.company ? `Reuniones de ${state.company.name}` : 'Reuniones';
+  // Adentro de un proyecto se listan SOLO sus reuniones: mezclar las de otros
+  // proyectos era justo lo que hacía difícil saber sobre qué se está trabajando.
+  byId('meetingsTitle').textContent = state.project
+    ? `Reuniones de ${state.project.title}`
+    : state.company ? `Reuniones de ${state.company.name}` : 'Reuniones';
   openModal('meetingsModal');
   const list = byId('meetingsList');
   byId('meetingsPurge').innerHTML = '';
   list.innerHTML = '<p class="muted">Cargando reuniones…</p>';
   try {
-    const query = state.companyId ? `?companyId=${encodeURIComponent(state.companyId)}` : '';
+    const query = state.projectId
+      ? `?goalId=${encodeURIComponent(state.projectId)}`
+      : state.companyId ? `?companyId=${encodeURIComponent(state.companyId)}` : '';
     const data = await apiJson<{ meetings: MeetingListItem[] }>(`/api/meetings${query}`);
     if (!data.meetings.length) {
-      list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas en esta empresa. Cuando cierres una con “Nueva reunión”, va a quedar acá para retomarla.</p>';
+      list.innerHTML = '<p class="muted">Todavía no hay reuniones guardadas en este proyecto. Cuando cierres una con “Nueva reunión”, va a quedar acá para retomarla.</p>';
       return;
     }
     const cerradas = data.meetings.filter((meeting) => meeting.id !== state.meetingId).length;
@@ -4555,6 +4939,7 @@ function toggleSecretVisibility(button: HTMLElement) {
 function renderAgent(agent: Agent) {
   const speaking = state.speakingAgentId === agent.id;
   const interrupted = state.interruptedAgentId === agent.id;
+  const working = state.workingAgents.has(agent.id);
   const disabled = agent.enabled === false;
   const tasks = agent.tasks || [];
   const total = tasks.length;
@@ -4565,7 +4950,7 @@ function renderAgent(agent: Agent) {
   const tasksOpen = state.openTaskPanels.has(agent.id);
 
   return `
-    <article class="agent ${speaking ? 'is-speaking' : ''} ${interrupted ? 'is-interrupted' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
+    <article class="agent ${speaking ? 'is-speaking' : ''} ${working ? 'is-working' : ''} ${interrupted ? 'is-interrupted' : ''} ${disabled ? 'is-disabled' : ''}" style="--agent-color: ${escapeHtml(agent.color)}">
       <div class="agent-top">
         <span class="agent-avatar" aria-hidden="true">${escapeHtml(agent.name.slice(0, 1))}</span>
         <div class="agent-id">
@@ -4578,7 +4963,9 @@ function renderAgent(agent: Agent) {
             ? '<span class="agent-state interrupted">Interrumpido</span>'
             : speaking
               ? '<span class="agent-state speaking"><span class="pulse-dot" aria-hidden="true"></span>Hablando…</span>'
-              : ''}
+              : working
+                ? '<span class="agent-state working"><span class="work-dot" aria-hidden="true"></span>Trabajando…</span>'
+                : ''}
       </div>
       <div class="agent-chips">
         ${skills.map((skill) => `<span class="chip">${escapeHtml(skill)}</span>`).join('')}
@@ -4834,6 +5221,7 @@ function handleWsTabsKeydown(event: KeyboardEvent) {
 // arriba alcanza con los work_event del WS. Al arrancar hace un fetch ya.
 function syncWorkPolling() {
   const shouldPoll = state.view === 'workspace'
+    && Boolean(state.projectId)
     && state.wsSection !== 'meeting'
     && document.visibilityState === 'visible';
   if (shouldPoll && !workPollTimer) {
@@ -4847,26 +5235,52 @@ function syncWorkPolling() {
   }
 }
 
+// El tablero, la actividad y la vista previa se piden por PROYECTO. La
+// respuesta se adapta a la forma de WorkData (una lista de metas con una sola)
+// para no duplicar todo el renderizado que ya funciona sobre esa forma.
 async function refreshWork() {
   const companyId = state.companyId;
-  if (!companyId || workRefreshInFlight) return;
+  const goalId = state.projectId;
+  if (!companyId || !goalId || workRefreshInFlight) return;
   workRefreshInFlight = true;
   try {
-    const data = await apiJson<WorkData>(`/api/companies/${encodeURIComponent(companyId)}/work`);
-    if (state.companyId !== companyId) return;
-    state.workData = data;
+    const detail = await apiJson<ProjectDetail>(`/api/projects/${encodeURIComponent(goalId)}`);
+    if (state.projectId !== goalId) return;
+    const goal: WorkGoal = {
+      ...detail.project,
+      tasks: detail.tasks
+    } as unknown as WorkGoal;
+    state.workData = {
+      company: detail.company
+        ? { id: detail.company.id, name: detail.company.name }
+        : { id: companyId, name: state.company?.name || '' },
+      team: detail.team,
+      goals: [goal],
+      runs: detail.runs,
+      comments: detail.comments,
+      workspaceUrl: detail.project.url
+    };
+    state.project = detail.project;
+    state.projectMeetings = detail.meetings;
+    // Quién está produciendo AHORA según la base, no según los eventos que
+    // llegaron desde que abriste: si entrás a mitad de una corrida, se ve.
+    const enCurso = new Set(detail.tasks.filter((t) => t.status === 'in_progress' && t.agentId).map((t) => t.agentId as string));
+    if (enCurso.size !== state.workingAgents.size || [...enCurso].some((id) => !state.workingAgents.has(id))) {
+      state.workingAgents = enCurso;
+      markDirty('call', 'agents');
+    }
     state.workError = false;
-    state.workActive = data.goals.some((goal) => goal.status === 'active'
-      && goal.tasks.some((task) => task.status === 'pending' || task.status === 'in_progress'));
+    state.workActive = goal.status === 'active'
+      && detail.tasks.some((task) => task.status === 'pending' || task.status === 'in_progress');
     resolvePendingPreview();
   } catch {
-    if (state.companyId === companyId) {
+    if (state.projectId === goalId) {
       state.workError = true;
     }
   } finally {
     workRefreshInFlight = false;
   }
-  markDirty('work');
+  markDirty('work', 'company');
 }
 
 // Debounce corto tras cada work_event: el endpoint confirma lo que el WS
@@ -4887,7 +5301,42 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
   let item: Omit<WorkFeedItem, 'at'> | null = null;
 
   switch (event.kind) {
+    case 'task_queued':
+      item = {
+        key: `queue-${taskId}`,
+        icon: '📋',
+        html: `<strong>${escapeHtml(name)}</strong> se llevó: ${escapeHtml(clip(text(event.text), 140))}`
+      };
+      break;
+    case 'consulta':
+      item = {
+        key: `ask-${taskId}-${text(event.dePersona)}`,
+        icon: '💬',
+        html: `<strong>${escapeHtml(text(event.dePersona))}</strong> le consultó a <strong>${escapeHtml(name)}</strong>: ${escapeHtml(clip(text(event.pregunta), 140))}`
+      };
+      break;
+    case 'consulta_respondida':
+      item = {
+        key: `answ-${taskId}-${name}`,
+        icon: '🤝',
+        html: `<strong>${escapeHtml(name)}</strong> le contestó a ${escapeHtml(text(event.dePersona))}: ${escapeHtml(clip(text(event.respuesta), 160))}`
+      };
+      break;
+    case 'build_ok':
+      item = { key: `build-${taskId}`, icon: '📱', html: `<strong>${escapeHtml(name)}</strong>: la app compila y está instalada en el emulador` };
+      break;
+    case 'build_failed':
+      item = {
+        key: `buildfail-${taskId}`,
+        icon: '🧱',
+        html: `<strong>${escapeHtml(name)}</strong>: la app no compila (${String(event.count)} ${Number(event.count) === 1 ? 'error' : 'errores'}), la está arreglando`
+      };
+      break;
     case 'task_started':
+      if (typeof event.agentId === 'string') {
+        state.workingAgents.add(event.agentId);
+        markDirty('call', 'agents');
+      }
       item = {
         key: `start-${taskId}`,
         icon: '🔨',
@@ -4905,6 +5354,10 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
       break;
     }
     case 'task_done': {
+      if (typeof event.agentId === 'string') {
+        state.workingAgents.delete(event.agentId);
+        markDirty('call', 'agents');
+      }
       const artifacts = Array.isArray(event.artifacts) ? event.artifacts.map(String) : [];
       item = {
         key: `done-${taskId}`,
@@ -4915,6 +5368,10 @@ function handleWorkEvent(event: { kind: string; [key: string]: unknown }) {
       break;
     }
     case 'task_blocked':
+      if (typeof event.agentId === 'string') {
+        state.workingAgents.delete(event.agentId);
+        markDirty('call', 'agents');
+      }
       item = {
         key: `blocked-${taskId}`,
         icon: '⛔',
@@ -5447,6 +5904,87 @@ function formatBytes(size: number) {
   return size < 1024 ? `${size} B` : `${Math.round(size / 1024)} kB`;
 }
 
+// ── Vista de empresa: sus proyectos ─────────────────────────────────────
+
+// Proyecto que el usuario pidió borrar y todavía no confirmó.
+let pendingProjectDelete = '';
+
+function openDeleteProjectModal(goalId: string) {
+  const project = state.projects.find((item) => item.id === goalId);
+  if (!project) {
+    return;
+  }
+  pendingProjectDelete = goalId;
+  const piezas: string[] = [];
+  if (project.meeting_count) {
+    piezas.push(`${project.meeting_count} ${project.meeting_count === 1 ? 'reunión con su conversación' : 'reuniones con sus conversaciones'}`);
+  }
+  if (project.task_count) {
+    piezas.push(`${project.task_count} ${project.task_count === 1 ? 'tarea' : 'tareas'}`);
+  }
+  const archivos = project.files?.length || 0;
+  if (archivos) {
+    piezas.push(`${archivos} ${archivos === 1 ? 'archivo entregado' : 'archivos entregados'}`);
+  }
+  byId('deleteProjectBody').innerHTML = `
+    <p>Vas a eliminar <strong>${escapeHtml(project.title)}</strong>.</p>
+    ${piezas.length
+      ? `<p class="muted">Se va con él: ${piezas.join(', ')}. También se borra su carpeta del entorno aislado.</p>`
+      : '<p class="muted">Todavía no tiene nada adentro.</p>'}
+    <p class="hint">No se puede deshacer.</p>
+  `;
+  openModal('deleteProjectModal');
+}
+
+function renderProjectCards(): string {
+  if (state.projectsError) {
+    return `<div class="grid-note">
+      <p class="muted">No pude cargar los proyectos.</p>
+      <button class="btn ghost sm" data-action="projects-retry" type="button">Reintentar</button>
+    </div>`;
+  }
+  if (state.projectsLoading && state.projects.length === 0) {
+    return '<p class="muted">Cargando los proyectos…</p>';
+  }
+  if (state.projects.length === 0) {
+    return `<div class="ws-empty">
+      <span class="ws-empty-icon" aria-hidden="true">📁</span>
+      <h3>Todavía no hay proyectos</h3>
+      <p>Creá uno y contale al equipo qué querés lograr. Cada proyecto tiene su reunión, sus tareas y su carpeta propia.</p>
+      <button class="btn primary" data-action="new-project" type="button">+ Nuevo proyecto</button>
+    </div>`;
+  }
+
+  return state.projects.map((project) => {
+    const archivos = project.files?.length || 0;
+    const trabajando = project.status === 'active' && project.task_count > project.done_count;
+    const progreso = project.task_count
+      ? Math.round((project.done_count / project.task_count) * 100)
+      : 0;
+    return `
+      <article class="project-card">
+        <button class="project-card-open" type="button" data-action="open-project" data-goal-id="${escapeHtml(project.id)}">
+          <span class="project-card-head">
+            <span class="project-card-icon" aria-hidden="true">${archivos ? '🌐' : '📁'}</span>
+            ${trabajando ? '<span class="live-dot" aria-hidden="true" title="El equipo está trabajando"></span>' : ''}
+          </span>
+          <h3>${escapeHtml(project.title)}</h3>
+          ${project.brief ? `<p class="project-card-brief">${escapeHtml(clip(project.brief, 120))}</p>` : ''}
+          <p class="project-card-meta">
+            ${project.meeting_count} ${project.meeting_count === 1 ? 'reunión' : 'reuniones'}
+            · ${project.done_count}/${project.task_count} ${project.task_count === 1 ? 'tarea' : 'tareas'}
+            ${archivos ? ` · ${archivos} ${archivos === 1 ? 'archivo' : 'archivos'}` : ''}
+          </p>
+          ${project.task_count ? `<span class="project-card-bar"><span style="width:${progreso}%"></span></span>` : ''}
+        </button>
+        <button class="icon-btn danger project-card-del" type="button"
+          data-action="ask-delete-project" data-goal-id="${escapeHtml(project.id)}"
+          aria-label="Eliminar ${escapeHtml(project.title)}" title="Eliminar proyecto">${trashIcon()}</button>
+      </article>
+    `;
+  }).join('');
+}
+
 function renderProjectsSection() {
   const link = byId<HTMLAnchorElement>('workspaceLink');
   const url = state.workData?.workspaceUrl;
@@ -5459,37 +5997,40 @@ function renderProjectsSection() {
   syncBrowserStage();
 }
 
+// Adentro de un proyecto la barra lateral ya no lista proyectos (hay uno
+// solo): lista SUS archivos, que es lo que uno quiere ir mirando.
 function renderProjectsList(): string {
-  const data = state.workData;
-  if (!data) {
+  const goal = currentGoal();
+  if (!goal) {
     return state.workError
-      ? '<div class="grid-note"><p class="muted">No pude cargar los proyectos.</p><button class="btn ghost sm" data-action="work-retry" type="button">Reintentar</button></div>'
-      : '<p class="muted">Cargando los proyectos…</p>';
+      ? '<div class="grid-note"><p class="muted">No pude cargar el proyecto.</p><button class="btn ghost sm" data-action="work-retry" type="button">Reintentar</button></div>'
+      : '<p class="muted">Cargando el proyecto…</p>';
   }
-  const goals = sortedGoals(data.goals);
-  if (goals.length === 0) {
-    return '<p class="muted side-empty">Todavía no hay proyectos. Salen de las reuniones que cerrás con tareas.</p>';
+  const files = goal.files || [];
+  if (files.length === 0) {
+    return '<p class="muted side-empty">Todavía no hay archivos. Aparecen acá apenas el equipo entregue algo.</p>';
   }
-  const active = currentGoal();
-  return goals.map((goal) => {
-    const files = goal.files || [];
-    const done = goal.tasks.filter((task) => task.status === 'done').length;
-    const isActive = goal.id === active?.id;
-    return `
-      <button class="project-row${isActive ? ' is-selected' : ''}" type="button"
-        data-action="select-project" data-goal-id="${escapeHtml(goal.id)}"
-        aria-current="${isActive ? 'true' : 'false'}">
-        <span class="project-row-icon" aria-hidden="true">${goal.kind === 'acuerdo' ? '🤝' : '🌐'}</span>
-        <span class="project-row-main">
-          <span class="project-row-title">${escapeHtml(goal.title)}</span>
-          <span class="project-row-sub">${goal.kind === 'acuerdo'
-            ? 'Acuerdo · sin archivos'
-            : `${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} · ${done}/${goal.tasks.length} tareas`}</span>
-        </span>
-        ${goal.status === 'active' && goal.kind !== 'acuerdo' ? '<span class="live-dot" aria-hidden="true"></span>' : ''}
-      </button>
-    `;
-  }).join('');
+  const actual = currentFile(goal);
+  return files.map((file) => `
+    <button class="project-row${file.path === actual?.path ? ' is-selected' : ''}" type="button"
+      data-action="select-file" data-file="${escapeHtml(file.path)}"
+      aria-current="${file.path === actual?.path ? 'true' : 'false'}">
+      <span class="project-row-icon" aria-hidden="true">${fileIconFor(file.path)}</span>
+      <span class="project-row-main">
+        <span class="project-row-title">${escapeHtml(file.path)}</span>
+        <span class="project-row-sub">${escapeHtml(formatBytes(file.size) || '')}</span>
+      </span>
+    </button>
+  `).join('');
+}
+
+function fileIconFor(filePath: string): string {
+  if (/\.html?$/i.test(filePath)) return '🌐';
+  if (/\.css$/i.test(filePath)) return '🎨';
+  if (/\.(js|mjs|ts|tsx|jsx)$/i.test(filePath)) return '⚙️';
+  if (/\.md$/i.test(filePath)) return '📄';
+  if (/\.svg$/i.test(filePath)) return '🖼️';
+  return '📎';
 }
 
 function renderBrowserChrome(): string {
@@ -5499,11 +6040,20 @@ function renderBrowserChrome(): string {
   }
   const files = goal.files || [];
   const file = currentFile(goal);
-  const viewportButtons = VIEWPORTS.map((viewport) => `
+  // En los nichos móviles el entregable es una APP, no una web: las medidas de
+  // navegador no aplican y la vista que importa es el dispositivo.
+  const esMovil = state.project?.stack === 'android' || state.project?.stack === 'movil-rn';
+  const vistas = esMovil ? [] : [...VIEWPORTS];
+  // El emulador solo se ofrece si hay uno encendido: un botón que no puede
+  // hacer nada es peor que no tenerlo.
+  if (state.devices?.android.arrancado) {
+    vistas.push({ id: 'emulador', label: 'Emulador', width: 'el dispositivo de verdad' });
+  }
+  const viewportButtons = vistas.map((viewport) => `
     <button class="vp-btn${state.projectViewport === viewport.id ? ' is-active' : ''}" type="button"
       data-action="browser-viewport" data-viewport="${viewport.id}"
       aria-pressed="${state.projectViewport === viewport.id}"
-      title="Ver el sitio a ${escapeHtml(viewport.width)}">${escapeHtml(viewport.label)}</button>
+      title="${escapeHtml(viewport.id === 'emulador' ? 'Ver y tocar el dispositivo acá adentro' : `Ver el sitio a ${viewport.width}`)}">${escapeHtml(viewport.label)}</button>
   `).join('');
 
   return `
@@ -5523,8 +6073,207 @@ function renderBrowserChrome(): string {
         </label>
       ` : `<span class="browser-single">${escapeHtml(file ? formatBytes(file.size) || file.path : '')}</span>`}
       <div class="vp-group" role="group" aria-label="Ancho de la vista">${viewportButtons}</div>
+      ${renderDeviceButtons(goal)}
     </div>
   `;
+}
+
+// Abrir el entregable en un dispositivo de verdad. Solo aparece en proyectos
+// de nicho móvil: en una web no aporta nada y ensucia la barra.
+function renderDeviceButtons(goal: WorkGoal): string {
+  const stack = (goal as unknown as { stack?: string }).stack || state.project?.stack || '';
+  if (stack !== 'movil-rn' && stack !== 'android') {
+    return '';
+  }
+  const estado = state.devices;
+  const boton = (plataforma: 'android' | 'ios', etiqueta: string, info?: { disponible: boolean; motivo: string }) => {
+    const listo = info?.disponible ?? false;
+    const abriendo = state.openingDevice === plataforma;
+    return `<button class="btn ghost sm" type="button" data-action="open-in-device" data-platform="${plataforma}"
+      ${listo && !abriendo ? '' : 'disabled'}
+      title="${escapeHtml(listo ? `Abrir el proyecto en ${etiqueta}` : (info?.motivo || 'Comprobando…'))}">
+      ${abriendo ? 'Abriendo…' : escapeHtml(etiqueta)}
+    </button>`;
+  };
+  return `<div class="device-group" role="group" aria-label="Abrir en un dispositivo">
+    ${stack === 'android' || stack === 'movil-rn' ? boton('android', 'Emulador Android', estado?.android) : ''}
+    ${stack === 'movil-rn' ? boton('ios', 'Simulador iPhone', estado?.ios) : ''}
+  </div>`;
+}
+
+// ── El emulador dentro de la app ─────────────────────────────────────────
+//
+// La pantalla del dispositivo se pide como PNG unas dos veces por segundo y
+// los clics del usuario se traducen a toques reales, escalando desde el
+// tamaño al que se ve la imagen hasta la resolución del dispositivo.
+
+let deviceStreamTimer = 0;
+let deviceSize: { width: number; height: number } | null = null;
+let deviceFrameInFlight = false;
+let devicePointerDown: { x: number; y: number; t: number } | null = null;
+
+function stopDeviceStream() {
+  if (deviceStreamTimer) {
+    window.clearInterval(deviceStreamTimer);
+    deviceStreamTimer = 0;
+  }
+  const img = document.getElementById('deviceScreen') as HTMLImageElement | null;
+  if (img?.src.startsWith('blob:')) {
+    URL.revokeObjectURL(img.src);
+  }
+}
+
+async function startDeviceStream() {
+  stopDeviceStream();
+  const hint = byId('deviceHint');
+  hint.textContent = 'Conectando con el dispositivo…';
+  try {
+    deviceSize = await apiJson<{ width: number; height: number }>('/api/emulator/size');
+  } catch {
+    deviceSize = null;
+  }
+  if (!deviceSize?.width) {
+    hint.textContent = 'No hay ningún dispositivo encendido. Tocá “Emulador Android” para arrancarlo.';
+    return;
+  }
+  // Arranca oculta: se muestra recién con el primer cuadro bueno.
+  const imgInicial = document.getElementById('deviceScreen') as HTMLImageElement | null;
+  if (imgInicial && !imgInicial.src) imgInicial.hidden = true;
+  hint.textContent = 'Buscando el dispositivo…';
+  // Si se durmió mientras no lo mirabas, la captura vendría en negro.
+  await apiJson('/api/emulator/wake', { method: 'POST' }).catch(() => {});
+  let fallosSeguidos = 0;
+  const tick = async () => {
+    if (deviceFrameInFlight || document.hidden) return;
+    deviceFrameInFlight = true;
+    const img = document.getElementById('deviceScreen') as HTMLImageElement | null;
+    try {
+      const response = await fetch(`${backendHttpBase()}/api/emulator/screen?platform=android`);
+      if (!response.ok) throw new Error('sin pantalla');
+      const blob = await response.blob();
+      if (img) {
+        const anterior = img.src;
+        img.src = URL.createObjectURL(blob);
+        // Hasta el primer cuadro bueno la imagen está oculta: si se mostrara
+        // sin src, se vería el ícono de imagen rota con el texto alternativo.
+        img.hidden = false;
+        if (anterior.startsWith('blob:')) URL.revokeObjectURL(anterior);
+      }
+      fallosSeguidos = 0;
+      hint.textContent = 'Tocá la pantalla como en un teléfono. Arrastrá para deslizar.';
+    } catch {
+      fallosSeguidos += 1;
+      // Un cuadro perdido no es un error: el siguiente llega en 400 ms. Pero
+      // si se pierden varios seguidos, el dispositivo se fue de verdad.
+      if (fallosSeguidos >= 5) {
+        if (img && !img.src) img.hidden = true;
+        hint.textContent = 'Perdí el dispositivo. ¿Se cerró el emulador?';
+      }
+    } finally {
+      deviceFrameInFlight = false;
+    }
+  };
+  void tick();
+  deviceStreamTimer = window.setInterval(tick, 400);
+}
+
+// Traduce un punto del <img> a coordenadas del dispositivo.
+function devicePoint(event: PointerEvent) {
+  const img = event.currentTarget as HTMLImageElement;
+  const caja = img.getBoundingClientRect();
+  if (!deviceSize || !caja.width || !caja.height) return null;
+  return {
+    x: ((event.clientX - caja.left) / caja.width) * deviceSize.width,
+    y: ((event.clientY - caja.top) / caja.height) * deviceSize.height
+  };
+}
+
+async function sendDeviceInput(payload: Record<string, unknown>) {
+  try {
+    await apiJson('/api/emulator/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    upsertAlert('device', 'Emulador', 'No pude mandarle el toque al dispositivo.', 'error', 4000);
+  }
+}
+
+function wireDeviceScreen() {
+  const img = document.getElementById('deviceScreen') as HTMLImageElement | null;
+  if (!img || img.dataset.wired) return;
+  img.dataset.wired = '1';
+  img.addEventListener('pointerdown', (event) => {
+    const p = devicePoint(event);
+    if (p) devicePointerDown = { ...p, t: Date.now() };
+  });
+  img.addEventListener('pointerup', (event) => {
+    const p = devicePoint(event);
+    if (!p || !devicePointerDown) return;
+    const dx = p.x - devicePointerDown.x;
+    const dy = p.y - devicePointerDown.y;
+    const distancia = Math.hypot(dx, dy);
+    // Menos de 20px de recorrido es un toque; más, un deslizamiento.
+    if (distancia < 20) {
+      void sendDeviceInput({ type: 'tap', x: p.x, y: p.y });
+    } else {
+      void sendDeviceInput({
+        type: 'swipe',
+        x1: devicePointerDown.x, y1: devicePointerDown.y,
+        x2: p.x, y2: p.y,
+        ms: Math.min(600, Math.max(80, Date.now() - devicePointerDown.t))
+      });
+    }
+    devicePointerDown = null;
+  });
+}
+
+async function loadDeviceStatus() {
+  try {
+    state.devices = await apiJson<DeviceStatus>('/api/emulator/status');
+  } catch {
+    state.devices = null;
+  }
+  markDirty('work');
+}
+
+// Arranca el emulador si hace falta y abre ahí la carpeta del proyecto.
+async function openInDevice(platform: 'android' | 'ios') {
+  const goalId = state.projectId;
+  if (!goalId || state.openingDevice) {
+    return;
+  }
+  state.openingDevice = platform;
+  markDirty('work');
+  try {
+    if (platform === 'android' && !state.devices?.android.arrancado) {
+      upsertAlert('device', 'Emulador', 'Arrancando el emulador… la primera vez tarda un minuto.', 'working', 8000);
+      await apiJson('/api/emulator/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+    }
+    await apiJson<{ ok: boolean; url: string }>(
+      `/api/projects/${encodeURIComponent(goalId)}/open-in-device`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform }) }
+    );
+    if (platform === 'android') {
+      // Se queda ACÁ ADENTRO: se cambia a la vista de emulador y la pantalla
+      // del dispositivo pasa a transmitirse dentro de la app.
+      state.projectViewport = 'emulador';
+      markDirty('work');
+      upsertAlert('device', 'Emulador', 'El proyecto está corriendo en el emulador, acá abajo.', 'ok', 4000);
+    } else {
+      upsertAlert('device', 'Simulador', 'Abierto en el simulador de iPhone.', 'ok', 4000);
+    }
+  } catch (error) {
+    upsertAlert('device', 'Emulador', error instanceof Error ? error.message : 'No pude abrirlo.', 'error', 8000);
+  } finally {
+    state.openingDevice = '';
+    void loadDeviceStatus();
+  }
 }
 
 // El <iframe> es un nodo estable del shell: solo se le toca el src cuando
@@ -5534,7 +6283,23 @@ function syncBrowserStage() {
   const pre = byId<HTMLPreElement>('browserText');
   const empty = byId<HTMLDivElement>('browserEmpty');
   const stage = byId<HTMLDivElement>('browserStage');
+  const live = byId<HTMLDivElement>('deviceLive');
   stage.dataset.viewport = state.projectViewport;
+
+  // Modo emulador: manda el dispositivo de verdad, no el iframe.
+  if (state.projectViewport === 'emulador') {
+    frame.hidden = true;
+    pre.hidden = true;
+    empty.hidden = true;
+    live.hidden = false;
+    wireDeviceScreen();
+    if (!deviceStreamTimer) {
+      void startDeviceStream();
+    }
+    return;
+  }
+  live.hidden = true;
+  stopDeviceStream();
 
   const goal = currentGoal();
   const showEmpty = (html: string) => {

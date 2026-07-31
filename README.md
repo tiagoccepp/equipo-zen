@@ -36,11 +36,38 @@ primera instalación como para cuando algo dejó de responder.
 
 ## Las organizaciones
 
-No se crean empresas: elegís entre organizaciones predeterminadas, cada una con
-su equipo armado, su jerga y sus problemas. Hoy son cinco — software, automotriz,
-distribución mayorista, estudio creativo y centro de salud — definidas en
-`server/company-templates.json`. La primera vez que entrás a una, se instancia
-con toda su gente; después queda con su historia (reuniones, proyectos, memoria).
+No se crean empresas: elegís entre estudios técnicos predeterminados, cada uno
+con su equipo armado y su criterio propio. Hoy son cuatro, definidos en
+`server/company-templates.json`:
+
+| Estudio | Hace | Equipo |
+|---|---|---|
+| 🌐 **Atelier Web** | Sitios y apps de navegador | CEO · directora de arte · front-end · full-stack · QA · talento |
+| ⚙️ **Taller de Automatizaciones** | Procesos que corren solos | CEO · arquitecta de integraciones · dev · analista de procesos · QA · talento |
+| 📱 **Estudio Móvil** | Apps móviles multiplataforma con React Native | CEO · diseñadora de producto móvil · dev RN · dev de plataforma · QA · talento |
+| 🤖 **Estudio Android** | Apps Android **nativas** en Kotlin + Compose | CEO · diseñadora Material · dev Android · dev de plataforma · QA · talento |
+
+Los dos estudios móviles entregan **apps de verdad, no páginas web**: el motor
+compila el proyecto Android con Gradle, lo instala en el emulador y lo abre. Si
+no compila, los errores del compilador vuelven al equipo con archivo y línea.
+
+La primera vez que entrás a uno se instancia con toda su gente; después queda con
+su historia. Las empresas de otros rubros que hayas creado antes siguen enteras
+en **Archivadas**.
+
+## El proyecto es la unidad de trabajo
+
+Entrás a una empresa y ves **sus proyectos**. Entrás a un proyecto y ahí adentro
+viven su reunión, sus tareas, su organigrama, su actividad y su vista previa.
+
+Eso es lo que hace que el equipo entienda de qué le hablás: en vez de recibir el
+contexto de toda la empresa, recibe el de *este* proyecto. Podés abrir una
+reunión sobre algo ya entregado y pedir "cambiá el header" — saben qué archivos
+hay y qué dice cada uno.
+
+Los proyectos **se borran** desde su tarjeta. Un proyecto borrado se lleva sus
+reuniones, sus tareas y su carpeta del entorno aislado. (Borrar una *reunión* es
+lo contrario: preserva el trabajo que salió de ella.)
 
 ## La empresa digital (estilo [Paperclip](https://github.com/paperclipai/paperclip))
 
@@ -52,14 +79,18 @@ Cada simulación es una **empresa que trabaja de verdad**:
 - **Reunión → trabajo**: en la reunión exponés qué querés lograr y se reparten tareas. Al tocar **Finalizar reunión**, la CEO repasa en voz alta quién quedó con qué (validación conversacional) y, cuando confirmás, se crea la **meta** y el equipo se pone a trabajar en segundo plano.
 - **Trabajo real**: un motor de heartbeats (checkout atómico, máx. 2 corridas en paralelo, pasos acotados con herramientas de archivos sandboxeadas) hace que cada empleado PRODUZCA entregables reales en `workspace/<empresa>/` — una página web pedida en reunión termina siendo un `index.html` navegable en `/workspace/<empresa>/`. Todo con log durable por corrida.
 - **Entorno aislado**: todo lo que la empresa produce vive en `workspace/<empresa>/<proyecto>/` y en ningún otro lado. El motor solo escribe ahí dentro (sin rutas relativas hacia afuera, sin archivos ocultos ni absolutos) y únicamente formatos de entregable (html/css/js/json/md/svg/csv…). La carpeta está fuera del control de versiones.
-- **Continuidad del trabajo**: el equipo trabaja **en fila por proyecto**, no en paralelo sobre los mismos archivos. Quien entra recibe en su prompt el contenido real del archivo principal y la identidad visual ya definida (variables `:root`, tipografías, clases y secciones existentes), tiene que **editar** con `edit_file` en vez de regenerar, y no puede sobreescribir un archivo que no leyó. Así el estilo no cambia de cara en cada vuelta.
-- **Revisión entre compañeros**: cuando alguien termina un entregable, un colega con skills afines lo lee de verdad, deja su comentario y lo aprueba o pide cambios concretos (una vuelta de correcciones). Las interacciones quedan registradas.
+- **Cada tarea es un archivo con un dueño**: al cerrar la reunión, la CEO no reparte por disciplina sino por archivo — quién escribe `index.html`, quién `menu.json`. Lo que no es un archivo (una decisión, una revisión, "definir la paleta") no es una tarea de producción. El equipo solo entrega archivos: no existen Figma ni herramientas externas.
+- **Una paleta para todos**: `tokens.css` lo escribe el primero que construye y es la fuente única de colores, tipografía y espaciado. Nadie escribe un valor a mano.
+- **Una máquina revisa antes que un colega**: al terminar, un verificador **sin IA** mide lo que quedó escrito — HTML balanceado, enlaces muertos, imágenes sin `alt`, placeholders, inglés colado, colores fuera de los tokens, JavaScript que no parsea. Los hallazgos le vuelven al agente en el paso siguiente y los arregla ahí mismo.
+- **Continuidad del trabajo**: el equipo trabaja **en fila por proyecto**, no en paralelo sobre los mismos archivos. Quien entra recibe el contrato, la bitácora de lo que dejó el anterior y el contenido real del archivo principal; tiene que **editar** con `edit_file` en vez de regenerar, y no puede sobreescribir un archivo que no leyó.
+- **Revisión entre compañeros**: cuando alguien termina un entregable, un colega con skills afines lo lee de verdad —todos los archivos, no los tres primeros— y lo juzga contra los criterios de aceptación acordados. Deja su comentario y lo aprueba o pide cambios concretos.
+- **Nadie te hace preguntas técnicas**: el equipo decide el stack, la arquitectura y cómo guardar los datos con su propio criterio (`server/playbooks/`), y te lo cuenta en términos de lo que vas a ver. Vos hablás del producto.
 - **El equipo es fijo, pero se afina**: no se contrata gente nueva. El responsable de talento **refina a quien ya está** cuando se lo pedís ("que Delfina sepa de accesibilidad", "quiero a Nahuel más directo"): suma habilidades sin borrar las que tenía, reescribe su conocimiento y su oficio, y guarda la versión anterior por si hay que volver atrás.
 - **Contratación automática (histórico)**: si una tarea necesita habilidades que nadie tiene, el contratista diseña al empleado ideal (perfil completo, voz incluida), lo suma al equipo reportando a la CEO y le delega el trabajo.
 
 ## Cómo funciona
 
-- **Simulaciones**: el home es una galería de empresas. Creá una desde plantilla (equipo pre-armado con skills y conocimientos) o desde cero. Cada empresa tiene su escenario, su equipo y su historial de reuniones, todo persistido en SQLite (`node:sqlite`, WAL — sobrevive a `kill -9`).
+- **Simulaciones**: el home es una galería de empresas; adentro de cada una, sus proyectos. Creá una desde plantilla (equipo pre-armado con skills y conocimientos) o desde cero. Cada empresa tiene su escenario, su equipo y su historial de reuniones, todo persistido en SQLite (`node:sqlite`, WAL — sobrevive a `kill -9`).
 - **Empleados**: perfil completo editable — rol, skills (ruteo), **conocimientos del puesto** (se inyectan en su prompt), personalidad, límites y voz (10 presets Supertonic). Con versionado, changelog y rollback.
 - **Reunión en tiempo real**: un router (heurístico + MiniMax para casos grupales) decide quién habla; el texto streamea por deltas y la voz se sintetiza localmente por oraciones a través de un `SpeakerGate` que garantiza que nunca hablen dos a la vez. **Barge-in**: hablá encima y el empleado baja el volumen, se corta y tu turno entra completo.
 - **Auto-aprendizaje**: un observador (MiniMax) detecta correcciones/preferencias en lo que decís — solo turnos del usuario, con evidencia obligatoria — y las inyecta como MEMORIA APRENDIDA en el prompt del empleado correspondiente. Al cerrar cada reunión, una reflexión genera título+resumen y propone vocabulario/estilo (lo aditivo se auto-aplica con guardarraíles; el resto queda como sugerencia). Panel **Memoria** por empleado: ver, editar, borrar, pausar u olvidar todo.
@@ -68,39 +99,45 @@ Cada simulación es una **empresa que trabaja de verdad**:
 ## Arquitectura
 
 ```
-src/main.ts             cliente vanilla TS: vistas Simulaciones/Workspace, render por regiones,
-                        transcript append-only, cola PCM con ducking, barge-in, drawers
-shared/protocol.ts      protocolo WS tipado + validadores (Node 26 type-stripping + Vite)
+src/main.ts             cliente vanilla TS: Simulaciones → Proyectos → Proyecto,
+                        render por regiones, transcript append-only, cola PCM con
+                        ducking, barge-in, marcos de dispositivo
+shared/protocol.ts      protocolo WS tipado + validadores
 server/index.js         bootstrap
 server/lib/
-  config.js             env + modelos + flags       http.js       REST (companies/meetings/agents/memoria)
-  llm.js                cliente MiniMax (SSE, filtro <think>, rotación)
-  supertonic.js         adaptador TTS local (WAV→PCM para el gate)
-  ws.js                 WS + validación             meeting-session.js  orquestación por empresa
-  router.js             ruteo heurístico            turn-pipeline.js    TurnQueue cancelable + SpeakerGate
-  agent-runtime.js      stream (MiniMax+Supertonic) | mock, prompts
-  transcriber.js        captura PCM del turno + STT según Ajustes
-  stt.js                Whisper local | Groq | navegador (+ WAV builder)
+  config.js             env, modelos y proveedores   http.js       REST
+  db.js / store.js      migraciones / repositorios (store no toca el disco)
+  workforce.js          motor de trabajo: cola, corridas, contrato, revisión
+  verify.js             verificación determinista de entregables (sin IA)
+  playbooks.js          criterio técnico por nicho + estándar de diseño
+  emulator.js           emulador de Android (adb) y simulador de iOS (simctl)
+  llm.js                cliente MiniMax/DeepSeek (SSE, filtro <think>, rotación)
+  meeting-session.js    una reunión en vivo    router.js       ruteo heurístico
+  agent-runtime.js      prompts y streaming     turn-pipeline.js  cola + SpeakerGate
+  supertonic.js         TTS local               stt.js / transcriber.js  oído
   settings.js           ajustes del usuario (SQLite) que pisan al .env
-  db.js / store.js      SQLite (migraciones v2: companies) / repositorios
-  learning.js           observador de aprendizajes  reflection.js  resumen + tuner del router
-  key-ring.js           rotación de claves          memory.js      memoria de reunión
-  telemetry.js          ring en RAM + SSE + análisis
-server/company-templates.json   plantillas de empresas con equipos
+  learning.js           observador de aprendizajes  reflection.js  resumen + tuner
+  key-ring.js           rotación de claves      telemetry.js   ring en RAM + SSE
+server/playbooks/*.md           criterio de oficio y diseño que reciben al trabajar
+server/company-templates.json   los cuatro estudios con sus equipos
 server/stt/whisper_server.py    STT local (faster-whisper + FastAPI)
+workspace/<empresa>/<proyecto>/ TODO lo que produce el equipo (fuera de git)
 ```
+
+Para tocar el código, leé [CLAUDE.md](CLAUDE.md) — explica el porqué de cada
+decisión y qué invariantes no romper. El motor de trabajo está detallado en
+[docs/MOTOR-DE-TRABAJO.md](docs/MOTOR-DE-TRABAJO.md).
 
 ## Observabilidad local
 
 - `GET /api/agents/:id/prompt-preview`: el system prompt REAL del empleado (escenario de su empresa, conocimientos, límites y memoria).
-- `GET /api/companies` · `GET /api/meetings?companyId=` · `GET /api/changelog`
+- `GET /api/companies` · `GET /api/companies/:id/projects` · `GET /api/projects/:goalId`
+- `GET /api/meetings?goalId=` · `GET /api/changelog` · `GET /api/emulator/status`
 - `GET /api/telemetry` · `/api/telemetry/stream` (SSE) · `/api/telemetry/analysis`
 
 ## Seguridad
 
 App local de un solo usuario: bind en loopback, CORS con allowlist, validación y límites en todos los mensajes WS, TTS y base de datos sin salir de tu máquina. No la expongas a la red sin agregar autenticación.
-
-> El vault Obsidian (`00 - Index` … `08 - Roadmap`) describe una arquitectura vieja (era Gemini, pre-empresas). La referencia vigente es este README + el código.
 
 ## Borrar reuniones pasadas
 

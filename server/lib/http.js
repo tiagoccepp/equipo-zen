@@ -12,6 +12,7 @@ import {
   rootDir
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
+import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
 import { renderLearningsSection } from './learning.js';
 import { isMeetingLive } from './meeting-session.js';
 import { applySuggestion } from './reflection.js';
@@ -20,7 +21,7 @@ import { applySettings, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
-import { projectDir, renderWorkSection, WORKSPACE_ROOT } from './workforce.js';
+import { esCarpetaIgnorada, projectDir, renderWorkSection, WORKSPACE_ROOT } from './workforce.js';
 
 // Índice de archivos de un proyecto para el navegador integrado del cliente.
 // Síncrono a propósito: son unas pocas decenas de entradas por proyecto.
@@ -35,7 +36,7 @@ function listProjectFiles(companyId, slug) {
       return;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || out.length >= 60) continue;
+      if (entry.name.startsWith('.') || esCarpetaIgnorada(entry.name) || out.length >= 60) continue;
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(path.join(dir, entry.name), rel);
@@ -421,8 +422,211 @@ export function createApp({ store }) {
     res.json({ versions: store.listAgentVersions(agent.id) });
   });
 
+  // ── Proyectos ───────────────────────────────────────────────────────────
+  //
+  // El proyecto es el contenedor: adentro viven sus reuniones, sus tareas y
+  // su actividad. La vista de empresa solo lista proyectos.
+
+  app.get('/api/companies/:id/projects', (req, res) => {
+    const company = store.getCompany(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    const projects = store.listProjects(company.id).map((project) => ({
+      ...project,
+      files: listProjectFiles(company.id, project.slug),
+      url: `/workspace/${company.id}/${project.slug || 'general'}/`
+    }));
+    res.json({ company: { id: company.id, name: company.name }, projects });
+  });
+
+  app.post('/api/companies/:id/projects', (req, res) => {
+    const company = store.getCompany(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'empresa no encontrada' });
+    }
+    const title = String(req.body?.title || '').trim().slice(0, 120);
+    if (!title) {
+      return res.status(400).json({ error: 'el proyecto necesita un nombre' });
+    }
+    const project = store.createProject({
+      companyId: company.id,
+      title,
+      brief: String(req.body?.brief || '').slice(0, 4000),
+      stack: String(req.body?.stack || '').slice(0, 40)
+    });
+    res.status(201).json({ project });
+  });
+
+  app.get('/api/projects/:goalId', (req, res) => {
+    const project = store.getGoal(req.params.goalId);
+    if (!project) {
+      return res.status(404).json({ error: 'proyecto no encontrado' });
+    }
+    const company = store.getCompany(project.company_id);
+    const comments = store.commentsForProject(project.id);
+    const commentsByTask = new Map();
+    for (const comment of comments) {
+      if (!commentsByTask.has(comment.task_id)) {
+        commentsByTask.set(comment.task_id, []);
+      }
+      commentsByTask.get(comment.task_id).push({
+        id: comment.id,
+        authorId: comment.author_id,
+        kind: comment.kind,
+        text: comment.text,
+        createdAt: comment.created_at
+      });
+    }
+    res.json({
+      project: {
+        ...project,
+        files: listProjectFiles(project.company_id, project.slug),
+        url: `/workspace/${project.company_id}/${project.slug || 'general'}/`
+      },
+      company: company ? { id: company.id, name: company.name, emoji: company.emoji, color: company.color } : null,
+      team: store.listAgents({ companyId: project.company_id })
+        .map(({ id, name, title, color, role, managerId, domains }) => ({ id, name, title, color, role, managerId, domains })),
+      meetings: store.meetingsForProject(project.id),
+      tasks: store.tasksForGoal(project.id).map((task) => ({
+        id: task.id,
+        text: task.text,
+        status: task.status,
+        kind: task.kind || 'entregable',
+        phase: task.phase,
+        targetFile: task.target_file || null,
+        agentId: task.agent_id,
+        reviewerId: task.reviewer_id,
+        reviewStatus: task.review_status,
+        parentTaskId: task.parent_task_id,
+        resultSummary: task.result_summary,
+        blockedReason: task.blocked_reason,
+        runCount: task.run_count,
+        comments: commentsByTask.get(task.id) || []
+      })),
+      runs: store.runsForProject(project.id),
+      comments: comments.map((comment) => ({
+        id: comment.id,
+        taskId: comment.task_id,
+        authorId: comment.author_id,
+        kind: comment.kind,
+        text: comment.text,
+        createdAt: comment.created_at
+      }))
+    });
+  });
+
+  app.patch('/api/projects/:goalId', (req, res) => {
+    const patch = {};
+    if (typeof req.body?.title === 'string') {
+      patch.title = req.body.title.trim().slice(0, 120);
+    }
+    if (typeof req.body?.brief === 'string') {
+      patch.brief = req.body.brief.slice(0, 4000);
+    }
+    if (typeof req.body?.stack === 'string') {
+      patch.stack = req.body.stack.slice(0, 40);
+    }
+    const project = store.updateProject(req.params.goalId, patch);
+    if (!project) {
+      return res.status(404).json({ error: 'proyecto no encontrado' });
+    }
+    res.json({ project });
+  });
+
+  // Borrar un proyecto se lleva TODO lo suyo: reuniones, turnos, tareas,
+  // comentarios, corridas y la carpeta del entorno aislado. Es lo contrario
+  // de borrar una reunión (que preserva el trabajo) — acá el pedido es limpiar.
+  app.delete('/api/projects/:goalId', async (req, res) => {
+    const project = store.getGoal(req.params.goalId);
+    if (!project) {
+      return res.status(404).json({ error: 'proyecto no encontrado' });
+    }
+    // Se leen ANTES de borrar: después ya no hay de dónde sacar los ids para
+    // limpiar el registro en disco.
+    const meetingIds = store.meetingsForProject(project.id).map((meeting) => meeting.id);
+    if (meetingIds.some((id) => isMeetingLive(id))) {
+      return res.status(409).json({ error: 'hay una reunión abierta en este proyecto: cerrala antes de borrarlo' });
+    }
+
+    const resultado = store.deleteProject(project.id);
+    let carpeta = false;
+    // La carpeta solo se borra si es de este proyecto y nada más: las metas
+    // anteriores a los proyectos comparten el slug 'general'.
+    if (!resultado.carpetaCompartida) {
+      carpeta = await fs.rm(projectDir(project.company_id, project.slug), { recursive: true, force: true })
+        .then(() => true)
+        .catch(() => false);
+    }
+    let registros = 0;
+    for (const meetingId of meetingIds) {
+      registros += await deleteLogEntries({ meetingId }).catch(() => 0);
+    }
+    res.json({ ...resultado, carpetaBorrada: carpeta, registros });
+  });
+
+  // ── Emulador y simulador ────────────────────────────────────────────────
+  //
+  // Ver el entregable móvil corriendo en un dispositivo de verdad. Si las
+  // herramientas no están, se responde con el motivo — nunca un error crudo.
+
+  app.get('/api/emulator/status', async (_req, res) => {
+    const [android, ios] = await Promise.all([androidStatus(), iosStatus()]);
+    res.json({ android, ios });
+  });
+
+  app.post('/api/emulator/start', async (req, res) => {
+    const resultado = await startAndroid(typeof req.body?.avd === 'string' ? req.body.avd : null);
+    res.status(resultado.ok ? 200 : 409).json(resultado);
+  });
+
+  // La pantalla del dispositivo, servida como PNG para verla DENTRO de la app.
+  app.get('/api/emulator/screen', async (req, res) => {
+    const plataforma = req.query.platform === 'ios' ? 'ios' : 'android';
+    const png = await screenshot(plataforma);
+    if (!png || png.length === 0) {
+      return res.status(409).json({ error: 'no hay ningún dispositivo con pantalla' });
+    }
+    res.setHeader('Content-Type', 'image/png');
+    // Sin caché: cada pedido es un cuadro nuevo.
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(png);
+  });
+
+  // Despertar el dispositivo: dormido devuelve capturas negras.
+  app.post('/api/emulator/wake', async (_req, res) => {
+    res.json(await wakeAndroid());
+  });
+
+  app.get('/api/emulator/size', async (_req, res) => {
+    const size = await screenSize();
+    res.json(size || { width: 0, height: 0 });
+  });
+
+  // Los clics del usuario sobre esa imagen vuelven como toques reales.
+  app.post('/api/emulator/input', async (req, res) => {
+    const resultado = await sendInput(req.body || {});
+    res.status(resultado.ok ? 200 : 409).json(resultado);
+  });
+
+  app.post('/api/projects/:goalId/open-in-device', async (req, res) => {
+    const project = store.getGoal(req.params.goalId);
+    if (!project) {
+      return res.status(404).json({ error: 'proyecto no encontrado' });
+    }
+    const plataforma = req.body?.platform === 'ios' ? 'ios' : 'android';
+    const resultado = plataforma === 'ios'
+      ? await openInIos(project.company_id, project.slug)
+      : await openInAndroid(project.company_id, project.slug);
+    res.status(resultado.ok ? 200 : 409).json({ ...resultado, plataforma });
+  });
+
   app.get('/api/meetings', (req, res) => {
     const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
+    const goalId = typeof req.query.goalId === 'string' ? req.query.goalId : null;
+    if (goalId) {
+      return res.json({ meetings: store.meetingsForProject(goalId) });
+    }
     res.json({ meetings: store.listMeetings(50, companyId) });
   });
 
@@ -494,117 +698,6 @@ export function createApp({ store }) {
         limit: Math.max(1, Math.min(200, Number(req.query.limit) || 50))
       })
     });
-  });
-
-  app.get('/arquitectura', (_req, res) => {
-    res.sendFile(path.join(rootDir, 'docs', 'arquitectura.html'));
-  });
-
-  app.get('/auditoria', (_req, res) => {
-    res.sendFile(path.join(rootDir, 'docs', 'auditoria.html'));
-  });
-
-  app.get('/audit-graph', (_req, res) => {
-    res.sendFile(path.join(rootDir, 'docs', 'audit-graph.html'));
-  });
-
-  app.get('/vault', (_req, res) => {
-    res.sendFile(path.join(rootDir, 'docs', 'vault-graph.html'));
-  });
-
-  app.get('/api/vault/note', async (req, res) => {
-    try {
-      const relativePath = req.query.path;
-      if (!relativePath || typeof relativePath !== 'string') {
-        return res.status(400).json({ error: 'path required' });
-      }
-      const real = path.resolve(rootDir, relativePath);
-      const relative = path.relative(rootDir, real);
-      const escapesRoot = !relative || relative.startsWith('..') || path.isAbsolute(relative);
-      const hasHiddenSegment = relative.split(path.sep).some((segment) => segment.startsWith('.'));
-      if (escapesRoot || hasHiddenSegment || !real.endsWith('.md')) {
-        return res.status(403).json({ error: 'forbidden' });
-      }
-      const content = await fs.readFile(real, 'utf-8');
-      res.json({ path: relativePath, content });
-    } catch (err) {
-      res.status(404).json({ error: 'note not found' });
-    }
-  });
-
-  app.get('/api/vault/graph', async (_req, res) => {
-    try {
-      const vaultDir = rootDir;
-      const sections = [
-        '00 - Index', '01 - Setup', '02 - Architecture', '03 - Agents',
-        '04 - Audio', '05 - Telemetry', '06 - Code Reference',
-        '07 - Decision Log', '08 - Roadmap'
-      ];
-
-      const nodes = [];
-      const links = [];
-      const idMap = new Map();
-
-      for (const section of sections) {
-        const dir = path.join(vaultDir, section);
-        let files;
-        try { files = await fs.readdir(dir); } catch { continue; }
-        for (const file of files) {
-          if (!file.endsWith('.md')) continue;
-          const fullPath = path.join(dir, file);
-          const content = await fs.readFile(fullPath, 'utf-8');
-          const label = file.replace('.md', '');
-          const id = `${section}/${label}`;
-
-          idMap.set(label.toLowerCase(), id);
-          idMap.set(id.toLowerCase(), id);
-
-          const outgoing = [];
-          const linkRegex = /\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]/g;
-          let m;
-          while ((m = linkRegex.exec(content)) !== null) {
-            outgoing.push(m[1].trim());
-          }
-
-          const size = Math.max(6, Math.min(18, 6 + outgoing.length * 2));
-
-          nodes.push({
-            id,
-            label,
-            path: `${section}/${file}`,
-            category: section,
-            size,
-            outgoing
-          });
-        }
-      }
-
-      // Add Home.md root links
-      const homeNode = nodes.find(n => n.label === 'Home');
-      if (homeNode) {
-        homeNode.category = '00 - Index';
-        homeNode.size = 20;
-      }
-
-      // Build links
-      const linkSet = new Set();
-      for (const node of nodes) {
-        for (const target of node.outgoing) {
-          const targetId = idMap.get(target.toLowerCase());
-          if (targetId && targetId !== node.id) {
-            const key = `${node.id}→${targetId}`;
-            if (!linkSet.has(key)) {
-              linkSet.add(key);
-              links.push({ source: node.id, target: targetId });
-            }
-          }
-        }
-      }
-
-      res.json({ nodes, links });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
   });
 
   if (process.env.NODE_ENV === 'production') {

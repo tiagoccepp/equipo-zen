@@ -11,12 +11,15 @@ import {
 // SOBREESCRIBEN a las variables de entorno. Los módulos leen SIEMPRE por
 // estos getters, así los cambios aplican en caliente sin reiniciar.
 
-export const MINIMAX_MODEL_OPTIONS = ['MiniMax-M2', 'MiniMax-M2.1', 'MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M3'];
-export const DEEPSEEK_MODEL_OPTIONS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
-export const LLM_MODEL_OPTIONS = {
-  minimax: MINIMAX_MODEL_OPTIONS,
-  deepseek: DEEPSEEK_MODEL_OPTIONS
-};
+// Lo que ofrece el desplegable sale de los proveedores, no de una copia: así la
+// lista contra la que se valida al GUARDAR y la lista contra la que se valida al
+// LEER son literalmente la misma, y no puede volver a pasar que un modelo entre
+// por la UI y después el servidor lo ignore.
+export const LLM_MODEL_OPTIONS = Object.fromEntries(
+  Object.values(LLM_PROVIDERS).map((provider) => [provider.id, provider.models])
+);
+export const MINIMAX_MODEL_OPTIONS = LLM_MODEL_OPTIONS.minimax;
+export const DEEPSEEK_MODEL_OPTIONS = LLM_MODEL_OPTIONS.deepseek;
 export const WHISPER_MODEL_OPTIONS = ['base', 'small', 'medium', 'large-v3-turbo'];
 export const STT_PROVIDERS = ['local', 'groq', 'browser'];
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
