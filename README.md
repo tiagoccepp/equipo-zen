@@ -4,8 +4,8 @@ App local para crear **simulaciones de empresas** (una tecnológica, una automot
 
 - **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3, elegible desde Ajustes).
 - **Cerebro**: **MiniMax**, **DeepSeek** (`deepseek-v4-flash` para conversar, `deepseek-v4-pro` para el trabajo pesado) u **opencode Zen** (pool gratis con rotación: `beam-free` + 6 repuestos), a elección en ⚙ Ajustes. Cada proveedor guarda su clave por separado, así que cambiar de uno a otro y volver no obliga a pegarla de nuevo.
-- **Voz de los empleados**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) corriendo **100% local** (ONNX, 31 idiomas, 10 voces).
-- **Tu voz**: **Whisper** (el open source de OpenAI) corriendo **local** vía faster-whisper — o Groq (cloud) o el navegador, a elección en ⚙ Ajustes. Por defecto: todo local.
+- **Voz de los empleados**: la del **navegador** (cero instalación: abrir y escuchar) — o [Supertonic TTS](https://github.com/supertone-inc/supertonic) **100% local** (ONNX, 31 idiomas, 10 voces) como mejora opcional.
+- **Tu voz**: **Whisper** local vía faster-whisper si está instalado; si no, el **navegador** automáticamente (cero instalación) — o Groq (cloud), a elección en ⚙ Ajustes.
 
 ## Ejecutar
 
@@ -13,11 +13,11 @@ App local para crear **simulaciones de empresas** (una tecnológica, una automot
 npm install
 cp .env.example .env                 # o cargá las claves después desde ⚙ Ajustes
 
-# Audio local (una sola vez; los modelos se descargan en el primer arranque):
-python3 -m venv .venv-tts
-.venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
+# Audio local (OPCIONAL, solo si querés mejor calidad de voz):
+# python3 -m venv .venv-tts
+# .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
 
-npm run dev                          # backend + frontend + TTS + STT locales
+npm run dev                          # backend + frontend (+ TTS/STT locales si están instalados)
 ```
 
 Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:8787`); el cliente le habla vía proxy same-origin.

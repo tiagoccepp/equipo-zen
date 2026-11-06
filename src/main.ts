@@ -937,6 +937,152 @@ class BrowserSpeechRecognizer {
   }
 }
 
+// ── TTS del navegador (speechSynthesis) ─────────────────────────────────────
+// Cuando Supertonic no está disponible (ej. demo pública en la nube, donde no
+// hay venv ni modelos locales), los agentes igual HABLAN usando la voz
+// incorporada del navegador. Cero instalación: abrir el link, entrar a la
+// llamada, escuchar al equipo. La calidad es menor que Supertonic, pero el
+// valor es inmediato. Supertonic, cuando responde, siempre tiene prioridad.
+class BrowserTts {
+  private pending: SpeechSynthesisUtterance[] = [];
+
+  supported(): boolean {
+    return typeof window !== 'undefined' && 'speechSynthesis' in window;
+  }
+
+  speak(text: string, opts: { onend?: () => void } = {}): boolean {
+    if (!this.supported()) {
+      return false;
+    }
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (!clean) {
+      return false;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      this.pending = [];
+      const chunks = splitSpeech(clean, 220);
+      chunks.forEach((part, index) => {
+        const utter = new SpeechSynthesisUtterance(part);
+        utter.lang = 'es-ES';
+        utter.rate = 1.06;
+        utter.pitch = 1;
+        const voice = pickSpanishVoice();
+        if (voice) {
+          utter.voice = voice;
+        }
+        const done = () => {
+          this.pending = this.pending.filter((u) => u !== utter);
+          if (index === chunks.length - 1) {
+            opts.onend?.();
+          }
+        };
+        utter.onend = done;
+        utter.onerror = done;
+        this.pending.push(utter);
+        window.speechSynthesis.speak(utter);
+      });
+      return true;
+    } catch {
+      this.pending = [];
+      return false;
+    }
+  }
+
+  stop(): void {
+    this.pending = [];
+    try {
+      if (this.supported()) {
+        window.speechSynthesis.cancel();
+      }
+    } catch {
+      // Best effort.
+    }
+  }
+}
+
+// Primera voz en español disponible (se reintenta en cada turno porque Chrome
+// carga la lista de forma asíncrona); null = voz default del navegador.
+function pickSpanishVoice(): SpeechSynthesisVoice | null {
+  try {
+    const voices = window.speechSynthesis.getVoices();
+    return voices.find((v) => v.lang?.toLowerCase().startsWith('es')) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Parte el texto en trozos que terminan en frontera de frase: evita el bug de
+// Chrome que pausa utterances largas y suena más natural entre pausas.
+function splitSpeech(text: string, maxLen: number): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > maxLen) {
+    const window_ = rest.slice(0, maxLen + 1);
+    const cut = Math.max(
+      window_.lastIndexOf('. '),
+      window_.lastIndexOf('? '),
+      window_.lastIndexOf('! '),
+      window_.lastIndexOf('; '),
+      window_.lastIndexOf(', ')
+    );
+    const at = cut > 40 ? cut + 1 : maxLen;
+    parts.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest) {
+    parts.push(rest);
+  }
+  return parts;
+}
+
+const browserTts = new BrowserTts();
+
+// ¿Habla el navegador un turno de agente ahora? Se prende al arrancar
+// speechSynthesis y se apaga al terminar/cortar: sirve para el gate de eco
+// (no transcribir al propio agente) y para resaltar al orador en la llamada.
+let browserTtsTurn: { turnId: string; agentId: string } | null = null;
+
+// Habla el turno por el navegador SOLO si corresponde: dentro de una llamada,
+// sin Supertonic sano, con speechSynthesis disponible. Nunca compite con el
+// audio del servidor.
+function speakAgentTurnBrowser(turnId: string, agentId: string, text: string): void {
+  if (!state.callMode) {
+    return;
+  }
+  if (state.settingsStatus?.tts?.healthy) {
+    return;
+  }
+  if (!text?.trim()) {
+    return;
+  }
+  const started = browserTts.speak(text, {
+    onend: () => {
+      if (browserTtsTurn?.turnId === turnId && browserTtsTurn?.agentId === agentId) {
+        browserTtsTurn = null;
+        if (state.speakingAgentId === agentId && !state.audioSegment) {
+          state.speakingAgentId = '';
+          markDirty('agents', 'call');
+        }
+      }
+    }
+  });
+  if (started) {
+    browserTtsTurn = { turnId, agentId };
+    state.speakingAgentId = agentId;
+    markDirty('agents', 'call');
+  }
+}
+
+function stopBrowserTts(): void {
+  browserTtsTurn = null;
+  browserTts.stop();
+  if (state.speakingAgentId && !state.audioSegment) {
+    state.speakingAgentId = '';
+    markDirty('agents', 'call');
+  }
+}
+
 // ¿Está sonando la voz de un agente ahora mismo? (lo consulta el reconocedor
 // del navegador para no transcribir el eco del propio agente como si fueras vos)
 // Ventana móvil del subtítulo: se lee lo último dicho (como un subtítulo de
@@ -953,7 +1099,7 @@ function tailCaption(text: string): string {
 }
 
 function agentAudioIsPlaying(): boolean {
-  return Boolean(state?.audio?.isPlaying || state?.audioSegment);
+  return Boolean(state?.audio?.isPlaying || state?.audioSegment || browserTtsTurn);
 }
 
 // Se prende al confirmar un barge-in y se apaga cuando el turno de la persona
@@ -1616,6 +1762,7 @@ async function handleServerMessage(message: MeetingMessage) {
 
     case 'agent_interrupted': {
       state.audio.flush();
+      stopBrowserTts();
       state.audio.restoreGain();
       // Idempotente: si el corte lo disparó el barge-in local, esto solo
       // confirma lo que la UI ya está mostrando.
@@ -1677,6 +1824,7 @@ async function handleServerMessage(message: MeetingMessage) {
         // Turno cerrado: ESTE es el único momento en que lo dicho se anuncia al
         // lector de pantalla (una frase entera, no 200 deltas).
         state.callAnnounced = `${agentName(message.agentId)}: ${message.text.trim()}`;
+        speakAgentTurnBrowser(message.turnId, message.agentId, message.text);
       }
       markDirty('agents', 'keys', 'call');
       break;
@@ -2241,6 +2389,7 @@ function exitCallMode(source: string, options: { stopMic?: boolean } = {}) {
   send({ type: 'set_voice', enabled: false });
   // Lo que quedara sonando se corta: salir de la llamada es salir del audio.
   state.audio.stop();
+  stopBrowserTts();
   window.clearTimeout(callFpsTimer);
   callFpsTimer = 0;
   trace('call_mode_left', { source, stopMic: Boolean(options.stopMic) });
@@ -2666,6 +2815,11 @@ function mountShell() {
                 <div class="transcript-empty" id="transcriptEmpty">
                   <p class="empty-title">La mesa está lista</p>
                   <p>Escribí abajo o activá el micrófono para arrancar la reunión. Podés nombrar a un empleado para dirigirte a esa persona.</p>
+                  <div class="suggestion-chips" role="group" aria-label="Sugerencias para arrancar">
+                    <button type="button" class="chip action" data-action="send-suggestion" data-text="Preséntense en una frase cada uno">👋 Preséntense</button>
+                    <button type="button" class="chip action" data-action="send-suggestion" data-text="¿En qué están trabajando hoy? Cuéntenme lo más importante.">📋 ¿En qué andan?</button>
+                    <button type="button" class="chip action" data-action="send-suggestion" data-text="Denme una idea concreta para conseguir un cliente nuevo esta semana">💡 Una idea para vender</button>
+                  </div>
                 </div>
                 <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
               </div>
@@ -3289,6 +3443,9 @@ function handleDelegatedClick(event: Event) {
       break;
     case 'copy-setup-cmd':
       void copyCommand(target, target.dataset.cmd || '');
+      break;
+    case 'send-suggestion':
+      sendSuggestion(target.dataset.text || '');
       break;
 
     // ── Workspace: reunión ──
@@ -4164,15 +4321,27 @@ function renderSetupNotice() {
 
   if (!status.tts.healthy && !state.setupDismissed) {
     notice.hidden = false;
-    notice.className = 'setup-notice';
-    notice.innerHTML = `
-      <span class="setup-icon" aria-hidden="true">💬</span>
-      <div class="setup-copy">
-        <p><strong>El equipo va a responder por texto.</strong> La voz (Supertonic) no está instalada o no responde. La reunión funciona igual; si la querés con voz, corré esto y volvé a levantar el servidor:</p>
-        ${renderSetupCommand(SETUP_INSTALL_CMD, 'voz')}
-      </div>
-      <button class="icon-btn sm" type="button" data-action="dismiss-setup-notice" aria-label="Entendido, no mostrar más este aviso" title="Entendido, no mostrar más">${closeIcon()}</button>
-    `;
+    if (browserTts.supported()) {
+      // Caso demo/nube: el navegador pone la voz, cero instalación.
+      notice.className = 'setup-notice friendly';
+      notice.innerHTML = `
+        <span class="setup-icon" aria-hidden="true">🎙️</span>
+        <div class="setup-copy">
+          <p><strong>Voz del navegador activa.</strong> Los empleados hablan sin instalar nada: entrá a la llamada o tocá el micrófono. La voz local (Supertonic) suena mejor y es opcional — ver Ajustes.</p>
+        </div>
+        <button class="icon-btn sm" type="button" data-action="dismiss-setup-notice" aria-label="Entendido, no mostrar más este aviso" title="Entendido, no mostrar más">${closeIcon()}</button>
+      `;
+    } else {
+      notice.className = 'setup-notice';
+      notice.innerHTML = `
+        <span class="setup-icon" aria-hidden="true">💬</span>
+        <div class="setup-copy">
+          <p><strong>El equipo va a responder por texto.</strong> Este navegador no tiene voz incorporada y Supertonic no responde. La reunión funciona igual; si la querés con voz, corré esto y volvé a levantar el servidor:</p>
+          ${renderSetupCommand(SETUP_INSTALL_CMD, 'voz')}
+        </div>
+        <button class="icon-btn sm" type="button" data-action="dismiss-setup-notice" aria-label="Entendido, no mostrar más este aviso" title="Entendido, no mostrar más">${closeIcon()}</button>
+      `;
+    }
     return;
   }
 
@@ -4738,15 +4907,15 @@ function renderSettingsBody() {
         <span class="settings-icon" aria-hidden="true">🔊</span>
         <div class="settings-section-titles">
           <h3 id="setTtsTitle">Voz <span class="settings-sub">· cómo hablan los empleados</span></h3>
-          <p class="settings-desc">Las voces se generan con Supertonic, 100% local.</p>
+          <p class="settings-desc">Sin instalación hablan con la voz del navegador; con Supertonic local suenan mejor.</p>
         </div>
         ${status?.tts.healthy
           ? '<span class="status-chip ok">Supertonic activo ✓</span>'
-          : '<span class="status-chip err">Supertonic no responde</span>'}
+          : '<span class="status-chip warn">Voz del navegador</span>'}
       </header>
       <div class="settings-fields">
         ${status && !status.tts.healthy ? renderSetupFix(
-          'Sin Supertonic los empleados responden por texto: la reunión funciona igual, pero nadie habla. Instalalo y volvé a levantar el servidor.',
+          'Voz del navegador activa (cero instalación). Supertonic local es opcional: voces propias por empleado y mejor calidad. Si lo instalás, volvé a levantar el servidor.',
           SETUP_INSTALL_CMD,
           'voz'
         ) : ''}
@@ -6599,7 +6768,20 @@ function submitTurn() {
   trace('manual_turn_submitted', { text, length: text.length });
   state.manualText = '';
   byId<HTMLTextAreaElement>('turnInput').value = '';
+  stopBrowserTts();
   send({ type: 'user_turn', text });
+}
+
+// Un click en una sugerencia manda el turno directo (valor al toque: el
+// visitante ve al equipo responder sin tipear nada).
+function sendSuggestion(text: string): void {
+  const clean = text.trim();
+  if (!clean || !state.connected) {
+    return;
+  }
+  trace('suggestion_clicked', { text: clean });
+  stopBrowserTts();
+  send({ type: 'user_turn', text: clean });
 }
 
 function updateMicSetting(setting: string, value: number) {

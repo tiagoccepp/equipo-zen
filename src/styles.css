@@ -814,6 +814,10 @@ svg {
   background: color-mix(in srgb, var(--danger) 11%, transparent);
 }
 
+.setup-notice.friendly {
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
 .setup-icon {
   flex: 0 0 auto;
   font-size: 1.05rem;
@@ -1210,6 +1214,27 @@ details[open] > summary .chevron {
 .chip.more {
   background: transparent;
   color: var(--ink-3);
+}
+
+/* Sugerencias de arranque: un click = un turno (valor al toque). */
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+button.chip.action {
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--ink-2);
+  padding: 6px 12px;
+  font-size: var(--text-sm);
+}
+
+button.chip.action:hover {
+  background: color-mix(in srgb, var(--accent) 19%, transparent);
 }
 
 .chip.knowledge {
