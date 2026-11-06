@@ -37,6 +37,24 @@ export const MINIMAX_MODELS = uniqueModelList([
 // Los dos hablan el formato de OpenAI (mismo /chat/completions, mismo Bearer,
 // misma forma del parámetro `thinking`), así que el cliente es uno solo y lo
 // único que cambia es a dónde apunta, con qué clave y con qué modelos.
+export const OPENCODE_API_URL = process.env.OPENCODE_API_URL || 'https://opencode.ai/zen/go/v1/chat/completions';
+// Pool de rotación Zen (costo 0, verificado 2026-11-06). beam-free primero:
+// es el primario; el resto son repuestos en orden. kimi-* excluido: exige
+// temperature=1 y el cliente manda 0.7.
+export const OPENCODE_CATALOG = [
+  'beam-free',
+  'iceman-contributor-free',
+  'crouton-alpha-free',
+  'deepseek-v4.1-flash',
+  'qwen3.8-flash',
+  'minimax-m3.1-flash',
+  'glm-5.3-flash'
+];
+export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || OPENCODE_CATALOG[0];
+export const OPENCODE_MODELS = uniqueModelList([
+  OPENCODE_MODEL,
+  ...OPENCODE_CATALOG
+]);
 export const LLM_PROVIDERS = {
   minimax: {
     id: 'minimax',
@@ -66,10 +84,30 @@ export const LLM_PROVIDERS = {
     // de salida se llama max_tokens (max_completion_tokens lo ignora).
     thinking: 'disabled',
     tokenParam: 'max_tokens'
+  },
+  opencode: {
+    id: 'opencode',
+    label: 'opencode Zen',
+    url: OPENCODE_API_URL,
+    envKey: 'OPENCODE_API_KEY',
+    settingKey: 'llm.opencodeKey',
+    defaultModel: OPENCODE_MODEL,
+    models: OPENCODE_MODELS,
+    // Zen RECHAZA el parámetro thinking (400 unsupported_parameter,
+    // verificado 2026-11-06): con null el cliente lo omite.
+    thinking: null,
+    tokenParam: 'max_tokens',
+    // Zen exige el header x-opencode-session (400 MissingSessionID sin él,
+    // verificado 2026-11-06).
+    extraHeaders: {
+      'User-Agent': 'portfolio-live-smoke/1.0',
+      'x-opencode-session': 'equipo-live'
+    }
   }
 };
 
-export const DEFAULT_LLM_PROVIDER = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'minimax';
+const _envProvider = String(process.env.LLM_PROVIDER || '').trim().toLowerCase();
+export const DEFAULT_LLM_PROVIDER = LLM_PROVIDERS[_envProvider] ? _envProvider : 'minimax';
 
 export function collectProviderKeys(providerId) {
   const provider = LLM_PROVIDERS[providerId];

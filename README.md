@@ -3,7 +3,7 @@
 App local para crear **simulaciones de empresas** (una tecnológica, una automotora, una distribuidora… todas las que quieras) y conversar por voz o texto con sus **empleados IA**, cada uno con sus skills, conocimientos, personalidad y voz propia. Los empleados hablan en streaming, se los puede interrumpir a mitad de frase, recuerdan reuniones anteriores y **aprenden de lo que les enseñás**.
 
 - **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3, elegible desde Ajustes).
-- **Cerebro**: **MiniMax** o **DeepSeek** (`deepseek-v4-flash` para conversar, `deepseek-v4-pro` para el trabajo pesado), a elección en ⚙ Ajustes. Cada proveedor guarda su clave por separado, así que cambiar de uno a otro y volver no obliga a pegarla de nuevo.
+- **Cerebro**: **MiniMax**, **DeepSeek** (`deepseek-v4-flash` para conversar, `deepseek-v4-pro` para el trabajo pesado) u **opencode Zen** (pool gratis con rotación: `beam-free` + 6 repuestos), a elección en ⚙ Ajustes. Cada proveedor guarda su clave por separado, así que cambiar de uno a otro y volver no obliga a pegarla de nuevo.
 - **Voz de los empleados**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) corriendo **100% local** (ONNX, 31 idiomas, 10 voces).
 - **Tu voz**: **Whisper** (el open source de OpenAI) corriendo **local** vía faster-whisper — o Groq (cloud) o el navegador, a elección en ⚙ Ajustes. Por defecto: todo local.
 

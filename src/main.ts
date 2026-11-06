@@ -86,6 +86,8 @@ type SettingsData = {
     apiKeyMasked: string;
     deepseekKeySet?: boolean;
     deepseekKeyMasked?: string;
+    opencodeKeySet?: boolean;
+    opencodeKeyMasked?: string;
     model: string;
     modelOptions: string[];
   };
@@ -1071,7 +1073,7 @@ const state = {
 // y todavía no guardó. Solo lo que está acá viaja en el PUT.
 const settingsPending = new Map<string, string>();
 let settingsBaseline: Record<string, string> = {};
-const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'stt.groqKey']);
+const SETTINGS_SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'stt.groqKey']);
 
 // Qué modelos ofrece cada proveedor (el servidor manda la lista del activo;
 // esto permite repintar al cambiar el selector sin ir y volver al servidor).
@@ -4502,6 +4504,7 @@ async function borrarReunionesPasadas(cuantas: number) {
 const SETTINGS_SECRET_INPUT_IDS: Record<string, string> = {
   'llm.apiKey': 'setLlmKey',
   'llm.deepseekKey': 'setDeepseekKey',
+  'llm.opencodeKey': 'setOpencodeKey',
   'llm.provider': 'setLlmProvider',
   'stt.groqKey': 'setGroqKey'
 };
@@ -4656,6 +4659,19 @@ function renderSettingsBody() {
             ${settings.llm.deepseekKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="llm.deepseekKey">Quitar clave</button>' : ''}
           </div>
           <p class="hint">Se saca en platform.deepseek.com.</p>
+        </div>
+        <div class="form-field" ${proveedor === 'opencode' ? '' : 'hidden'}>
+          <label for="setOpencodeKey">Clave de API de opencode Zen</label>
+          <div class="secret-row">
+            <input type="password" id="setOpencodeKey" class="form-control" data-setting-key="llm.opencodeKey"
+              autocomplete="off" spellcheck="false"
+              placeholder="${settings.llm.opencodeKeySet
+                ? `${escapeHtml(settings.llm.opencodeKeyMasked || '')} (guardada — escribí para reemplazarla)`
+                : 'Pegá acá tu clave de opencode (para Zen)'}" />
+            <button type="button" class="icon-btn reveal-btn" data-action="toggle-secret" data-target="setOpencodeKey" aria-label="Mostrar clave" aria-pressed="false" title="Mostrar clave">${eyeIcon()}</button>
+            ${settings.llm.opencodeKeySet ? '<button type="button" class="btn ghost sm danger" data-action="settings-clear-key" data-key="llm.opencodeKey">Quitar clave</button>' : ''}
+          </div>
+          <p class="hint">Se saca en opencode.ai (sección Zen). Rota entre varios modelos gratis.</p>
         </div>
         <div class="form-field">
           <label for="setLlmModel">Modelo</label>
@@ -4892,6 +4908,7 @@ async function clearSettingsKey(key: string) {
   }
   const label = key === 'llm.apiKey' ? 'la clave de MiniMax'
     : key === 'llm.deepseekKey' ? 'la clave de DeepSeek'
+    : key === 'llm.opencodeKey' ? 'la clave de opencode Zen'
     : 'la clave de Groq';
   const confirmed = window.confirm(`¿Quitar ${label} guardada en esta app? Si existe una clave en el archivo .env se vuelve a usar esa.`);
   if (!confirmed) {

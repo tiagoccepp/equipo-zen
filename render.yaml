@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: equipo
+    runtime: docker
+    plan: free
+    branch: opencode-provider
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: LLM_PROVIDER
+        value: opencode
+      - key: OPENCODE_API_KEY
+        sync: false

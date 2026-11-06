@@ -15,15 +15,17 @@ import { getErrorText, getShortError } from './text.js';
 //   en streaming solo se re-rota si aún no se emitió ningún chunk.
 
 function buildBody(options, stream) {
+  const provider = getLlmProviderConfig();
   return JSON.stringify({
     model: options.model,
     messages: options.messages,
     stream,
     temperature: options.temperature ?? 0.7,
     // Cada proveedor llama distinto al tope de salida: MiniMax usa
-    // max_completion_tokens y DeepSeek max_tokens (el otro lo ignora callado).
-    [getLlmProviderConfig().tokenParam || 'max_completion_tokens']: options.maxTokens ?? 3000,
-    thinking: { type: options.thinking || 'disabled' }
+    // max_completion_tokens y DeepSeek/Zen max_tokens (el otro lo ignora callado).
+    [provider.tokenParam || 'max_completion_tokens']: options.maxTokens ?? 3000,
+    // Zen rechaza `thinking` (400); su proveedor lo trae en null y se omite.
+    ...(provider.thinking ? { thinking: { type: options.thinking || provider.thinking } } : {})
   });
 }
 
@@ -82,7 +84,8 @@ async function requestChat(key, options, stream) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${key.value}`
+        Authorization: `Bearer ${key.value}`,
+        ...(provider.extraHeaders || {})
       },
       body: buildBody(options, stream),
       signal: controller.signal
@@ -286,7 +289,14 @@ export async function completeChat(keyRing, options) {
 }
 
 function isModelNotFound(error) {
-  return /model.*(not found|invalid|does not exist)|2013|1004/i.test(getErrorText(error));
+  const text = getErrorText(error);
+  // 401 = la clave está mal: cambiar de modelo no ayuda, NO se rota.
+  if (/401|unauthorized|invalid api key|api key.*invalid/i.test(text)) {
+    return false;
+  }
+  // Reintentable con otro modelo: el modelo no existe / no está disponible /
+  // se deprecó, o el proveedor falló (404/429/5xx).
+  return /model.*(not found|invalid|does not exist)|unavailable|unknown model|no such model|deprecated|removed|does not exist|404|429|rate.?limit|quota|5\d\d|2013|1004/i.test(text);
 }
 
 // Timeout puesto por NOSOTROS (paciencia del cliente): no es culpa de la

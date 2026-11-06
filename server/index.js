@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 import { createServer } from 'node:http';
 
-import { DB_PATH, HOST, PORT, collectApiKeys, companyTemplates } from './lib/config.js';
+import { DB_PATH, DEFAULT_LLM_PROVIDER, HOST, LLM_PROVIDERS, PORT, collectProviderKeys, companyTemplates } from './lib/config.js';
 import { createApp } from './lib/http.js';
 import { ApiKeyRing } from './lib/key-ring.js';
 import { broadcastToCompany } from './lib/meeting-session.js';
@@ -24,7 +24,7 @@ store.ensureGoalSlugs();
 
 const app = createApp({ store });
 const server = createServer(app);
-const keyRing = new ApiKeyRing(collectApiKeys());
+const keyRing = new ApiKeyRing(collectProviderKeys(DEFAULT_LLM_PROVIDER));
 keyRing.setTelemetry(telemetry);
 initSettings(store, keyRing);
 attachMeetingServer(server, keyRing, store);
@@ -36,7 +36,7 @@ workforce.start();
 server.listen(PORT, HOST, () => {
   console.log(`Backend listo en http://${HOST}:${PORT} (DB: ${DB_PATH})`);
   if (!keyRing.hasKeys()) {
-    console.log('Sin claves MiniMax (MINIMAX_API_KEY): los agentes responden en modo simulación.');
+    console.log(`Sin claves de ${LLM_PROVIDERS[DEFAULT_LLM_PROVIDER].label} (${LLM_PROVIDERS[DEFAULT_LLM_PROVIDER].envKey}): los agentes responden en modo simulación.`);
   }
   setTimeout(() => {
     void ttsAvailable().then((ok) => {

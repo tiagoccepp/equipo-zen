@@ -20,6 +20,7 @@ export const LLM_MODEL_OPTIONS = Object.fromEntries(
 );
 export const MINIMAX_MODEL_OPTIONS = LLM_MODEL_OPTIONS.minimax;
 export const DEEPSEEK_MODEL_OPTIONS = LLM_MODEL_OPTIONS.deepseek;
+export const OPENCODE_MODEL_OPTIONS = LLM_MODEL_OPTIONS.opencode;
 export const WHISPER_MODEL_OPTIONS = ['base', 'small', 'medium', 'large-v3-turbo'];
 export const STT_PROVIDERS = ['local', 'groq', 'browser'];
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
@@ -113,6 +114,7 @@ const EDITABLE_KEYS = new Set([
   'llm.provider',
   'llm.apiKey',
   'llm.deepseekKey',
+  'llm.opencodeKey',
   'llm.model',
   'stt.provider',
   'stt.whisperModel',
@@ -121,7 +123,7 @@ const EDITABLE_KEYS = new Set([
   'tts.language'
 ]);
 
-const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'stt.groqKey']);
+const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'stt.groqKey']);
 
 function mask(value) {
   if (!value) {
@@ -142,6 +144,8 @@ export function publicSettings() {
       apiKeyMasked: mask(getLlmKeys('minimax')[0] || ''),
       deepseekKeySet: getLlmKeys('deepseek').length > 0,
       deepseekKeyMasked: mask(getLlmKeys('deepseek')[0] || ''),
+      opencodeKeySet: getLlmKeys('opencode').length > 0,
+      opencodeKeyMasked: mask(getLlmKeys('opencode')[0] || ''),
       model: getLlmModels()[0],
       modelOptions: LLM_MODEL_OPTIONS[getLlmProvider()] || MINIMAX_MODEL_OPTIONS
     },
@@ -199,7 +203,7 @@ export function applySettings(patch) {
     }
   }
 
-  if (applied.some((key) => key === 'llm.apiKey' || key === 'llm.deepseekKey' || key === 'llm.provider')) {
+  if (applied.some((key) => key === 'llm.apiKey' || key === 'llm.deepseekKey' || key === 'llm.opencodeKey' || key === 'llm.provider')) {
     keyRing.setKeys(getMinimaxKeys());
   }
   return applied;

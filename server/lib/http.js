@@ -5,9 +5,7 @@ import express from 'express';
 
 import {
   ALLOWED_ORIGINS,
-  MINIMAX_MODEL,
   TELEMETRY_MAX_EVENTS,
-  collectApiKeys,
   companyTemplates,
   rootDir
 } from './config.js';
@@ -17,7 +15,7 @@ import { renderLearningsSection } from './learning.js';
 import { isMeetingLive } from './meeting-session.js';
 import { applySuggestion } from './reflection.js';
 import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
-import { applySettings, publicSettings } from './settings.js';
+import { applySettings, getLlmKeys, getLlmModels, getLlmProvider, getLlmProviderConfig, publicSettings } from './settings.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
@@ -79,6 +77,11 @@ export function createApp({ store }) {
   });
   app.use(express.json({ limit: '512kb' }));
 
+  // Salud para el healthcheck del deploy (Render): GET plano, sin auth.
+  app.get('/health', (_req, res) => {
+    res.json({ ok: true, servicio: 'equipo', proveedor: getLlmProvider(), modelo: getLlmModels()[0] || null, claves: getLlmKeys().length > 0 });
+  });
+
   app.post('/api/telemetry', (req, res) => {
     const event = req.body || {};
     telemetry.add({
@@ -126,7 +129,7 @@ export function createApp({ store }) {
     const [tts, whisper] = await Promise.all([ttsAvailable(), whisperHealthy()]);
     const current = publicSettings();
     res.json({
-      llm: { configured: current.llm.apiKeySet, model: current.llm.model },
+      llm: { configured: getLlmKeys().length > 0, provider: getLlmProvider(), model: current.llm.model },
       tts: { engine: 'supertonic', healthy: tts },
       stt: {
         provider: current.stt.provider,
@@ -293,8 +296,8 @@ export function createApp({ store }) {
     const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
     res.json({
       agents: store.listAgents({ companyId }),
-      model: MINIMAX_MODEL,
-      hasApiKeys: collectApiKeys().length > 0
+      model: getLlmModels()[0],
+      hasApiKeys: getLlmKeys().length > 0
     });
   });
 
