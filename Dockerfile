@@ -1,4 +1,5 @@
-FROM node:20-slim
+# node:24: el repo usa node:sqlite (inexistente en node:20).
+FROM node:24-slim
 
 WORKDIR /app
 
