@@ -1172,6 +1172,7 @@ const state = {
   newCompanyTab: 'templates' as 'templates' | 'scratch',
   scratchColor: COMPANY_COLORS[0],
   creatingCompany: false,
+  instantDemo: false,
   company: null as Company | null,
   companyId: loadLastCompanyId(),
   // Proyectos de la empresa abierta + el que se está trabajando.
@@ -1441,6 +1442,7 @@ function enterCompany(companyId: string, seed?: Company | null) {
   syncWorkPolling();
   markDirty('view', 'company', 'projects');
   trace('company_entered', { companyId });
+  setHash(`#/e/${companyId}`);
   void loadProjects(companyId);
 }
 
@@ -1475,6 +1477,9 @@ function enterProject(goalId: string, seed?: Project | null) {
   syncWorkPolling();
   markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work', 'setup');
   trace('project_entered', { companyId, goalId });
+  if (companyId) {
+    setHash(`#/e/${companyId}/p/${goalId}`);
+  }
   // Puede haber levantado (o caído) la voz desde la última vez.
   void refreshSetupStatus();
   void loadDeviceStatus();
@@ -1502,6 +1507,7 @@ function leaveToCompany() {
   syncWorkPolling();
   markDirty('view', 'call', 'projects');
   trace('back_to_company', { companyId });
+  setHash(`#/e/${companyId}`);
   void loadProjects(companyId);
 }
 
@@ -1586,6 +1592,7 @@ function leaveToHome() {
   syncWorkPolling();
   markDirty('view', 'connection', 'home', 'call');
   trace('back_to_home');
+  setHash('');
   void loadCompanies();
 }
 
@@ -1607,6 +1614,112 @@ async function loadCompanies() {
   await loadTemplates();
   state.companiesLoading = false;
   markDirty('home');
+}
+
+// Deep-links compartibles (#/e/<empresa>/p/<proyecto>): replaceState para
+// no ensuciar el historial en cada navegación.
+function setHash(hash: string) {
+  history.replaceState(null, '', hash || `${location.pathname}${location.search}`);
+}
+
+// Demo en 1 clic: usa la primera empresa activa (o instancia Atelier Web),
+// usa su primer proyecto (o crea uno de ejemplo) y entra directo.
+async function startInstantDemo() {
+  if (state.instantDemo) {
+    return;
+  }
+  state.instantDemo = true;
+  const btn = document.getElementById('instantDemoBtn');
+  if (btn instanceof HTMLButtonElement) {
+    btn.disabled = true;
+  }
+  try {
+    let companies = state.companies;
+    if (companies.length === 0) {
+      const data = await apiJson<{ companies: Company[] }>('/api/companies');
+      companies = data.companies || [];
+    }
+    let companyId = companies[0]?.id;
+    if (!companyId) {
+      const created = await apiJson<{ company: Company }>('/api/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId: 'web' })
+      });
+      companyId = created.company.id;
+    }
+    const projectsData = await apiJson<{ projects: Project[] }>(
+      `/api/companies/${encodeURIComponent(companyId)}/projects`
+    );
+    let project = (projectsData.projects || [])[0];
+    if (!project) {
+      const created = await apiJson<{ project: Project }>(
+        `/api/companies/${encodeURIComponent(companyId)}/projects`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: 'Demo: sitio para mi negocio',
+            brief: 'Quiero una página que presente mis servicios y me traiga clientes.'
+          })
+        }
+      );
+      project = created.project;
+    }
+    enterCompany(companyId);
+    enterProject(project.id, project);
+  } catch (error) {
+    upsertAlert('instant-demo', 'Demo', `No pude arrancar la demo: ${getClientError(error)}`, 'error', 5000);
+  } finally {
+    state.instantDemo = false;
+    if (btn instanceof HTMLButtonElement) {
+      btn.disabled = false;
+    }
+  }
+}
+
+// Al abrir con deep-link, navega directo (una sola vez, en el arranque).
+async function restoreFromHash() {
+  const match = location.hash.match(/^#\/e\/([\w-]+)(?:\/p\/([\w-]+))?/);
+  if (!match) {
+    return;
+  }
+  const companyId = match[1];
+  const goalId = match[2];
+  if (!state.companies.some((company) => company.id === companyId)) {
+    return;
+  }
+  enterCompany(companyId);
+  if (!goalId) {
+    return;
+  }
+  try {
+    const data = await apiJson<{ projects: Project[] }>(
+      `/api/companies/${encodeURIComponent(companyId)}/projects`
+    );
+    const project = (data.projects || []).find((item) => item.id === goalId);
+    if (project && state.companyId === companyId) {
+      enterProject(project.id, project);
+    }
+  } catch {
+    // Sin proyecto válido, queda en la empresa.
+  }
+}
+
+// Restricción de voz: solo Chrome/Edge/Safari transcriben en el navegador
+// (Brave expone la API pero la tiene desactivada; Firefox estable aún no
+// la trae). Se detecta una vez y muestra el aviso fijo del composer.
+async function detectVoiceBrowser() {
+  const srExposed = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
+  let isBrave = false;
+  try {
+    isBrave = await (navigator as any).brave?.isBrave?.() ?? false;
+  } catch {
+    isBrave = false;
+  }
+  if (!srExposed || isBrave) {
+    document.getElementById('browserVoiceNote')?.removeAttribute('hidden');
+  }
 }
 
 // ── Mensajes del servidor ───────────────────────────────────────────────
@@ -2741,6 +2854,9 @@ function mountShell() {
           </div>
           <h1>Simulaciones</h1>
           <p class="lead">Cada empresa es un mundo aparte: su equipo, sus reuniones y su memoria. Entrá a una para conversar por voz o texto con sus empleados.</p>
+          <div class="home-cta">
+            <button class="btn primary" id="instantDemoBtn" data-action="instant-demo" type="button">⚡ Probar demo instantánea</button>
+          </div>
         </header>
         <section id="companiesGrid" class="companies" aria-label="Tus simulaciones"></section>
         <details class="archived-panel" id="archivedPanel" hidden>
@@ -2881,6 +2997,7 @@ function mountShell() {
                   <textarea id="turnInput" rows="1" placeholder="Escribile al equipo… (Enter envía · Shift+Enter, salto de línea)" aria-label="Mensaje para el equipo"></textarea>
                   <button class="send-btn" id="sendButton" type="submit" disabled>${sendIcon()}<span>Enviar</span></button>
                 </form>
+                <p class="browser-voice-note muted" id="browserVoiceNote" hidden>🎙️ La voz funciona en Chrome, Edge y Safari — en este navegador escribí en el chat.</p>
                 <details class="mic-details" id="micDetails">
                   <summary>Ajustes de micrófono ${chevronIcon()}</summary>
                   <div id="micTuning"></div>
@@ -3444,6 +3561,9 @@ function handleDelegatedClick(event: Event) {
       if (target.dataset.goalId) {
         enterProject(target.dataset.goalId);
       }
+      break;
+    case 'instant-demo':
+      void startInstantDemo();
       break;
     case 'new-project':
       openModal('newProjectModal');
@@ -6121,7 +6241,7 @@ function renderProjectCards(): string {
   if (state.projects.length === 0) {
     return `<div class="ws-empty">
       <span class="ws-empty-icon" aria-hidden="true">📁</span>
-      <h3>Todavía no hay proyectos</h3>
+      <h2>Todavía no hay proyectos</h2>
       <p>Creá uno y contale al equipo qué querés lograr. Cada proyecto tiene su reunión, sus tareas y su carpeta propia.</p>
       <button class="btn primary" data-action="new-project" type="button">+ Nuevo proyecto</button>
     </div>`;
@@ -7034,10 +7154,7 @@ async function toggleLiveAudio() {
       asrSupported = state.browserSpeech.start();
     }
     if (!asrSupported) {
-      const serverStt = state.settingsStatus?.stt?.groqConfigured === true;
-      upsertAlert('asr', 'Voz', serverStt
-        ? 'Este navegador no transcribe voz (Brave/Firefox): el servidor transcribe tu audio.'
-        : 'Este navegador no transcribe voz (Brave/Firefox): cambiá a Chrome/Edge o escribí — la transcripción del servidor (Groq) aún no está configurada.', 'working', 5200);
+      upsertAlert('asr', 'Voz', 'La voz de esta demo funciona en Chrome, Edge y Safari. Acá seguí por el chat — todo lo demás anda igual.', 'working', 5200);
     }
     state.microphone = new LiveMicrophoneStreamer(send, (label) => {
       state.voiceStatus = label;
@@ -7396,7 +7513,8 @@ function chevronIcon() {
 
 mountShell();
 render();
-void loadCompanies();
+void loadCompanies().then(() => restoreFromHash());
+void detectVoiceBrowser();
 // Para que "Archivadas (N)" ya tenga su número al abrir el home.
 void loadArchivedCompanies();
 // Y para saber si falta la voz o la clave antes de entrar a una empresa.

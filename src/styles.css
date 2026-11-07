@@ -1883,6 +1883,7 @@ button.chip.action:hover {
 
 .range-control input[type='range'] {
   width: 100%;
+  min-height: 24px;
   accent-color: var(--accent);
 }
 
@@ -3574,9 +3575,21 @@ select.form-control {
   opacity: 0.7;
 }
 
-.ws-empty h3 {
+.ws-empty h2 {
   font-size: var(--text-md);
   font-weight: 750;
+}
+
+.home-cta {
+  margin-top: var(--s-3);
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.browser-voice-note {
+  margin: var(--s-2) 0 0;
+  font-size: var(--text-xs);
 }
 
 .ws-empty p {
