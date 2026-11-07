@@ -1,0 +1,849 @@
+/* ═══════════════════════════════════════════════════════════════════
+   TEMA «CONSOLA NOCTURNA» v2 — Lovable (home) + Paperclip (workspace),
+   remix oscuro con acento arc. Capa visual sobre styles.css: redefine
+   tokens y re-dibuja componentes con los mismos selectores (el JS no se
+   entera). Dirección completa: desktop/DESIGN.md.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+
+  --font-display: 'Unbounded', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Paleta: negros neutro-fríos (Paperclip) + arc (Jarvis). */
+  --bg: #0a0a0c;
+  --bg-soft: #0e0e11;
+  --surface: #141418;
+  --surface-2: #1b1b21;
+  --surface-3: #232329;
+  --ink: #f4f4f5;
+  --ink-2: #a8a8b3;
+  --ink-3: #6e6e78;
+  --line: #232329;
+  --line-2: #32323a;
+  --accent: #38d1ff;
+  --accent-ink: #06121a;
+  --accent-soft: rgba(56, 209, 255, 0.12);
+  --danger: #f2555a;
+  --ok: #3fd08c;
+  --warn: #f5a524;
+  --focus: #38d1ff;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.55), 0 18px 50px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(0, 0, 0, 0.62);
+
+  --r-xl: 20px;
+
+  /* Mesh del héroe: la única fiesta de color, contenida. */
+  --mesh:
+    radial-gradient(52% 68% at 18% 8%, rgba(56, 209, 255, 0.16), transparent 70%),
+    radial-gradient(46% 62% at 82% 12%, rgba(253, 73, 168, 0.12), transparent 70%),
+    radial-gradient(60% 80% at 55% 100%, rgba(116, 145, 255, 0.13), transparent 72%);
+}
+
+html {
+  scrollbar-color: var(--line-2) transparent;
+}
+
+body {
+  background: var(--bg);
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+::selection {
+  background: rgba(56, 209, 255, 0.28);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-s);
+}
+
+/* ── Armazón: sidebar + contenido ─────────────────────────────────── */
+
+.app {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.sidebar {
+  width: 252px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-3);
+  background: var(--bg-soft);
+  border-right: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.side-brand .brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(56, 209, 255, 0.8);
+  flex: none;
+}
+
+.side-section-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 0 var(--s-2);
+  margin: var(--s-2) 0 var(--s-1);
+}
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side-nav .side-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  white-space: nowrap;
+  width: 100%;
+  padding: 7px var(--s-2);
+  border: 0;
+  border-radius: var(--r-m);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.855rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.side-nav .side-item:hover {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+
+.side-nav .side-item.is-active {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+
+.side-nav .side-item .side-ico {
+  width: 16px;
+  text-align: center;
+  flex: none;
+  font-style: normal;
+}
+
+.side-cos {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.side-co {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 6px var(--s-2);
+  border: 0;
+  border-radius: var(--r-m);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.855rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.side-co:hover {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+
+.side-co.is-active {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+
+.side-co .company-tile {
+  width: 22px;
+  height: 22px;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  flex: none;
+}
+
+.side-co span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Home Lovable ─────────────────────────────────────────────────── */
+
+.view-home {
+  background: var(--mesh), var(--bg);
+  background-attachment: fixed;
+}
+
+.home-inner {
+  max-width: 1060px;
+}
+
+.home-head h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(30px, 4vw, 44px);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.home-head .eyebrow {
+  color: var(--accent);
+  letter-spacing: 0.18em;
+}
+
+/* Composer gigante: la acción primaria del home. */
+.composer-big {
+  margin-top: var(--s-5);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.composer-big textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  padding: var(--s-4) var(--s-4) var(--s-2);
+  resize: none;
+  min-height: 64px;
+}
+
+.composer-big textarea::placeholder {
+  color: var(--ink-3);
+}
+
+.composer-big textarea:focus {
+  outline: none;
+}
+
+.composer-big:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(56, 209, 255, 0.18), var(--shadow-2);
+}
+
+.composer-big-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3) var(--s-3);
+}
+
+.composer-big-hint {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  margin-right: auto;
+}
+
+.composer-big .send-btn {
+  border-radius: var(--r-full);
+  padding: 9px 18px;
+}
+
+.home-cta {
+  margin-top: var(--s-3);
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+/* Cards de empresa: superficie oscura, borde pelo, hover con filo arc. */
+.company-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  transition: transform var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+
+.company-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-2);
+}
+
+.company-card.is-active,
+.company-card:focus-visible {
+  border-color: var(--accent);
+}
+
+.company-tile {
+  border-radius: 10px;
+}
+
+/* Cards de proyecto: superficie + filo como las de empresa. */
+.project-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  transition: transform var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+
+.project-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-2);
+}
+
+.project-card-open {
+  display: block;
+  width: 100%;
+  padding: var(--s-4);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-l);
+}
+
+.project-card-open h3 {
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin: var(--s-2) 0 var(--s-1);
+}
+
+.project-card-brief {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.project-card-meta {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  margin-top: var(--s-2);
+}
+
+.project-card-bar {
+  display: block;
+  height: 6px;
+  margin-top: var(--s-2);
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+
+.project-card-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  border-radius: var(--r-full);
+}
+
+.project-card-del {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+}
+
+/* ── Botones / inputs / forms ─────────────────────────────────────── */
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #6fdcff;
+  border-color: #6fdcff;
+}
+
+.btn.primary:disabled {
+  opacity: 0.45;
+}
+
+.btn.ghost {
+  border: 1px solid var(--line-2);
+  color: var(--ink-2);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-3);
+  background: var(--wash-strong);
+}
+
+.form-control {
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  color: var(--ink);
+  border-radius: var(--r-m);
+}
+
+.form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(56, 209, 255, 0.16);
+  outline: none;
+}
+
+.form-control::placeholder {
+  color: var(--ink-3);
+}
+
+select.form-control option {
+  background: var(--surface);
+}
+
+/* ── Workspace Paperclip: topbar + 3 columnas ─────────────────────── */
+
+.ws-inner {
+  max-width: none;
+  padding: 0 var(--s-4) var(--s-5);
+}
+
+.wsbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+  margin: 0 calc(var(--s-4) * -1);
+  padding: var(--s-2) var(--s-4);
+}
+
+.ws-identity h1 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.mode-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(56, 209, 255, 0.3);
+  font-weight: 700;
+}
+
+.status.is-on {
+  color: var(--ok);
+}
+
+.ws-grid {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr) 300px;
+  gap: var(--s-4);
+  align-items: start;
+  margin-top: var(--s-4);
+}
+
+/* Riel de agentes: filas compactas con presencia. */
+.ws-side {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  padding: var(--s-3);
+  position: sticky;
+  top: 76px;
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+}
+
+.side-head h2 {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Panel de contexto derecho. */
+.ws-context {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  position: sticky;
+  top: 76px;
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+}
+
+.ctx-block h2 {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s-2);
+}
+
+.ctx-block .goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.ctx-block .form-control {
+  width: 100%;
+}
+
+.ctx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+/* Tabs: pills densas. */
+.ws-tabs {
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--s-2);
+}
+
+.ws-tab {
+  border-radius: var(--r-m);
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: 0.855rem;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+}
+
+.ws-tab:hover {
+  color: var(--ink);
+  background: var(--wash-strong);
+}
+
+.ws-tab.is-active {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-color: var(--line-2);
+}
+
+/* Transcripción: burbujas oscuras, código legible. */
+.transcript {
+  background: transparent;
+}
+
+.msg {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+}
+
+.msg.is-user {
+  background: var(--surface-2);
+  border-color: var(--line-2);
+}
+
+.msg code,
+.work-feed code,
+.ctx-block code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.msg pre code {
+  display: block;
+  padding: var(--s-3);
+  overflow-x: auto;
+}
+
+.transcript-empty {
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-l);
+  background: var(--bg-soft);
+}
+
+.empty-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+.chip.action {
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  color: var(--ink);
+  border-radius: var(--r-full);
+  font-weight: 600;
+}
+
+.chip.action:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Composer: caja elevada con mic integrado. */
+.composer {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-l);
+  box-shadow: var(--shadow-1);
+}
+
+.turn-form textarea {
+  background: transparent;
+  color: var(--ink);
+}
+
+.turn-form textarea::placeholder {
+  color: var(--ink-3);
+}
+
+.mic-btn {
+  background: var(--surface-3);
+  border: 1px solid var(--line-2);
+  color: var(--ink-2);
+  border-radius: 50%;
+}
+
+.mic-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mic-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 4px rgba(56, 209, 255, 0.2);
+}
+
+.send-btn {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  border-radius: var(--r-m);
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #6fdcff;
+}
+
+.send-btn:disabled {
+  opacity: 0.4;
+}
+
+/* ── Modales / toasts / misceláneo ────────────────────────────────── */
+
+.modal-panel {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-l);
+  box-shadow: var(--shadow-2);
+}
+
+.modal-panel h2 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.toasts .toast,
+.toast {
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-m);
+  box-shadow: var(--shadow-2);
+}
+
+.setup-notice {
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.35);
+  border-radius: var(--r-m);
+}
+
+.work-notice {
+  background: var(--accent-soft);
+  border: 1px solid rgba(56, 209, 255, 0.3);
+  color: var(--accent);
+  border-radius: var(--r-full);
+  font-weight: 600;
+}
+
+.live-dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px rgba(63, 208, 140, 0.9);
+}
+
+/* Tablas de trabajo / organigrama / actividad. */
+.work-col {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+}
+
+.task-card,
+.work-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+}
+
+.task-card:hover,
+.work-card:hover {
+  border-color: var(--line-2);
+}
+
+.progress,
+.task-progress {
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+}
+
+.progress > span,
+.task-progress > span {
+  background: var(--ok);
+  border-radius: var(--r-full);
+}
+
+/* Vista llamada: ya es oscura; apenas se afina el marco. */
+.call {
+  background: rgba(4, 4, 6, 0.97);
+}
+
+.call-top,
+.call-bottom {
+  background: transparent;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+
+@media (max-width: 1280px) {
+  .ws-grid {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .ws-context {
+    grid-column: 1 / -1;
+    position: static;
+    max-height: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+}
+
+@media (max-width: 1020px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: auto;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: var(--s-2) var(--s-3);
+    gap: var(--s-3);
+  }
+
+  .side-nav {
+    flex-direction: row;
+  }
+
+  .side-section-title,
+  .side-cos,
+  .side-foot .side-nav {
+    display: none;
+  }
+
+  .side-foot {
+    margin: 0 0 0 auto;
+    border: 0;
+    padding: 0;
+    flex-direction: row;
+  }
+
+  .ws-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ws-side {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .home-head h1 {
+    font-size: 28px;
+  }
+
+  .composer-big-hint {
+    display: none;
+  }
+
+  .ws-tools .btn.ghost {
+    padding: 6px 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .company-card:hover {
+    transform: none;
+  }
+
+  .view-home {
+    background-attachment: scroll;
+  }
+}

@@ -1,8 +1,12 @@
 # DESIGN.md — Equipo Desktop «Consola Jarvis»
 
-Contrato de diseño de la app de escritorio (Tauri Win/Linux/Mac). La web
-compartida mantiene su tema papel; el skin desktop vive bajo `body.desktop`
-y el orbe en `orb.html`. Todo cambio visual posterior obedece a este archivo.
+Contrato de diseño de la app de escritorio (Tauri Win/Linux/Mac) + tema
+oscuro global. Desde v2 (07/11) TODA la app es oscura: home estilo Lovable
+(sidebar + héroe con mesh tenue + composer gigante) y workspace estilo
+Paperclip (3 columnas: agentes / conversación / contexto), acento arc
+y Unbounded. El skin desktop vive bajo `body.desktop`, el orbe en
+`orb.html`, y el tema global en `src/theme.css`. Todo cambio visual
+posterior obedece a este archivo. Tokens: `.audit/*/TOKENS.md`.
 
 ## Brief
 

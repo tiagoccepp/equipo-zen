@@ -39,8 +39,9 @@ body {
   height: 148px;
 }
 
-/* Cristal del orbe: gusto Tito 07/11, verbatim salvo el ruido (self-hosted
-   en data URI para no depender de red externa) y el círculo contenedor. */
+/* Cristal glass3d: gusto Tito 07/11 verbatim (ruido self-hosted en data URI).
+   Reservado para paneles flotantes/minimizados; el orbe actual es esfera de
+   partículas pura (dirección Tito 07/11, imagen de referencia). */
 .glass3d {
   --filter-glass3d: blur(5px) brightness(1.38) saturate(1.6);
   --color-glass3d: hsl(189 19% 11% / 0.8);

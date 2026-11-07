@@ -1,5 +1,6 @@
 import './styles.css';
 import './desktop.css';
+import './theme.css';
 
 import { VOICES, VOICE_LABELS, parseServerMessage } from '../shared/protocol.ts';
 import type {
@@ -1374,6 +1375,12 @@ function connect() {
         void tinvoke('show_orb').catch(() => {});
       }, 600);
     }
+    // El composer del home dejó un mensaje pendiente: se manda apenas hay reunión.
+    if (pendingHomeText) {
+      const text = pendingHomeText;
+      pendingHomeText = '';
+      window.setTimeout(() => send({ type: 'user_turn', text }), 400);
+    }
     // hello abre/reanuda una reunión DE ESTA EMPRESA.
     socket.send(JSON.stringify({
       type: 'hello',
@@ -1462,7 +1469,8 @@ function enterCompany(companyId: string, seed?: Company | null) {
   state.projectsError = false;
   closeSocketSilently();
   syncWorkPolling();
-  markDirty('view', 'company', 'projects');
+  // 'home' también: el sidebar vive en todas las vistas y marca la activa.
+  markDirty('view', 'company', 'projects', 'home');
   trace('company_entered', { companyId });
   setHash(`#/e/${companyId}`);
   void loadProjects(companyId);
@@ -1497,7 +1505,7 @@ function enterProject(goalId: string, seed?: Project | null) {
   lastFrameKey = '';
   workHtmlCache.clear();
   syncWorkPolling();
-  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work', 'setup');
+  markDirty('view', 'company', 'connection', 'scenario', 'agents', 'route', 'keys', 'voice', 'call', 'micTuning', 'work', 'setup', 'home');
   trace('project_entered', { companyId, goalId });
   if (companyId) {
     setHash(`#/e/${companyId}/p/${goalId}`);
@@ -2252,6 +2260,7 @@ const REGION_RENDERERS: Record<Region, () => void> = {
     byId('viewHome').hidden = state.view !== 'home';
     byId('viewCompany').hidden = state.view !== 'company';
     byId('viewWorkspace').hidden = state.view !== 'workspace';
+    document.getElementById('sideHome')?.classList.toggle('is-active', state.view === 'home');
     document.title = state.view === 'workspace' && state.project
       ? `${state.project.title} — Equipo`
       : state.view === 'company' && state.company
@@ -2260,6 +2269,7 @@ const REGION_RENDERERS: Record<Region, () => void> = {
   },
   home() {
     byId('companiesGrid').innerHTML = renderCompanies();
+    byId('sideCompanies').innerHTML = renderSideCompanies();
   },
   projects() {
     const company = state.company;
@@ -2867,17 +2877,37 @@ function closeTopModal() {
 
 function mountShell() {
   app.innerHTML = `
+  <div class="app">
+    <aside class="sidebar" aria-label="Navegación principal">
+      <p class="side-brand"><span class="brand-dot" aria-hidden="true"></span>Equipo</p>
+      <nav class="side-nav" aria-label="Secciones">
+        <button type="button" class="side-item is-active" id="sideHome" data-action="go-home"><i class="side-ico" aria-hidden="true">⌂</i>Inicio</button>
+        <button type="button" class="side-item" data-action="open-new-company"><i class="side-ico" aria-hidden="true">＋</i>Nueva empresa</button>
+      </nav>
+      <p class="side-section-title">Empresas</p>
+      <div class="side-cos" id="sideCompanies"></div>
+      <div class="side-foot">
+        <nav class="side-nav" aria-label="Ajustes">
+          <button type="button" class="side-item" data-action="open-settings"><i class="side-ico" aria-hidden="true">⚙</i>Ajustes</button>
+        </nav>
+      </div>
+    </aside>
+    <div class="app-main">
     <div class="view view-home" id="viewHome">
       <div class="home-inner">
         <header class="home-head">
-          <div class="home-head-top">
-            <p class="eyebrow">Equipo · simulador de empresas</p>
-            <button class="btn ghost sm" data-action="open-settings" type="button" title="Claves, voz y transcripción">${gearIcon()}Ajustes</button>
-          </div>
-          <h1>Simulaciones</h1>
-          <p class="lead">Cada empresa es un mundo aparte: su equipo, sus reuniones y su memoria. Entrá a una para conversar por voz o texto con sus empleados.</p>
+          <p class="eyebrow">Equipo · simulador de empresas</p>
+          <h1>¿En qué trabajamos hoy?</h1>
+          <p class="lead">Describí lo que necesitás y el equipo se reúne al instante. O entrá a una empresa y conversá por voz o texto.</p>
+          <form class="composer-big" id="homeComposerForm" aria-label="Arrancar una reunión">
+            <textarea id="homeComposerInput" rows="2" placeholder="Ej. Quiero una landing para mi negocio que traiga clientes…" aria-label="Qué querés lograr"></textarea>
+            <div class="composer-big-bar">
+              <span class="composer-big-hint">Enter arranca la demo y manda tu mensaje</span>
+              <button class="send-btn" id="homeComposerSend" type="submit">${sendIcon()}<span>Arrancar</span></button>
+            </div>
+          </form>
           <div class="home-cta">
-            <button class="btn primary" id="instantDemoBtn" data-action="instant-demo" type="button">⚡ Probar demo instantánea</button>
+            <button class="btn ghost" id="instantDemoBtn" data-action="instant-demo" type="button">⚡ Probar demo instantánea</button>
           </div>
         </header>
         <section id="companiesGrid" class="companies" aria-label="Tus simulaciones"></section>
@@ -2940,25 +2970,7 @@ function mountShell() {
 
         <div class="setup-notice" id="setupNotice" role="status" hidden></div>
 
-        <div class="goalbar">
-          <form id="scenarioForm" class="goal-form">
-            <label class="goal-label" for="scenarioInput">Objetivo de la reunión</label>
-            <input type="text" id="scenarioInput" placeholder="¿Qué quieren resolver hoy? (opcional)" />
-            <button class="btn ghost sm" type="submit">Guardar</button>
-          </form>
-          <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
-          <!-- El equipo arranca solo apenas se reparte una tarea. Esto es el
-               freno de mano: si querés hablar sin que nadie se ponga a
-               producir, lo apagás. -->
-          <label class="auto-work" title="El equipo empieza a trabajar apenas se reparte una tarea, sin esperar a que cierres la reunión">
-            <input type="checkbox" id="autoWorkToggle" checked />
-            <span>Arrancan solos</span>
-          </label>
-          <button class="btn sm" id="startWorkBtn" data-action="start-work" type="button" disabled>Forzar a trabajar</button>
-          <button class="btn primary sm end-meeting-btn" id="endMeetingBtn" data-action="end-meeting" type="button" disabled title="La CEO repasa lo asignado y, si confirmás, el equipo se pone a trabajar de verdad">Finalizar reunión</button>
-        </div>
-
-        <div class="ws-layout">
+        <div class="ws-grid">
           <aside class="ws-side">
             <section class="side-section" aria-labelledby="teamTitle">
               <div class="side-head">
@@ -2967,17 +2979,6 @@ function mountShell() {
               </div>
               <div id="agents" class="agents"></div>
             </section>
-            <details class="side-panel" id="orchestrationPanel">
-              <summary>
-                <h2>Orquestación</h2>
-                ${chevronIcon()}
-              </summary>
-              <div class="side-panel-body">
-                <div id="routePanel"></div>
-                <div id="keysPanel"></div>
-                <button class="btn ghost sm" data-action="health" type="button">Actualizar estado de claves</button>
-              </div>
-            </details>
           </aside>
 
           <main class="ws-main">
@@ -3109,6 +3110,36 @@ function mountShell() {
               </div>
             </section>
           </main>
+          <aside class="ws-context" aria-label="Contexto de la reunión">
+            <section class="ctx-block" aria-labelledby="ctxMeetTitle">
+              <h2 id="ctxMeetTitle">Reunión</h2>
+              <form id="scenarioForm" class="goal-form">
+                <label class="goal-label" for="scenarioInput">Objetivo de la reunión</label>
+                <input type="text" class="form-control" id="scenarioInput" placeholder="¿Qué quieren resolver hoy? (opcional)" />
+                <button class="btn ghost sm" type="submit">Guardar</button>
+              </form>
+              <div class="ctx-actions">
+                <button class="btn ghost sm" data-action="reset" type="button" title="Cierra esta reunión (queda en el historial) y abre una nueva">Nueva reunión</button>
+                <label class="auto-work" title="El equipo empieza a trabajar apenas se reparte una tarea, sin esperar a que cierres la reunión">
+                  <input type="checkbox" id="autoWorkToggle" checked />
+                  <span>Arrancan solos</span>
+                </label>
+                <button class="btn sm" id="startWorkBtn" data-action="start-work" type="button" disabled>Forzar a trabajar</button>
+                <button class="btn primary sm end-meeting-btn" id="endMeetingBtn" data-action="end-meeting" type="button" disabled title="La CEO repasa lo asignado y, si confirmás, el equipo se pone a trabajar de verdad">Finalizar reunión</button>
+              </div>
+            </section>
+            <section class="ctx-block" aria-labelledby="ctxOrchTitle">
+              <h2 id="ctxOrchTitle">Orquestación</h2>
+              <details class="side-panel" id="orchestrationPanel" open>
+                <summary class="sr-only">Orquestación</summary>
+                <div class="side-panel-body">
+                  <div id="routePanel"></div>
+                  <div id="keysPanel"></div>
+                  <button class="btn ghost sm" data-action="health" type="button">Actualizar estado de claves</button>
+                </div>
+              </details>
+            </section>
+          </aside>
         </div>
       </div>
 
@@ -3437,6 +3468,8 @@ function mountShell() {
         </form>
       </section>
     </div>
+    </div>
+  </div>
   `;
 
   const turnInput = byId<HTMLTextAreaElement>('turnInput');
@@ -3451,6 +3484,13 @@ function mountShell() {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submitTurn();
+    }
+  });
+  const homeComposer = byId<HTMLTextAreaElement>('homeComposerInput');
+  homeComposer.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      byId<HTMLFormElement>('homeComposerForm').requestSubmit();
     }
   });
 
@@ -3900,6 +3940,17 @@ function handleDelegatedSubmit(event: Event) {
     return;
   }
 
+  if (form.id === 'homeComposerForm') {
+    event.preventDefault();
+    const input = byId<HTMLTextAreaElement>('homeComposerInput');
+    const text = input.value.trim();
+    input.value = '';
+    // La demo entra a empresa+proyecto; el texto se manda al abrir el socket.
+    pendingHomeText = text;
+    void startInstantDemo();
+    return;
+  }
+
   if (form.id === 'scenarioForm') {
     event.preventDefault();
     const text = byId<HTMLInputElement>('scenarioInput').value.trim();
@@ -4015,6 +4066,18 @@ function handleDelegatedInput(event: Event) {
 }
 
 // ── Home: tarjetas de empresas ──────────────────────────────────────────
+
+function renderSideCompanies() {
+  if (state.companies.length === 0) {
+    return '<p class="muted side-empty">Sin empresas todavía.</p>';
+  }
+  return state.companies.map((company) => `
+    <button type="button" class="side-co${company.id === state.companyId ? ' is-active' : ''}" data-action="enter-company" data-company-id="${escapeHtml(company.id)}" title="${escapeHtml(company.name)}">
+      <span class="company-tile" style="--company-color: ${escapeHtml(company.color)}" aria-hidden="true">${escapeHtml(company.emoji)}</span>
+      <span>${escapeHtml(company.name)}</span>
+    </button>
+  `).join('');
+}
 
 function renderCompanies() {
   if (state.companiesLoading && state.companies.length === 0) {
@@ -7636,6 +7699,7 @@ function chevronIcon() {
 // ── Bootstrap (al final: las regiones usan const no-hoisted) ────────────
 
 let pendingOrbMic = false;
+let pendingHomeText = '';
 let orbBridgeTimer = 0;
 
 // Arranque desktop: skin, base del sidecar y puente con el orbe, todo antes

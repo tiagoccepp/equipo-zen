@@ -1,21 +1,43 @@
-// Orbe desktop: clic = hablar con el equipo, ⤢ = abrir la ventana.
-// Arrastrable a cualquier borde. 148x148, fondo transparente.
+// Orbe desktop: esfera de partículas (dirección Tito 07/11). Clic = hablar
+// con el equipo, ⤢ = abrir la ventana. Arrastrable. 148x148 transparente.
 import './orb.css';
 import { invoke } from '@tauri-apps/api/core';
 
 type Estado = 'idle' | 'escuchando' | 'hablando' | 'pensando';
 
-const ARC = '#38D1FF';
+const ARC: [number, number, number] = [56, 209, 255];
+const N = 450;
+const RADIO = 52;
+const CX = 74;
+const CY = 60;
+const TILT = 0.42;
 const ETIQUETA: Record<Estado, string> = {
   idle: 'Equipo',
   escuchando: 'Escuchando…',
   hablando: 'Hablando…',
   pensando: 'Pensando…'
 };
+const GIRO: Record<Estado, number> = {
+  idle: 0.25,
+  escuchando: 0.5,
+  hablando: 0.35,
+  pensando: 1.6
+};
 
 let estado: Estado = 'idle';
 let nivel = 0;
 let nivelSuave = 0;
+let angulo = 0;
+let ultimoT = 0;
+
+// Esfera de Fibonacci: distribución uniforme de puntos.
+const puntos: Array<[number, number, number, number]> = [];
+for (let i = 0; i < N; i += 1) {
+  const y = 1 - (i / (N - 1)) * 2;
+  const r = Math.sqrt(Math.max(0, 1 - y * y));
+  const t = i * 2.399963;
+  puntos.push([Math.cos(t) * r, y, Math.sin(t) * r, Math.asin(Math.max(-1, Math.min(1, y)))]);
+}
 
 const orb = document.getElementById('orb') as HTMLDivElement;
 const canvas = document.getElementById('orbCanvas') as HTMLCanvasElement;
@@ -28,62 +50,56 @@ canvas.width = 148 * DPR;
 canvas.height = 148 * DPR;
 
 function dibujar(t: number) {
+  const dt = ultimoT ? Math.min((t - ultimoT) / 1000, 0.1) : 0.016;
+  ultimoT = t;
   nivelSuave += (nivel - nivelSuave) * 0.2;
-  const w = canvas.width;
-  ctx.clearRect(0, 0, w, canvas.height);
-  const cx = w / 2;
-  const cy = w / 2 - 12 * DPR;
-  const base = 44 * DPR;
-  const respiro = estado === 'idle' ? Math.sin(t / 1400) * 0.03 : 0;
-  const radio = base * (1 + respiro + nivelSuave * 0.12);
-
-  // Halo.
-  const halo = ctx.createRadialGradient(cx, cy, radio * 0.4, cx, cy, radio * 1.7);
-  const glow = estado === 'idle' ? 0.22 : 0.4 + nivelSuave * 0.35;
-  halo.addColorStop(0, `rgba(56, 209, 255, ${glow.toFixed(2)})`);
-  halo.addColorStop(1, 'rgba(56, 209, 255, 0)');
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(cx, cy, radio * 1.7, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Núcleo translúcido: el cuerpo lo da el cristal glass3d de abajo.
-  ctx.fillStyle = 'rgba(14, 19, 25, 0.28)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, radio, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = ARC;
-  ctx.lineWidth = 2 * DPR;
-  ctx.stroke();
-
-  // Pulso interno.
-  const pr = radio * (0.5 + nivelSuave * 0.3 + (estado === 'escuchando' ? Math.sin(t / 300) * 0.06 : 0));
-  ctx.fillStyle = 'rgba(56, 209, 255, 0.85)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, Math.max(pr, 4 * DPR), 0, Math.PI * 2);
-  ctx.fill();
-
-  // Anillo de escucha.
-  if (estado === 'escuchando' && !reduced) {
-    const fase = (t % 1600) / 1600;
-    ctx.strokeStyle = `rgba(56, 209, 255, ${(0.7 * (1 - fase)).toFixed(2)})`;
-    ctx.lineWidth = 2 * DPR;
-    ctx.beginPath();
-    ctx.arc(cx, cy, radio * (1 + fase * 0.5), 0, Math.PI * 2);
-    ctx.stroke();
+  if (!reduced) {
+    angulo += GIRO[estado] * dt;
   }
+  const w = canvas.width;
+  const u = DPR;
+  ctx.clearRect(0, 0, w, canvas.height);
+  const cx = CX * u;
+  const cy = CY * u;
 
-  // Aspas de pensamiento.
-  if (estado === 'pensando' && !reduced) {
-    ctx.strokeStyle = 'rgba(56, 209, 255, 0.9)';
-    ctx.lineWidth = 3 * DPR;
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 3; i += 1) {
-      const a0 = (t / 900 + (i * Math.PI * 2) / 3) % (Math.PI * 2);
-      ctx.beginPath();
-      ctx.arc(cx, cy, radio * 1.18, a0, a0 + 0.7);
-      ctx.stroke();
+  // Respiración / pulso según estado.
+  let pulso = 0;
+  if (estado === 'idle') {
+    pulso = Math.sin(t / 1400) * 0.02;
+  } else if (estado === 'escuchando') {
+    pulso = Math.sin(t / 300) * 0.04;
+  }
+  const rBase = RADIO * u * (1 + pulso + nivelSuave * 0.1);
+
+  const cosA = Math.cos(angulo);
+  const sinA = Math.sin(angulo);
+  const cosT = Math.cos(TILT);
+  const sinT = Math.sin(TILT);
+
+  for (let i = 0; i < N; i += 1) {
+    const [x, y, z, lat] = puntos[i];
+    // Giro Y + inclinación X fija.
+    const x1 = x * cosA + z * sinA;
+    const z1 = -x * sinA + z * cosA;
+    const y2 = y * cosT - z1 * sinT;
+    const z2 = y * sinT + z1 * cosT;
+    const prof = (z2 + 1) / 2;
+
+    // Onda al hablar: riza la esfera con el nivel de voz.
+    let rr = rBase;
+    if (estado === 'hablando' && !reduced) {
+      rr *= 1 + Math.sin(lat * 5 + t / 150) * 0.09 * Math.max(nivelSuave, 0.35);
     }
+
+    const tam = (0.7 + 1.5 * prof) * u;
+    let alfa = 0.22 + 0.78 * prof;
+    if (!reduced) {
+      alfa *= 0.85 + 0.15 * Math.sin(t / 420 + i * 1.7);
+    }
+    ctx.fillStyle = `rgba(${ARC[0]}, ${ARC[1]}, ${ARC[2]}, ${alfa.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(cx + x1 * rr, cy + y2 * rr, tam, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   if (!reduced) {
