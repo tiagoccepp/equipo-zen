@@ -22,6 +22,22 @@ Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:87
 
 Scripts: `npm test` (suite `node:test`), `npm run typecheck`, `npm run build`.
 
+## App de escritorio (Tauri: Win/Mac/Linux)
+
+El mismo repo es la app instalada: ventana principal + orbe flotante de cristal
+(la UI minimizada), bandeja, atajo global `Ctrl+Shift+E` y backend Node
+embebido (sin instalar nada aparte). El equipo puede ver tu pantalla y mover
+mouse/teclado por niveles de permiso (Ajustes → Computadora).
+
+```bash
+npm run build:desktop -- deb,appimage   # Linux; Win: nsis, Mac: dmg
+```
+
+Requiere Rust estable + deps del sistema (ver `.github/workflows/desktop.yml`:
+webkit2gtk, pipewire, libclang, libgbm). Los instaladores de Win/Mac se
+compilan en CI con cada tag `desktop-v*` (Actions → desktop → Artifacts).
+Contrato visual: `desktop/DESIGN.md`.
+
 ## ¿Algo no anda?
 
 ```bash

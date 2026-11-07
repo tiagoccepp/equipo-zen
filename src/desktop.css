@@ -1,0 +1,61 @@
+/* Skin desktop «Consola Jarvis»: solo bajo body.desktop (la web no cambia). */
+@font-face {
+  font-family: 'Unbounded';
+  src: url('./assets/fonts/unbounded-latin.woff2') format('woff2');
+  font-weight: 200 900;
+  font-display: swap;
+}
+
+body.desktop {
+  --bg: #07090d;
+  --surface: #0e1319;
+  --ink: #e8e6df;
+  --ink-2: #9aa4b0;
+  --ink-3: #7d8894;
+  --line: #1e2833;
+  --line-2: #2b3644;
+  --accent: #38d1ff;
+  --danger: #f2555a;
+  --ok: #3fd08c;
+  --warn: #f5a524;
+  --focus: #38d1ff;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5), 0 18px 50px rgba(0, 0, 0, 0.55);
+  --backdrop: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+body.desktop .home-head h1 {
+  font-family: 'Unbounded', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: clamp(38px, 5vw, 58px);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+body.desktop .home-head .eyebrow {
+  letter-spacing: 0.22em;
+  color: var(--accent);
+}
+
+body.desktop .home-cta .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06121a;
+  font-weight: 750;
+  box-shadow: 0 0 0 1px rgba(56, 209, 255, 0.35), 0 8px 30px rgba(56, 209, 255, 0.22);
+}
+
+body.desktop .home-cta .btn.primary:hover {
+  background: #6fdcff;
+  border-color: #6fdcff;
+}
+
+/* El chip de estado en vivo del task usa accent como texto: en desktop el
+   arc sobre lavado queda legible sin cambios. */
+
+.screen-preview {
+  max-width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}

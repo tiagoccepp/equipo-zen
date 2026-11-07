@@ -14,7 +14,7 @@ export const rootDir = path.resolve(__dirname, '..', '..');
 export const PORT = Number(process.env.PORT || 8787);
 export const HOST = process.env.HOST || '127.0.0.1';
 export const ALLOWED_ORIGINS = new Set(
-  (process.env.CORS_ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
+  (process.env.CORS_ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173,https://tauri.localhost,http://tauri.localhost,tauri://localhost')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean)

@@ -7,7 +7,10 @@
     "dev": "concurrently --kill-others-on-fail \"npm:dev:server\" \"npm:dev:client\" \"npm:dev:tts\" \"npm:dev:stt\"",
     "dev:server": "node --watch server/index.js",
     "dev:client": "vite --host 127.0.0.1 --port 5173",
+    "dev:bg": "concurrently npm:dev:server npm:dev:client",
     "build": "tsc && vite build",
+    "build:before": "node scripts/desktop/before-build.mjs",
+    "build:desktop": "sh scripts/desktop/build.sh",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
@@ -16,14 +19,16 @@
     "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
     "concurrently": "^10.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "nanoid": "^5.1.6",
-    "ws": "^8.18.3",
-    "node-edge-tts": "^1.2.12"
+    "node-edge-tts": "^1.2.12",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "typescript": "^5.9.3",
     "vite": "^7.2.7"
   }

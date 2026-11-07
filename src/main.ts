@@ -1,4 +1,5 @@
 import './styles.css';
+import './desktop.css';
 
 import { VOICES, VOICE_LABELS, parseServerMessage } from '../shared/protocol.ts';
 import type {
@@ -13,6 +14,7 @@ import { evaluateBargeIn, idleBargeInState, trimPreBuffer } from './lib/barge-in
 import type { BargeInState } from './lib/barge-in.ts';
 import { OrbField } from './lib/call-orbs.ts';
 import type { OrbSlot } from './lib/call-orbs.ts';
+import { desktopApiBase, isTauri, tinvoke } from './lib/tauri.ts';
 
 type TranscriptTurn = {
   id: string;
@@ -462,8 +464,16 @@ function trace(type: string, payload: Record<string, unknown> = {}, turnId?: str
   });
 }
 
+let desktopHttpBase = '';
+
 function backendHttpBase() {
-  return '';
+  return desktopHttpBase;
+}
+
+// Desktop empaquetado: el backend es el sidecar Node en puerto efímero.
+// Se resuelve una vez en el arranque, antes del primer fetch.
+async function resolveDesktopBase() {
+  desktopHttpBase = await desktopApiBase();
 }
 
 // Cola de reproducción PCM con contexto PERSISTENTE (nunca se cierra entre
@@ -1344,7 +1354,10 @@ function connect() {
   detachSocket();
 
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${protocol}://${window.location.host}/meeting`);
+  const httpBase = backendHttpBase();
+  const socket = httpBase
+    ? new WebSocket(`${httpBase.replace(/^http/, 'ws')}/meeting`)
+    : new WebSocket(`${protocol}://${window.location.host}/meeting`);
 
   socket.onopen = () => {
     if (state.socket !== socket) return;
@@ -1352,6 +1365,15 @@ function connect() {
     reconnectAttempts = 0;
     state.connected = true;
     trace('socket_open', { companyId: state.companyId });
+    if (pendingOrbMic) {
+      pendingOrbMic = false;
+      // El orbe pidió hablar sin reunión abierta: mic al aire y vuelta al orbe.
+      window.setTimeout(() => {
+        void toggleLiveAudio();
+        void tinvoke('toggle_main').catch(() => {});
+        void tinvoke('show_orb').catch(() => {});
+      }, 600);
+    }
     // hello abre/reanuda una reunión DE ESTA EMPRESA.
     socket.send(JSON.stringify({
       type: 'hello',
@@ -3565,6 +3587,9 @@ function handleDelegatedClick(event: Event) {
     case 'instant-demo':
       void startInstantDemo();
       break;
+    case 'desktop-capture':
+      void desktopCapture();
+      break;
     case 'new-project':
       openModal('newProjectModal');
       window.setTimeout(() => byId<HTMLInputElement>('newProjectName').focus(), 60);
@@ -5035,6 +5060,47 @@ function renderSettingsBody() {
       </div>
     </section>
 
+    ${isTauri() ? `
+    <section class="settings-section" aria-labelledby="setDeskTitle">
+      <header class="settings-section-head">
+        <span class="settings-icon" aria-hidden="true">🖥️</span>
+        <div class="settings-section-titles">
+          <h3 id="setDeskTitle">Computadora <span class="settings-sub">· app de escritorio</span></h3>
+          <p class="settings-desc">Lo que el equipo puede ver y tocar de tu máquina, por niveles.</p>
+        </div>
+      </header>
+      <div class="settings-fields">
+        <div class="form-field">
+          <label for="permPantalla">Ver pantalla</label>
+          <select id="permPantalla" class="form-control" data-perm-cap="pantalla">
+            <option value="preguntar">Preguntar siempre</option>
+            <option value="permitir">Permitir</option>
+            <option value="bloquear">Bloquear</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="permMouse">Mover el mouse y clickear</label>
+          <select id="permMouse" class="form-control" data-perm-cap="mouse">
+            <option value="preguntar">Preguntar siempre</option>
+            <option value="permitir">Permitir</option>
+            <option value="bloquear">Bloquear</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="permTeclado">Tipear y pulsar teclas</label>
+          <select id="permTeclado" class="form-control" data-perm-cap="teclado">
+            <option value="preguntar">Preguntar siempre</option>
+            <option value="permitir">Permitir</option>
+            <option value="bloquear">Bloquear</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <button type="button" class="btn ghost" data-action="desktop-capture">📷 Probar captura de pantalla</button>
+          <p class="hint">Atajo global: Ctrl+Shift+E muestra/oculta el orbe. <span id="desktopInfo"></span></p>
+        </div>
+        <img id="screenPreview" class="screen-preview" alt="Vista previa de tu pantalla" hidden />
+      </div>
+    </section>` : ''}
     <p class="settings-privacy"><span aria-hidden="true">🔒</span>Tus claves se guardan solo en la base local de esta app (SQLite en tu máquina). Nunca salen de acá salvo hacia el proveedor correspondiente.</p>
   `;
 
@@ -5046,7 +5112,62 @@ function renderSettingsBody() {
       input.value = pendingValue;
     }
   }
+  if (isTauri()) {
+    void syncDesktopSettings();
+  }
   syncSettingsSaveButton();
+}
+
+// ── Desktop: permisos y pantalla ────────────────────────────────────────
+
+async function syncDesktopSettings() {
+  try {
+    const perms = await tinvoke<Record<string, string>>('get_permissions');
+    const ids: Record<string, string> = { pantalla: 'permPantalla', mouse: 'permMouse', teclado: 'permTeclado' };
+    for (const [cap, id] of Object.entries(ids)) {
+      const sel = document.getElementById(id) as HTMLSelectElement | null;
+      if (sel && perms[cap]) {
+        sel.value = perms[cap];
+      }
+    }
+    const plat = await tinvoke<string>('app_platform').catch(() => '');
+    const info = document.getElementById('desktopInfo');
+    if (info) {
+      info.textContent = plat ? `Estás en ${plat}.` : '';
+    }
+  } catch {
+    // El núcleo tarda en arrancar: queda el default hasta reabrir Ajustes.
+  }
+}
+
+function handleDesktopChange(event: Event) {
+  const el = event.target as HTMLElement;
+  const sel = el instanceof HTMLSelectElement ? el : null;
+  const cap = sel?.dataset.permCap;
+  if (!sel || !cap) {
+    return;
+  }
+  void tinvoke('set_permission', { cap, level: sel.value }).then(() => {
+    upsertAlert('perm', 'Computadora', `«${cap}»: ${sel.value}.`, 'ok', 2500);
+  }).catch((error: unknown) => {
+    upsertAlert('perm', 'Computadora', `No pude guardar: ${error instanceof Error ? error.message : error}`, 'error', 4000);
+    void syncDesktopSettings();
+  });
+}
+
+async function desktopCapture() {
+  try {
+    const token = await tinvoke<string>('approve_once', { cap: 'pantalla' });
+    const shot = await tinvoke<{ data: string; width: number; height: number }>('capture_screen', { approval: token });
+    const img = document.getElementById('screenPreview') as HTMLImageElement | null;
+    if (img) {
+      img.src = `data:image/png;base64,${shot.data}`;
+      img.hidden = false;
+    }
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    upsertAlert('screen', 'Pantalla', `No pude capturar: ${msg}`, 'error', 4000);
+  }
 }
 
 function onSettingsFieldChange(el: HTMLInputElement | HTMLSelectElement) {
@@ -5808,7 +5929,10 @@ function selectProject(goalId: string, path: string) {
 }
 
 function workspaceBaseUrl() {
-  return state.workData?.workspaceUrl || (state.companyId ? `/workspace/${encodeURIComponent(state.companyId)}/` : '');
+  if (state.workData?.workspaceUrl) {
+    return `${backendHttpBase()}${state.workData.workspaceUrl}`;
+  }
+  return state.companyId ? `${backendHttpBase()}/workspace/${encodeURIComponent(state.companyId)}/` : '';
 }
 
 function artifactLinkHtml(path: string) {
@@ -6282,7 +6406,7 @@ function renderProjectsSection() {
   const url = state.workData?.workspaceUrl;
   link.hidden = !url;
   if (url) {
-    link.href = url;
+    link.href = `${backendHttpBase()}${url}`;
   }
   setWorkHtml('projectsList', renderProjectsList());
   setWorkHtml('browserChrome', renderBrowserChrome());
@@ -6659,7 +6783,7 @@ function syncBrowserStage() {
     if (lastFrameKey !== key) {
       lastFrameKey = key;
       const separator = file.url.includes('?') ? '&' : '?';
-      frame.src = `${file.url}${separator}v=${encodeURIComponent(`${file.size}-${state.projectReloads}`)}`;
+      frame.src = `${backendHttpBase()}${file.url}${separator}v=${encodeURIComponent(`${file.size}-${state.projectReloads}`)}`;
     }
     return;
   }
@@ -7511,14 +7635,87 @@ function chevronIcon() {
 
 // ── Bootstrap (al final: las regiones usan const no-hoisted) ────────────
 
+let pendingOrbMic = false;
+let orbBridgeTimer = 0;
+
+// Arranque desktop: skin, base del sidecar y puente con el orbe, todo antes
+// del primer fetch (en web es un no-op).
+async function bootDesktop() {
+  if (!isTauri()) {
+    return;
+  }
+  document.body.classList.add('desktop');
+  await resolveDesktopBase();
+  startOrbBridge();
+}
+
+function bootData() {
+  void loadCompanies().then(() => restoreFromHash());
+  void detectVoiceBrowser();
+  // Para que "Archivadas (N)" ya tenga su número al abrir el home.
+  void loadArchivedCompanies();
+  // Y para saber si falta la voz o la clave antes de entrar a una empresa.
+  void refreshSetupStatus();
+}
+
+function orbVoiceState(): string {
+  if (state.recording) {
+    return 'escuchando';
+  }
+  if (state.speakingAgentId) {
+    return 'hablando';
+  }
+  return 'idle';
+}
+
+function orbVoiceLevel(): number {
+  if (state.recording) {
+    return state.micMeter?.level || 0;
+  }
+  return state.speakingAgentId ? 0.7 : 0;
+}
+
+async function orbToggleMic() {
+  if (state.view !== 'workspace' || !state.connected) {
+    pendingOrbMic = true;
+    if (state.view !== 'workspace') {
+      await tinvoke('expand_from_orb').catch(() => {});
+      void startInstantDemo();
+    }
+    return;
+  }
+  void toggleLiveAudio();
+}
+
+function startOrbBridge() {
+  if (orbBridgeTimer) {
+    return;
+  }
+  document.addEventListener('change', handleDesktopChange);
+  const tick = async () => {
+    try {
+      const cmd = await tinvoke<string | null>('main_poll');
+      if (cmd === 'toggle-mic') {
+        void orbToggleMic();
+      } else if (cmd === 'expand') {
+        await tinvoke('expand_from_orb').catch(() => {});
+      }
+    } catch {
+      // Núcleo aún no listo: el próximo tick reintenta.
+    }
+    try {
+      await tinvoke('orb_report', { nuevo: orbVoiceState(), nivel: orbVoiceLevel() });
+    } catch {
+      // Idem.
+    }
+  };
+  void tick();
+  orbBridgeTimer = window.setInterval(tick, 500);
+}
+
 mountShell();
 render();
-void loadCompanies().then(() => restoreFromHash());
-void detectVoiceBrowser();
-// Para que "Archivadas (N)" ya tenga su número al abrir el home.
-void loadArchivedCompanies();
-// Y para saber si falta la voz o la clave antes de entrar a una empresa.
-void refreshSetupStatus();
+void bootDesktop().then(() => bootData());
 trace('page_loaded', {
   userAgent: navigator.userAgent,
   viewport: { width: window.innerWidth, height: window.innerHeight }

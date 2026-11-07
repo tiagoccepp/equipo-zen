@@ -1,0 +1,67 @@
+# App de escritorio Equipo (Tauri): build Win + Mac + Linux.
+# Se dispara manual o con tags desktop-v* (los builds pesan; no corre en cada push).
+# El build lo orquesta scripts/desktop/build.sh (frontend → poda devDeps →
+# bundle); acá solo se instalan toolchains y se suben los instaladores.
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Deps del sistema (Linux)
+        if: runner.os == 'Linux'
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          build-essential curl wget file libssl-dev
+          libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          libwebkit2gtk-4.1-dev libpipewire-0.3-dev libclang-dev libgbm-dev
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.triple }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        # Sin cache a propósito: este workflow publica instaladores y la caché
+        # de setup-node abre cache-poisoning (zizmor). El costo lo domina Rust.
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - name: Sidecar Node embebido
+        shell: bash
+        run: sh scripts/desktop/fetch-node-sidecar.sh ${{ matrix.triple }}
+      - name: Build + bundle
+        shell: bash
+        run: sh scripts/desktop/build.sh ${{ matrix.bundles }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: equipo-${{ matrix.triple }}
+          path: src-tauri/target/release/bundle/
+          if-no-files-found: error

@@ -7,6 +7,14 @@ const BACKEND_PORT = process.env.PORT || '8787';
 const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`;
 
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        orb: 'orb.html'
+      }
+    }
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,
