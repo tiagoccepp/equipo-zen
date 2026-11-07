@@ -141,3 +141,15 @@ test('sin CEO en la mesa, el saludo simple lo toma alguien igual', () => {
   const ruta = router.route('hola', { lastAgentTurn: () => null });
   assert.equal(ruta.targets.length, 1, 'uno solo, no los dos');
 });
+
+test('preséntense / cada uno convoca a todo el equipo', () => {
+  const router = new AgentRouter([
+    { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
+    { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true }
+  ]);
+
+  for (const texto of ['Preséntense en una frase cada uno', 'quiero escucharlos a todos', 'todos respondan', 'a ver, cada una diga lo suyo']) {
+    const ruta = router.route(texto, { lastAgentTurn: () => null });
+    assert.equal(ruta.targets.length, 2, `"${texto}" es ronda completa`);
+  }
+});

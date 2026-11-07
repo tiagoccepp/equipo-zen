@@ -1115,6 +1115,7 @@ export class MeetingSession {
       id: agent.id,
       name: agent.name,
       title: agent.title,
+      role: agent.role || null,
       domains: agent.domains,
       boundaries: agent.boundaries || []
     }));
@@ -1136,7 +1137,7 @@ export class MeetingSession {
       '',
       '3. TANGENTIAL RELEVANCE — If a secondary agent can add something meaningful (even indirectly), include them with a lower score (3–5). Do NOT include an agent just to fill space.',
       '',
-      '4. GENERAL GREETING — If the user greets the group with no specific topic, include all agents. Score: 5 for everyone.',
+      '4. GREETING — A plain hello ("hola", "buenas", "qué tal") goes ONLY to the front: the agent with role ceo, else the first agent. Score 10. Include ALL agents only if the greeting names the group ("hola equipo/chicos/todos") or asks for introductions ("preséntense", "cada uno"). Score 5 each.',
       '',
       '5. CROSS-DOMAIN — If the topic genuinely involves two or more domains (e.g. technical implementation + business data), include all relevant agents ordered by relevance.',
       '',

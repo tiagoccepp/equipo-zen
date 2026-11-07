@@ -54,7 +54,10 @@ export class AgentRouter {
       }
     }
 
-    const groupAddressed = /\b(equipo|ambos|los dos|todos|reunion|ustedes|analicemos|pensemos|discutamos|revisemos|conversemos)\b/.test(normalized);
+    // "presentense" y "cada uno" también son ronda completa: el usuario quiere
+    // escuchar a cada voz, no solo a la interlocutora. ("presentacion" como
+    // sustantivo queda afuera a propósito: un entregable no convoca al grupo.)
+    const groupAddressed = /\b(equipo|ambos|los dos|todos|reunion|ustedes|analicemos|pensemos|discutamos|revisemos|conversemos|presentense|presentaos|cada un[oa]s?)\b/.test(normalized);
     const collaborationSignal = /\b(solucion|cliente|empresa|sistema|implementar|disenar|validar|riesgo|propuesta|operacion|operaciones|pedido|pedidos|stock|inventario|reparto|ventas|cobranza|dashboard|api|endpoint)\b/.test(normalized);
     const mentionedAgents = this.activeAgents
       .map((agent, index) => ({

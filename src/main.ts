@@ -1712,6 +1712,10 @@ async function startInstantDemo() {
 async function restoreFromHash() {
   const match = location.hash.match(/^#\/e\/([\w-]+)(?:\/p\/([\w-]+))?/);
   if (!match) {
+    // Sin deep-link: la app ES el asistente — entra directo al último
+    // espacio (o al primero) en vez de pedir que elijas. El sidebar
+    // sigue ahí para cambiar. Sin empresas, queda el home (composer).
+    await autoEnterLastSpace();
     return;
   }
   const companyId = match[1];
@@ -1733,6 +1737,26 @@ async function restoreFromHash() {
     }
   } catch {
     // Sin proyecto válido, queda en la empresa.
+  }
+}
+
+async function autoEnterLastSpace() {
+  if (state.companies.length === 0) {
+    return;
+  }
+  const lastId = loadLastCompanyId();
+  const company = state.companies.find((item) => item.id === lastId) || state.companies[0];
+  enterCompany(company.id, company);
+  try {
+    const data = await apiJson<{ projects: Project[] }>(
+      `/api/companies/${encodeURIComponent(company.id)}/projects`
+    );
+    const project = (data.projects || [])[0];
+    if (project && state.companyId === company.id) {
+      enterProject(project.id, project);
+    }
+  } catch {
+    // Sin proyectos, queda en la empresa.
   }
 }
 
@@ -3008,6 +3032,7 @@ function mountShell() {
                     <button type="button" class="chip action" data-action="send-suggestion" data-text="Preséntense en una frase cada uno">👋 Preséntense</button>
                     <button type="button" class="chip action" data-action="send-suggestion" data-text="¿En qué están trabajando hoy? Cuéntenme lo más importante.">📋 ¿En qué andan?</button>
                     <button type="button" class="chip action" data-action="send-suggestion" data-text="Denme una idea concreta para conseguir un cliente nuevo esta semana">💡 Una idea para vender</button>
+                    <button type="button" class="chip action" data-action="send-suggestion" data-text="Equipo: respondan todos, cada uno en una frase">🙋 Respondan todos</button>
                   </div>
                 </div>
                 <div class="transcript-list" id="transcriptList" aria-live="polite"></div>
