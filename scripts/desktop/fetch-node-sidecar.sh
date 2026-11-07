@@ -39,7 +39,7 @@ if [ -f "/tmp/$VER-$DIST/bin/$BIN" ]; then
 else
   SRC="/tmp/$VER-$DIST/$BIN"
 fi
-case "$BIN" in *.exe) OUT="$OUT_DIR/node-$TRIPLE.exe" ;; *) OUT="$OUT_DIR/node-$TRIPLE" ;; esac
+case "$BIN" in *.exe) OUT="$OUT_DIR/equipo-node-$TRIPLE.exe" ;; *) OUT="$OUT_DIR/equipo-node-$TRIPLE" ;; esac
 cp "$SRC" "$OUT"
 chmod +x "$OUT"
 rm -rf "/tmp/$VER-$DIST" "/tmp/$VER.$EXT"

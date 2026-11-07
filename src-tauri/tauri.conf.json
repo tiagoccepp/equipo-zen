@@ -60,7 +60,7 @@
       "icons/icon.ico"
     ],
     "resources": ["../server", "../node_modules", "../shared"],
-    "externalBin": ["binaries/node"],
+    "externalBin": ["binaries/equipo-node"],
     "category": "Productivity",
     "shortDescription": "Tu equipo IA en el escritorio",
     "longDescription": "Equipo: conversá por voz o texto con empleados IA. Orbe flotante, bandeja, permisos por niveles y control de la computadora."

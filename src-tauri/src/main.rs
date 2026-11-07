@@ -419,9 +419,13 @@ fn main_poll(estado: tauri::State<Estado>) -> Option<String> {
 
 fn spawn_sidecar(app: &AppHandle, datos: &PathBuf) -> (String, Option<Child>) {
     let fallback = "http://127.0.0.1:8787".to_string();
-    // Tauri 2 pone el externalBin junto al ejecutable y recorta el triple:
-    // /usr/bin/node (deb), Contents/MacOS/node (dmg), *.exe al lado (nsis).
-    let exe_nombre = if cfg!(windows) { "node.exe" } else { "node" };
+    // Tauri 2 pone el externalBin junto al ejecutable y recorta el triple.
+    // Se llama equipo-node para no chocar con el node del sistema (/usr/bin/node).
+    let exe_nombre = if cfg!(windows) {
+        "equipo-node.exe"
+    } else {
+        "equipo-node"
+    };
     let node = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|d| d.join(exe_nombre)))
