@@ -332,12 +332,6 @@ const ASR_LOCALES = ['es-ES', 'es-AR', 'es-MX', 'en-US'];
 // única forma de que deshacer funcione siempre, incluso sin backend.
 const ARCHIVE_UNDO_MS = 9000;
 
-// El mismo comando que imprime `npm run doctor` cuando falta el entorno de
-// Python: crea el venv si no está e instala voz y transcripción de una. Es
-// seguro correrlo aunque el venv ya exista. (Si cambia en scripts/doctor.mjs,
-// cambiarlo acá también.)
-const SETUP_INSTALL_CMD = "python3 -m venv .venv-tts && .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn";
-
 const DEFAULT_VOICE = 'M4';
 const AGENT_COLORS = ['#2f6f73', '#8a5a2b', '#b74e39', '#4a7c59', '#5c5470', '#15618a', '#c2255c', '#f08c00'];
 const COMPANY_COLORS = ['#2f6f73', '#4c6ef5', '#e8590c', '#0ca678', '#8a5a2b', '#5c5470', '#c2255c', '#1971c2'];
@@ -939,7 +933,7 @@ class BrowserSpeechRecognizer {
 
 // ── TTS del navegador (speechSynthesis) ─────────────────────────────────────
 // Cuando Supertonic no está disponible (ej. demo pública en la nube, donde no
-// hay venv ni modelos locales), los agentes igual HABLAN usando la voz
+// hay servidor de voz ni modelos locales), los agentes igual HABLAN usando la voz
 // incorporada del navegador. Cero instalación: abrir el link, entrar a la
 // llamada, escuchar al equipo. La calidad es menor que Supertonic, pero el
 // valor es inmediato. Supertonic, cuando responde, siempre tiene prioridad.
@@ -3441,9 +3435,6 @@ function handleDelegatedClick(event: Event) {
       trace('setup_notice_dismissed', {});
       markDirty('setup');
       break;
-    case 'copy-setup-cmd':
-      void copyCommand(target, target.dataset.cmd || '');
-      break;
     case 'send-suggestion':
       sendSuggestion(target.dataset.text || '');
       break;
@@ -4280,12 +4271,12 @@ async function restoreCompany(companyId: string) {
   }
 }
 
-// ── Instalación incompleta: decirlo donde se necesita ───────────────────
-// La voz (Supertonic) y la transcripción local (Whisper) son opcionales y
-// viven en un venv de Python. Si faltan, la app degrada sola y eso antes solo
-// se veía como una línea en el log. Acá se avisa en la app, con el comando
-// exacto, sin alarmismo: falta la voz = el equipo responde por texto; falta la
-// clave del modelo = eso sí es bloqueante y lleva derecho a Ajustes.
+// ── Voz y clave del modelo: decirlo donde se necesita ────────────────────
+// La voz local (Supertonic) y la transcripción local (Whisper) son opcionales:
+// si faltan, el navegador pone la voz y la app sigue andando. Acá se avisa en
+// la app sin alarmismo y sin comandos: falta la voz local = el equipo habla
+// igual por el navegador; falta la clave del modelo = eso sí es bloqueante y
+// lleva derecho a Ajustes.
 
 async function refreshSetupStatus() {
   try {
@@ -4336,8 +4327,7 @@ function renderSetupNotice() {
       notice.innerHTML = `
         <span class="setup-icon" aria-hidden="true">💬</span>
         <div class="setup-copy">
-          <p><strong>El equipo va a responder por texto.</strong> Este navegador no tiene voz incorporada y Supertonic no responde. La reunión funciona igual; si la querés con voz, corré esto y volvé a levantar el servidor:</p>
-          ${renderSetupCommand(SETUP_INSTALL_CMD, 'voz')}
+          <p><strong>El equipo va a responder por texto.</strong> Este navegador no tiene voz incorporada y la voz local no responde. La reunión funciona igual; probá en Chrome para escucharla.</p>
         </div>
         <button class="icon-btn sm" type="button" data-action="dismiss-setup-notice" aria-label="Entendido, no mostrar más este aviso" title="Entendido, no mostrar más">${closeIcon()}</button>
       `;
@@ -4348,64 +4338,8 @@ function renderSetupNotice() {
   notice.hidden = true;
 }
 
-// Bloque "qué falta y cómo se arregla" para una sección de Ajustes.
-function renderSetupFix(description: string, command: string, id: string) {
-  return `
-    <div class="setup-fix">
-      <p>${escapeHtml(description)}</p>
-      ${renderSetupCommand(command, id)}
-    </div>
-  `;
-}
-
-function renderSetupCommand(command: string, id: string) {
-  return `
-    <div class="setup-cmd">
-      <code>${escapeHtml(command)}</code>
-      <button class="btn ghost sm" type="button" data-action="copy-setup-cmd" data-cmd="${escapeHtml(command)}" data-cmd-id="${escapeHtml(id)}">Copiar</button>
-    </div>
-  `;
-}
-
-async function copyCommand(button: HTMLElement, command: string) {
-  if (!command) return;
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(command);
-    copied = true;
-  } catch {
-    // Sin permiso de portapapeles (o sin contexto seguro): copia manual.
-    copied = legacyCopy(command);
-  }
-  trace('setup_cmd_copied', { id: button.dataset.cmdId || '', copied });
-  if (copied) {
-    const original = button.textContent || 'Copiar';
-    button.textContent = 'Copiado ✓';
-    window.setTimeout(() => {
-      if (button.isConnected) button.textContent = original;
-    }, 1800);
-  } else {
-    upsertAlert('setup-copy', 'Instalación', 'No pude copiar: seleccioná el comando y copialo a mano.', 'error', 3600);
-  }
-}
-
-function legacyCopy(text: string) {
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.setAttribute('readonly', '');
-  area.style.position = 'fixed';
-  area.style.opacity = '0';
-  document.body.append(area);
-  area.select();
-  let ok = false;
-  try {
-    ok = document.execCommand('copy');
-  } catch {
-    ok = false;
-  }
-  area.remove();
-  return ok;
-}
+// Nota 06/11: acá había un bloque "copiar comando de instalación" (venv-tts).
+// Eliminado: la voz es del navegador (cero instalación), sin comandos a la vista.
 
 // ── Drawer de empleado (crear/editar) ───────────────────────────────────
 
@@ -4876,11 +4810,9 @@ function renderSettingsBody() {
           </select>
           <p class="hint">Más grande = más preciso y más lento. “small” es un buen equilibrio.</p>
         </div>
-        ${provider === 'local' && status && !status.stt.localHealthy ? renderSetupFix(
-          'Whisper local no está instalado o no responde. Mientras tanto se usa el reconocimiento del navegador, que es menos preciso.',
-          SETUP_INSTALL_CMD,
-          'stt'
-        ) : ''}
+        ${provider === 'local' && status && !status.stt.localHealthy
+          ? '<p class="hint">Whisper local no responde: mientras tanto se usa el reconocimiento del navegador (menos preciso). La voz local es una mejora opcional — ver README.</p>'
+          : ''}
         <div class="form-field" id="sttGroqExtra" ${provider === 'groq' ? '' : 'hidden'}>
           <label for="setGroqKey">Clave de API de Groq</label>
           <div class="secret-row">
@@ -4914,11 +4846,9 @@ function renderSettingsBody() {
           : '<span class="status-chip warn">Voz del navegador</span>'}
       </header>
       <div class="settings-fields">
-        ${status && !status.tts.healthy ? renderSetupFix(
-          'Voz del navegador activa (cero instalación). Supertonic local es opcional: voces propias por empleado y mejor calidad. Si lo instalás, volvé a levantar el servidor.',
-          SETUP_INSTALL_CMD,
-          'voz'
-        ) : ''}
+        ${status && !status.tts.healthy
+          ? '<p class="hint">Voz del navegador activa (cero instalación). La voz local es una mejora opcional: voces propias por empleado y mejor calidad — ver README.</p>'
+          : ''}
         <div class="form-field">
           <label for="setTtsLang">Idioma de las voces</label>
           <select id="setTtsLang" class="form-control" data-setting-key="tts.language">

@@ -13,10 +13,6 @@ App local para crear **simulaciones de empresas** (una tecnológica, una automot
 npm install
 cp .env.example .env                 # o cargá las claves después desde ⚙ Ajustes
 
-# Audio local (OPCIONAL, solo si querés mejor calidad de voz):
-# python3 -m venv .venv-tts
-# .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
-
 npm run dev                          # backend + frontend (+ TTS/STT locales si están instalados)
 ```
 
@@ -33,6 +29,16 @@ npm run doctor
 Dice qué está bien, qué falta y el comando exacto para arreglarlo (Node, claves,
 voz local, transcripción local, base de datos y puertos). Sirve tanto para la
 primera instalación como para cuando algo dejó de responder.
+
+## Mejora opcional de voz (avanzado)
+
+Sin instalar nada, la app habla y escucha con la voz del navegador. Solo si
+querés mejor calidad (voces propias por empleado + Whisper local):
+
+```bash
+python3 -m venv .venv-tts
+.venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
+```
 
 ## Las organizaciones
 
