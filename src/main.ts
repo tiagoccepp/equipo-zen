@@ -497,6 +497,25 @@ class PcmAudioQueue {
       channel[index] = Math.max(-1, Math.min(1, samples[index] / 32768));
     }
 
+    this.scheduleBuffer(buffer);
+  }
+
+  // MP3 de Edge (nube): se decodifica con Web Audio y se programa por el
+  // mismo canal (orbes, ducking, barge-in, onDrained funcionan igual).
+  async playMp3Base64(base64: string): Promise<void> {
+    const context = this.ensureContext();
+    if (context.state === 'suspended') {
+      await context.resume();
+    }
+    const bytes = base64ToBytes(base64);
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const buffer = await context.decodeAudioData(copy.buffer as ArrayBuffer);
+    this.scheduleBuffer(buffer);
+  }
+
+  private scheduleBuffer(buffer: AudioBuffer): void {
+    const context = this.context as AudioContext;
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(this.masterGain as GainNode);
@@ -1068,7 +1087,37 @@ function speakAgentTurnBrowser(turnId: string, agentId: string, text: string): v
   }
 }
 
+// El audio del servidor (Supertonic PCM o Edge MP3) tarda en llegar: el habla
+// por navegador espera unos segundos y se cancela si el servidor manda audio.
+// Así nunca suenan los dos a la vez y si Edge cae, igual se escucha algo.
+const BROWSER_SPEECH_WAIT_MS = 4000;
+
+let pendingBrowserSpeech: { timer: number; turnId: string; agentId: string } | null = null;
+
+function scheduleBrowserSpeech(turnId: string, agentId: string, text: string): void {
+  cancelPendingBrowserSpeech();
+  if (!state.callMode || state.settingsStatus?.tts?.healthy || !text?.trim()) {
+    return;
+  }
+  pendingBrowserSpeech = {
+    timer: window.setTimeout(() => {
+      pendingBrowserSpeech = null;
+      speakAgentTurnBrowser(turnId, agentId, text);
+    }, BROWSER_SPEECH_WAIT_MS),
+    turnId,
+    agentId
+  };
+}
+
+function cancelPendingBrowserSpeech(): void {
+  if (pendingBrowserSpeech) {
+    window.clearTimeout(pendingBrowserSpeech.timer);
+    pendingBrowserSpeech = null;
+  }
+}
+
 function stopBrowserTts(): void {
+  cancelPendingBrowserSpeech();
   browserTtsTurn = null;
   browserTts.stop();
   if (state.speakingAgentId && !state.audioSegment) {
@@ -1717,12 +1766,19 @@ async function handleServerMessage(message: MeetingMessage) {
       break;
 
     case 'agent_audio_chunk':
+      cancelPendingBrowserSpeech();
       await state.audio.enqueueBase64Pcm(message.data, parseRate(message.mimeType || ''));
+      break;
+
+    case 'agent_audio_mp3':
+      cancelPendingBrowserSpeech();
+      await state.audio.playMp3Base64(message.data);
       break;
 
     case 'agent_audio_start':
       // Arranca voz de agente: la pizarra queda limpia (lo que se oiga de acá
       // en más es el agente, no vos, hasta que lo cortes).
+      cancelPendingBrowserSpeech();
       bargeConfirmed = false;
       state.audioSegment = { turnId: message.turnId, agentId: message.agentId, endReceived: false };
       state.speakingAgentId = message.agentId;
@@ -1818,7 +1874,7 @@ async function handleServerMessage(message: MeetingMessage) {
         // Turno cerrado: ESTE es el único momento en que lo dicho se anuncia al
         // lector de pantalla (una frase entera, no 200 deltas).
         state.callAnnounced = `${agentName(message.agentId)}: ${message.text.trim()}`;
-        speakAgentTurnBrowser(message.turnId, message.agentId, message.text);
+        scheduleBrowserSpeech(message.turnId, message.agentId, message.text);
       }
       markDirty('agents', 'keys', 'call');
       break;
@@ -6951,7 +7007,17 @@ async function toggleLiveAudio() {
     state.recording = true;
     state.voiceStatus = 'Preparando el micrófono…';
     render();
-    state.browserSpeech = new BrowserSpeechRecognizer((text) => {
+    // Brave expone el constructor pero lo tiene desactivado (falla con error
+    // de red): se detecta explícito para no prometer transcripción local.
+    let isBrave = false;
+    try {
+      isBrave = await (navigator as any).brave?.isBrave?.() ?? false;
+    } catch {
+      isBrave = false;
+    }
+    let asrSupported = false;
+    if (!isBrave) {
+      state.browserSpeech = new BrowserSpeechRecognizer((text) => {
       state.clientSpeechText = text;
       if (text) {
         state.activeAudioTranscript = text;
@@ -6965,9 +7031,13 @@ async function toggleLiveAudio() {
       }, 300);
       render();
     });
-    const asrSupported = state.browserSpeech.start();
+      asrSupported = state.browserSpeech.start();
+    }
     if (!asrSupported) {
-      upsertAlert('asr', 'Voz', 'Este navegador no tiene reconocimiento de voz local; los turnos de voz pueden salir vacíos.', 'working', 4600);
+      const serverStt = state.settingsStatus?.stt?.groqConfigured === true;
+      upsertAlert('asr', 'Voz', serverStt
+        ? 'Este navegador no transcribe voz (Brave/Firefox): el servidor transcribe tu audio.'
+        : 'Este navegador no transcribe voz (Brave/Firefox): cambiá a Chrome/Edge o escribí — la transcripción del servidor (Groq) aún no está configurada.', 'working', 5200);
     }
     state.microphone = new LiveMicrophoneStreamer(send, (label) => {
       state.voiceStatus = label;

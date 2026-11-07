@@ -86,28 +86,54 @@ async function transcribeGroq(wavBase64) {
   return String(body.text || '').trim();
 }
 
-// Devuelve { text, source } o lanza. hint = transcripción del navegador,
-// usada como red de seguridad si el proveedor elegido falla.
-export async function transcribeTurn({ wavBase64, hint = '' }) {
-  const provider = getSttProvider();
-
+// Cadena de transcripción (inyectable para tests): proveedor elegido →
+// Groq automático si hay clave (cubre Brave/Firefox sin hint) → hint del
+// navegador → error. Devuelve { text, source } o lanza.
+export async function transcribeWithFallback({ wavBase64, hint = '', provider = 'local', groqKey = '', localFn, groqFn }) {
   if (provider === 'browser' || !wavBase64) {
     if (hint) {
       return { text: hint, source: 'client' };
+    }
+    if (groqKey && wavBase64) {
+      const text = await groqFn(wavBase64);
+      if (text) {
+        return { text, source: 'groq' };
+      }
     }
     throw new Error('Sin transcripción del navegador.');
   }
 
   try {
-    const text = provider === 'groq' ? await transcribeGroq(wavBase64) : await transcribeLocal(wavBase64);
+    const text = provider === 'groq' ? await groqFn(wavBase64) : await localFn(wavBase64);
     if (text) {
       return { text, source: provider };
     }
     throw new Error('Transcripción vacía.');
   } catch (error) {
+    if (provider !== 'groq' && groqKey) {
+      try {
+        const text = await groqFn(wavBase64);
+        if (text) {
+          return { text, source: 'groq' };
+        }
+      } catch {
+        // Cae al hint del navegador.
+      }
+    }
     if (hint) {
       return { text: hint, source: 'client' };
     }
     throw error;
   }
+}
+
+export async function transcribeTurn({ wavBase64, hint = '' }) {
+  return transcribeWithFallback({
+    wavBase64,
+    hint,
+    provider: getSttProvider(),
+    groqKey: getGroqKey(),
+    localFn: transcribeLocal,
+    groqFn: transcribeGroq
+  });
 }

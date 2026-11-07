@@ -20,7 +20,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "nanoid": "^5.1.6",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "node-edge-tts": "^1.2.12"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

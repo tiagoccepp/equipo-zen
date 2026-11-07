@@ -2,6 +2,7 @@ import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
+import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
@@ -64,7 +65,25 @@ export class LiveAgentRuntime {
         return;
       }
       const parts = await this.generateAudioParts(spoken, emit, signal);
-      if (signal?.aborted || parts.length === 0) {
+      if (signal?.aborted) {
+        return;
+      }
+      if (parts.length === 0) {
+        // Sin Supertonic: Edge TTS (nube, sin clave) → un MP3 por oración.
+        // Si Edge falla, el cliente habla por speechSynthesis (timeout).
+        try {
+          const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
+          if (signal?.aborted) {
+            return;
+          }
+          await ensureGateToken(24000);
+          if (signal?.aborted) {
+            return;
+          }
+          emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: mp3.data, mimeType: mp3.mimeType });
+        } catch {
+          // Sin audio del servidor: el cliente se encarga (voz navegador).
+        }
         return;
       }
       const partRate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);

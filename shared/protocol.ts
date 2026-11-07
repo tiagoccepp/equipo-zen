@@ -225,6 +225,7 @@ export type ServerMessage =
   | { type: 'agent_turn_start'; turnId: string; agentId: string }
   | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string; seq?: number }
   | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType?: string; seq?: number }
+  | { type: 'agent_audio_mp3'; turnId: string; agentId: string; data: string; mimeType?: string }
   | { type: 'agent_audio_start'; turnId: string; agentId: string; sampleRate: number }
   | { type: 'agent_audio_end'; turnId: string; agentId: string; reason: 'complete' | 'interrupted' | 'error'; sentMs: number }
   | { type: 'agent_interrupted'; turnId?: string; agentId?: string }
