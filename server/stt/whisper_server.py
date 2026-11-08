@@ -16,6 +16,22 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 
+# faster-whisper 1.2.1 pasa metadata_errors a av.open, pero av>=15 lo sacó
+# (Requires-Dist sin cota). Se dropea el kwarg: en WAV no hay metadata.
+try:
+    import av
+    _av_open = av.open
+
+    def _open_compat(*args, **kwargs):
+        kwargs.pop('metadata_errors', None)
+        return _av_open(*args, **kwargs)
+
+    av.open = _open_compat
+    import faster_whisper.audio
+    faster_whisper.audio.av.open = _open_compat
+except ImportError:
+    pass
+
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")
