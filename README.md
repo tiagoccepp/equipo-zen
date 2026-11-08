@@ -1,13 +1,13 @@
-# Simulaciones — empresas con empleados IA
+# Sofia — tu equipo IA por voz (Jarvis, no chat)
 
-**Demo en vivo:** https://equipo-0jfr.onrender.com/ — entrá, apretá «⚡ Probar demo instantánea» y conversá con el equipo. Sin instalar nada. La voz funciona en Chrome, Edge y Safari; en Brave/Firefox el chat de texto anda completo.
+**Demo en vivo:** https://equipo-0jfr.onrender.com/ — entrá y hablá. La voz funciona en Chrome, Edge y Safari; en Brave/Firefox el chat de texto anda completo.
 
-App para crear **simulaciones de empresas** (una tecnológica, una automotora, una distribuidora… todas las que quieras) y conversar por voz o texto con sus **empleados IA**, cada uno con sus skills, conocimientos, personalidad y voz propia. Los empleados hablan en streaming, se los puede interrumpir a mitad de frase, recuerdan reuniones anteriores y **aprenden de lo que les enseñás**.
+**Sofia** es una asistente always-open: abrís la app y ya está escuchando — *"a la orden"*. Hablale y responde por voz con barge-in real (interrumpila a mitad de frase). Las **empresas con empleados IA** siguen como sección opcional: equipos con skills, conocimientos, personalidad y voz propia que conversan en reunión, recuerdan y **aprenden de lo que les enseñás**.
 
-- **Razonamiento**: [MiniMax](https://platform.minimax.io) (API OpenAI-compatible, modelos M2–M3, elegible desde Ajustes).
-- **Cerebro**: **MiniMax**, **DeepSeek** (`deepseek-v4-flash` para conversar, `deepseek-v4-pro` para el trabajo pesado) u **opencode Zen** (pool gratis con rotación: `beam-free` + 6 repuestos), a elección en ⚙ Ajustes. Cada proveedor guarda su clave por separado, así que cambiar de uno a otro y volver no obliga a pegarla de nuevo.
-- **Voz de los empleados**: la del **navegador** (cero instalación: abrir y escuchar) — o [Supertonic TTS](https://github.com/supertone-inc/supertonic) **100% local** (ONNX, 31 idiomas, 10 voces) como mejora opcional.
-- **Tu voz**: **Whisper** local vía faster-whisper si está instalado; si no, el **navegador** automáticamente (cero instalación) — o Groq (cloud), a elección en ⚙ Ajustes.
+- **Cerebro**: **opencode Zen** (pool gratis con rotación, default `crouton-alpha-free`), **MiniMax** (M2–M3), **DeepSeek** o **Groq** — a elección en Ajustes. Cada proveedor guarda su clave por separado.
+- **Voz de Sofia**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) **100% local** (~1.7s, 10 voces) → respaldo [Deepgram Aura-2](https://deepgram.com) (español) → Edge keyless → voz del navegador.
+- **Tu voz**: **Parakeet-TDT-v3** local (~0.4s) → Whisper local → **Groq** (~1.4s) → **Deepgram Nova-3** → navegador. VAD con calibración de ruido + confirmación de arranque (el teclado no abre turnos) y filtro de alucinaciones.
+- **Escritorio**: app Tauri (Linux/Win/Mac) con **orbe flotante** estilo llamada + atajo global `Ctrl+Shift+E`.
 
 ## Ejecutar
 
@@ -135,10 +135,10 @@ server/lib/
   verify.js             verificación determinista de entregables (sin IA)
   playbooks.js          criterio técnico por nicho + estándar de diseño
   emulator.js           emulador de Android (adb) y simulador de iOS (simctl)
-  llm.js                cliente MiniMax/DeepSeek (SSE, filtro <think>, rotación)
+  llm.js                cliente OpenAI-compat (MiniMax/DeepSeek/opencode/Groq: SSE, rotación)
   meeting-session.js    una reunión en vivo    router.js       ruteo heurístico
   agent-runtime.js      prompts y streaming     turn-pipeline.js  cola + SpeakerGate
-  supertonic.js         TTS local               stt.js / transcriber.js  oído
+  supertonic.js / deepgram.js TTS local + Aura     stt.js / transcriber.js  oído (Parakeet/Groq/Nova)
   settings.js           ajustes del usuario (SQLite) que pisan al .env
   learning.js           observador de aprendizajes  reflection.js  resumen + tuner
   key-ring.js           rotación de claves      telemetry.js   ring en RAM + SSE
