@@ -38,16 +38,17 @@ export const MINIMAX_MODELS = uniqueModelList([
 // misma forma del parámetro `thinking`), así que el cliente es uno solo y lo
 // único que cambia es a dónde apunta, con qué clave y con qué modelos.
 export const OPENCODE_API_URL = process.env.OPENCODE_API_URL || 'https://opencode.ai/zen/go/v1/chat/completions';
-// Pool de rotación Zen (costo 0, verificado 2026-11-06). beam-free primero:
-// es el primario; el resto son repuestos en orden. kimi-* excluido: exige
-// temperature=1 y el cliente manda 0.7.
+// Pool de rotación Zen (costo 0). Orden por salud 2026-11-08 14:35: solo
+// minimax-m3.1 y qwen3.8 respondían (el resto devolvía length@0 + TTFT
+// 35s); el watchdog TTFT rota si el primero se cuelga. kimi-* excluido:
+// exige temperature=1 y el cliente manda 0.7 (voz 0.5).
 export const OPENCODE_CATALOG = [
+  'minimax-m3.1-flash',
+  'qwen3.8-flash',
+  'crouton-alpha-free',
   'beam-free',
   'iceman-contributor-free',
-  'crouton-alpha-free',
   'deepseek-v4.1-flash',
-  'qwen3.8-flash',
-  'minimax-m3.1-flash',
   'glm-5.3-flash'
 ];
 export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || OPENCODE_CATALOG[0];
