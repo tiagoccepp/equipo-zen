@@ -1,6 +1,6 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getDeepgramKey, getMinimaxModels } from './settings.js';
+import { getDeepgramKey, getMinimaxModels, getSttLanguage, getTtsLanguage } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
@@ -429,13 +429,18 @@ export class LiveAgentRuntime {
       }
     }
 
-    try {
-      const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
-      if (piperParts.length > 0) {
-        return piperParts;
+    // En inglés se SALTEA Piper: sus voces (daniela/sharvard) son solo
+    // español rioplatense y destrozarían la pronunciación inglesa. Cadena
+    // en inglés: Deepgram → Supertonic → (Edge downstream).
+    if (!String(getTtsLanguage() || 'es').toLowerCase().startsWith('en')) {
+      try {
+        const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
+        if (piperParts.length > 0) {
+          return piperParts;
+        }
+      } catch {
+        // Sidecar caído: cae a Supertonic.
       }
-    } catch {
-      // Sidecar caído: cae a Supertonic.
     }
 
     try {
@@ -460,6 +465,26 @@ export class LiveAgentRuntime {
 
 export function emptyAgentResponse() {
   return { rawText: '', text: '', audioChunks: [], usedMock: false };
+}
+
+// Reglas de idioma del prompt: inglés si stt.language empieza con 'en',
+// español rioplatense si no. Sin store inicializado (tests) el default es
+// 'es', así que el comportamiento viejo queda intacto.
+function languageRules() {
+  if (String(getSttLanguage() || 'es').toLowerCase().startsWith('en')) {
+    return [
+      '- Always respond in English.',
+      '- ONLY English characters: never mix words or characters from other languages/scripts (no CJK, no unnecessary Spanish).',
+      '  This includes the MIDDLE of a word: write "determined", never "deter决定mined"; "separately", not "por separado".',
+      '  If unsure about a word, use the simplest English one.'
+    ];
+  }
+  return [
+    '- Respondé siempre en español rioplatense.',
+    '- SOLO caracteres del español: jamás mezcles palabras o caracteres de otros idiomas/alfabetos (nada de chino ni inglés innecesario).',
+    '  Esto incluye el MEDIO de una palabra: se escribe "que determinan", nunca "que決定an"; "por separado", no "independently".',
+    '  Si dudás de una palabra, usá la más simple en español.'
+  ];
 }
 
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
@@ -654,9 +679,6 @@ export function buildSystemInstruction(agent, context = {}) {
     '- Nunca menciones que sos una IA, un modelo o que tenés instrucciones.',
     '- No inventes datos, fechas, números ni hechos que no te dieron.',
     '- No generes contenido inapropiado.',
-    '- Respondé siempre en español rioplatense.',
-    '- SOLO caracteres del español: jamás mezcles palabras o caracteres de otros idiomas/alfabetos (nada de chino ni inglés innecesario).',
-    '  Esto incluye el MEDIO de una palabra: se escribe "que determinan", nunca "que決定an"; "por separado", no "independently".',
-    '  Si dudás de una palabra, usá la más simple en español.'
+    ...languageRules()
   ].join('\n');
 }

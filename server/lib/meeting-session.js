@@ -1106,7 +1106,7 @@ export class MeetingSession {
   }
 
   shouldUseAiRouter(route) {
-    // Equipos chicos (Sofia + 2): el heurístico ya resuelve saludo/mención/
+    // Equipos chicos (Pablo + 2): el heurístico ya resuelve saludo/mención/
     // ronda sin gastar una llamada LLM (un saludo medido: 12s de router IA).
     if ((this.sessionAgents?.length || 0) <= 3) {
       return false;

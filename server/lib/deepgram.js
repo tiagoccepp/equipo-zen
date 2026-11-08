@@ -5,22 +5,26 @@
 // voces Aura), nube (donde el local no entra, ej. Render) y futuro
 // streaming WS + diarización. Auth: `Token KEY` (no Bearer).
 
-import { getDeepgramKey, getSttLanguage } from './settings.js';
+import { getDeepgramKey, getSttLanguage, getTtsLanguage } from './settings.js';
 
 export const DEEPGRAM_STT_MODEL = 'nova-3';
 const DEEPGRAM_TIMEOUT_MS = 25000;
 
-// Voces Aura-2 español verificadas 2026-11-08 (las 5 es + codeswitch EN-ES:
-// Aquila, Carina, Diana, Javier, Selena).
+// Voces Aura-2 verificadas 2026-11-08 contra la API real (speak → 200 +
+// audio no vacío). ES: las 5 es + codeswitch (Javier M / Selena F).
+// EN: Thalia F / Orpheus M (candidatas aura-2-*-en; Basil y Ares 403).
 export const DEEPGRAM_TTS_VOICES = {
-  M: 'aura-2-javier-es',
-  F: 'aura-2-selena-es'
+  es: { M: 'aura-2-javier-es', F: 'aura-2-selena-es' },
+  en: { M: 'aura-2-orpheus-en', F: 'aura-2-thalia-en' }
 };
 
-// Supertonic M1-M5/F1-F5 → voz Aura equivalente por género.
+// Supertonic M1-M5/F1-F5 → voz Aura equivalente por género, en el idioma
+// configurado (tts.language: 'en*' usa las inglesas).
 export function mapVoiceToDeepgram(supertonicVoice) {
   const v = String(supertonicVoice || '').trim().toUpperCase();
-  return v.startsWith('F') ? DEEPGRAM_TTS_VOICES.F : DEEPGRAM_TTS_VOICES.M;
+  const lang = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en') ? 'en' : 'es';
+  const table = DEEPGRAM_TTS_VOICES[lang];
+  return v.startsWith('F') ? table.F : table.M;
 }
 
 function authHeaders(extra = {}) {
@@ -31,15 +35,16 @@ function authHeaders(extra = {}) {
   return { Authorization: `Token ${key}`, ...extra };
 }
 
-// Transcribe un WAV 16kHz (base64). Nova-3 + español + formato
-// inteligente + keyterm "Sofia" para que el nombre propio entre siempre.
+// Transcribe un WAV 16kHz (base64). Nova-3 + idioma de settings +
+// formato inteligente + keyterm "Pablo" para que el nombre propio entre
+// siempre (antes Sofia, renombrado 2026-11-08).
 export async function transcribeDeepgram(wavBase64) {
   const params = new URLSearchParams({
     model: DEEPGRAM_STT_MODEL,
     language: getSttLanguage(),
     smart_format: 'true',
     punctuate: 'true',
-    keyterms: 'Sofia:2'
+    keyterms: 'Pablo:2'
   });
   const response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {
     method: 'POST',

@@ -100,7 +100,7 @@ test('un "hola" pelado lo contesta solo la CEO, no los ocho a coro', () => {
   const router = new AgentRouter([
     { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true },
-    { id: 's', name: 'Sofía', role: 'worker', aliases: ['sofia'], domains: ['diseno'], enabled: true }
+    { id: 'p', name: 'Pablo', role: 'worker', aliases: ['pablo'], domains: ['diseno'], enabled: true }
   ]);
 
   for (const saludo of ['hola', 'buenas', 'buen día', 'qué tal']) {
@@ -136,7 +136,7 @@ test('saludar a alguien por su nombre no arrastra al resto', () => {
 test('sin CEO en la mesa, el saludo simple lo toma alguien igual', () => {
   const router = new AgentRouter([
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true },
-    { id: 's', name: 'Sofía', role: 'worker', aliases: ['sofia'], domains: ['diseno'], enabled: true }
+    { id: 'p', name: 'Pablo', role: 'worker', aliases: ['pablo'], domains: ['diseno'], enabled: true }
   ]);
   const ruta = router.route('hola', { lastAgentTurn: () => null });
   assert.equal(ruta.targets.length, 1, 'uno solo, no los dos');

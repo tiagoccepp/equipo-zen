@@ -1,5 +1,5 @@
 // Orbe minimizado: esfera upstream + mini-UI glass.
-// 🎤 = hablar (toggle voz), ⤢ = abrir Sofia, arrastrar = mover.
+// 🎤 = hablar (toggle voz), ⤢ = abrir Pablo, arrastrar = mover.
 
 import { invoke } from '@tauri-apps/api/core';
 import { OrbField } from './lib/call-orbs.ts';
@@ -11,21 +11,21 @@ const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
 let level = 0;
 const field = new OrbField(canvas, { energy: () => level });
 field.setTheme('dark');
-field.setAgents([{ id: 'sofia', name: 'Sofia', color: '#38D1FF' }]);
+field.setAgents([{ id: 'pablo', name: 'Pablo', color: '#38D1FF' }]);
 
 function layout(): void {
   const r = canvas.getBoundingClientRect();
   const w = r.width || 176;
   const h = r.height || 176;
   field.resize(w, h);
-  field.setSlots([{ id: 'sofia', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 6 }]);
+  field.setSlots([{ id: 'pablo', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 6 }]);
 }
 window.addEventListener('resize', layout);
 layout();
 field.start();
 
 const STATUS_LABEL: Record<string, string> = {
-  idle: 'sofia',
+  idle: 'pablo',
   escuchando: '● escuchando',
   hablando: '♪ hablando'
 };
@@ -34,8 +34,8 @@ async function poll(): Promise<void> {
   try {
     const { estado, nivel } = await invoke<{ estado: string; nivel: number }>('orb_poll');
     level = Math.max(0, Math.min(1, nivel || 0));
-    field.setSpeaking(estado === 'hablando' || estado === 'escuchando' ? 'sofia' : '');
-    statusEl.textContent = STATUS_LABEL[estado] || 'sofia';
+    field.setSpeaking(estado === 'hablando' || estado === 'escuchando' ? 'pablo' : '');
+    statusEl.textContent = STATUS_LABEL[estado] || 'pablo';
     micBtn.classList.toggle('live', estado === 'escuchando');
   } catch {
     // Núcleo aún no listo.

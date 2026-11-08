@@ -344,6 +344,25 @@ const MIGRATIONS = [
   // proyecto y cada quien sabe qué le toca escribir.
   `
   ALTER TABLE tasks ADD COLUMN target_file TEXT;
+  `,
+
+  // v12: rename Sofia → Pablo (2026-11-08). La instalación existente creó
+  // la compañía y el agente con el nombre viejo desde el template 'sofia'
+  // (ahora 'pablo'): se renombran compañía, agente, aliases en DB, voz
+  // (F1→M1, como el template) y los textos en femenino. Idempotente: solo
+  // toca filas con el nombre exacto 'Sofia' (sin acento) — la 'Sofía'
+  // ingeniera del Laboratorio Python es otra persona y no se toca. El
+  // historial de turnos no se reescribe: lo dicho queda como se dijo.
+  `
+  UPDATE companies SET name = 'Pablo',
+    scenario = REPLACE(scenario, 'Sofia es el asistente', 'Pablo es el asistente')
+  WHERE name = 'Sofia';
+  UPDATE agents SET name = 'Pablo',
+    voice = CASE WHEN voice = 'F1' THEN 'M1' ELSE voice END,
+    aliases_json = REPLACE(aliases_json, '"sofia"', '"pablo"'),
+    knowledge = REPLACE(knowledge, 'LA interlocutora', 'EL interlocutor'),
+    style = REPLACE(style, 'interlocutora', 'interlocutor')
+  WHERE name = 'Sofia';
   `
 ];
 

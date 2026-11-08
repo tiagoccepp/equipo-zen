@@ -1,4 +1,4 @@
-// Voz Sofia: loop dinámico upstream (VAD continuo + barge-in + ducking).
+// Voz Pablo: loop dinámico upstream (VAD continuo + barge-in + ducking).
 // Salida: PCM/MP3 con AnalyserNode real. Entrada: mic continuo con VAD
 // local, pre-buffer, hints ASR-navegador y barge-in (barge-in.ts verbatim).
 
@@ -222,6 +222,12 @@ export class LiveMic {
 
   get userSpeaking(): boolean {
     return this.speaking;
+  }
+
+  /** Vuelve el barge-in a reposo (el orbe usa bargePhase para la energía). */
+  resetBarge(): void {
+    this.barge = idleBargeInState();
+    this.bargePhase = 'idle';
   }
 
   async start(): Promise<boolean> {
@@ -453,14 +459,14 @@ export class BrowserSpeech {
       && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   }
 
-  start(): void {
+  start(lang?: string): void {
     const Ctor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!Ctor || this.recognition) {
       return;
     }
     try {
       this.recognition = new Ctor();
-      this.recognition.lang = 'es-ES';
+      this.recognition.lang = lang || 'es-ES';
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
       this.recognition.maxAlternatives = 1;

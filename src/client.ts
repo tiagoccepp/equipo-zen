@@ -1,4 +1,4 @@
-// Cliente Sofia ↔ backend Equipo (HTTP + WebSocket). Delgado: la UI vive en app.ts.
+// Cliente Pablo ↔ backend Equipo (HTTP + WebSocket). Delgado: la UI vive en app.ts.
 
 import { desktopApiBase } from './lib/tauri.ts';
 
@@ -14,21 +14,21 @@ export interface ClientEvents {
   onReady: (agents: Agent[], meetingId?: string) => void;
   onUserText: (text: string) => void;
   onRoute: (names: string[]) => void;
-  onAgentStart: (agentId: string) => void;
+  onAgentStart: (agentId: string, turnId?: string) => void;
   onSpeakStart: (agentId: string) => void;
   onProgress: (agentId: string, text: string) => void;
   onDelta: (agentId: string, delta: string) => void;
-  onAgentEnd: (agentId: string, text: string) => void;
-  onMp3: (base64: string) => void;
-  onPcm: (base64: string, rate: number) => void;
+  onAgentEnd: (agentId: string, text: string, turnId?: string) => void;
+  onMp3: (base64: string, turnId?: string) => void;
+  onPcm: (base64: string, rate: number, turnId?: string) => void;
   onAudioStart: (turnId: string, agentId: string) => void;
   onAudioEnd: (turnId: string, agentId: string) => void;
   onAgentState: (agentId: string, state: string) => void;
-  onInterrupted: (agentId: string) => void;
+  onInterrupted: (agentId: string, turnId?: string) => void;
   onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
   onLiveTranscript: (text: string) => void;
   onAutoWorkChanged: (enabled: boolean) => void;
-  onNoResponse: (note: string) => void;
+  onNoResponse: (note: string, turnId?: string) => void;
   onVoiceTranscript: (text: string, source: string) => void;
   onTranscribeEmpty: () => void;
   onError: (message: string) => void;
@@ -54,16 +54,17 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function findOrCreateSofiaSpace(): Promise<{ companyId: string; goalId: string }> {
+export async function findOrCreatePabloSpace(): Promise<{ companyId: string; goalId: string }> {
   const data = await apiJson<{ companies: Array<{ id: string; name: string }> }>('/api/companies');
-  let company = (data.companies || []).find((c) => c.name === 'Sofia');
+  // Legacy 'Sofia': la DB aún puede no estar migrada.
+  let company = (data.companies || []).find((c) => c.name === 'Pablo' || c.name === 'Sofia');
   if (!company) {
     const created = await apiJson<{ company: { id: string } }>('/api/companies', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ templateId: 'sofia' })
+      body: JSON.stringify({ templateId: 'pablo' })
     });
-    company = { id: created.company.id, name: 'Sofia' };
+    company = { id: created.company.id, name: 'Pablo' };
   }
   const projects = await apiJson<{ projects: Array<{ id: string; title: string }> }>(
     `/api/companies/${encodeURIComponent(company.id)}/projects`
@@ -169,7 +170,7 @@ export class Client {
     this.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'hello', companyId, goalId, meetingId: meetingId || undefined }));
-      // Sofia habla: sin esto el servidor jamás emite audio (voiceEnabled).
+      // Pablo habla: sin esto el servidor jamás emite audio (voiceEnabled).
       ws.send(JSON.stringify({ type: 'set_voice', enabled: true }));
     };
     ws.onmessage = (event) => {
@@ -193,7 +194,7 @@ export class Client {
           this.ev.onRoute(((m.route?.targets || []) as Array<{ name?: string }>).map((t) => t.name || ''));
           break;
         case 'agent_turn_start':
-          this.ev.onAgentStart(String(m.agentId || ''));
+          this.ev.onAgentStart(String(m.agentId || ''), optStr(m.turnId));
           break;
         case 'agent_speak_start':
           this.ev.onSpeakStart(String(m.agentId || ''));
@@ -205,10 +206,10 @@ export class Client {
           this.ev.onDelta(String(m.agentId || ''), String(m.delta || ''));
           break;
         case 'agent_audio_chunk':
-          this.ev.onPcm(String(m.data || ''), parseRate(m.mimeType));
+          this.ev.onPcm(String(m.data || ''), parseRate(m.mimeType), optStr(m.turnId));
           break;
         case 'agent_audio_mp3':
-          this.ev.onMp3(String(m.data || ''));
+          this.ev.onMp3(String(m.data || ''), optStr(m.turnId));
           break;
         case 'agent_audio_start':
           this.ev.onAudioStart(String(m.turnId || ''), String(m.agentId || ''));
@@ -221,7 +222,7 @@ export class Client {
           break;
         case 'agent_interrupted':
         case 'turn_cancelled':
-          this.ev.onInterrupted(String(m.agentId || ''));
+          this.ev.onInterrupted(String(m.agentId || ''), optStr(m.turnId));
           break;
         case 'work_event':
           this.ev.onWorkEvent(String(m.kind || ''), String((m as { agentId?: string }).agentId || ''), m as Record<string, unknown>);
@@ -233,13 +234,13 @@ export class Client {
           this.ev.onAutoWorkChanged(Boolean(m.enabled));
           break;
         case 'agent_turn_complete':
-          this.ev.onAgentEnd(String(m.agentId || ''), String(m.text || ''));
+          this.ev.onAgentEnd(String(m.agentId || ''), String(m.text || ''), optStr(m.turnId));
           break;
         case 'agent_silence':
-          this.ev.onAgentEnd(String(m.agentId || ''), '');
+          this.ev.onAgentEnd(String(m.agentId || ''), '', optStr(m.turnId));
           break;
         case 'no_agent_response':
-          this.ev.onNoResponse(String(m.note || 'Nadie respondió.'));
+          this.ev.onNoResponse(String(m.note || 'Nadie respondió.'), optStr(m.turnId));
           break;
         case 'user_audio_turn_final':
           if (m.text) this.ev.onVoiceTranscript(String(m.text), String(m.source || ''));
@@ -309,6 +310,11 @@ export class Client {
     }
     this.ws = null;
   }
+}
+
+function optStr(value: unknown): string | undefined {
+  const s = String(value || '');
+  return s ? s : undefined;
 }
 
 function parseRate(mimeType: unknown): number {

@@ -4,24 +4,32 @@
 // cliente lo decodifica con Web Audio. Si Edge falla, el cliente cae a
 // speechSynthesis (timeout) — la cadena nunca se rompe.
 import { createRequire } from 'node:module';
+import { getTtsLanguage } from './settings.js';
 
 const require = createRequire(import.meta.url);
 
 const EDGE_VOICES = {
-  M: 'es-ES-AlvaroNeural',
-  F: 'es-ES-ElviraNeural'
+  es: { M: 'es-ES-AlvaroNeural', F: 'es-ES-ElviraNeural', lang: 'es-ES' },
+  en: { M: 'en-US-AndrewNeural', F: 'en-US-AvaNeural', lang: 'en-US' }
 };
+
+// Idioma configurado (tts.language): 'en*' usa las voces en-US.
+function edgeTable() {
+  return String(getTtsLanguage() || 'es').toLowerCase().startsWith('en') ? EDGE_VOICES.en : EDGE_VOICES.es;
+}
 const DEFAULT_EDGE_VOICE = 'es-ES-AlvaroNeural';
 const EDGE_TIMEOUT_MS = 20000;
 const MAX_EDGE_CHARS = 2000;
 
-// Supertonic M1-M5/F1-F5 → voz Edge equivalente por género.
+// Supertonic M1-M5/F1-F5 → voz Edge equivalente por género, en el idioma
+// configurado (tts.language).
 export function mapVoiceToEdge(supertonicVoice) {
+  const table = edgeTable();
   const v = String(supertonicVoice || '').trim().toUpperCase();
   if (v.startsWith('F')) {
-    return EDGE_VOICES.F;
+    return table.F;
   }
-  return EDGE_VOICES.M;
+  return table.M;
 }
 
 // Valida magia MP3: tag ID3 o frame-sync MPEG (0xFF + 3 bits altos).
@@ -69,7 +77,7 @@ export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_T
   if (!clean) {
     throw new Error('texto vacío');
   }
-  const tts = new Ctor({ voice: mapVoiceToEdge(voice), lang: 'es-ES', timeout: timeoutMs });
+  const tts = new Ctor({ voice: mapVoiceToEdge(voice), lang: edgeTable().lang, timeout: timeoutMs });
   const chunks = [];
   for await (const chunk of tts.streamAudio(clean)) {
     if (Buffer.isBuffer(chunk)) {

@@ -14,7 +14,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SKILLS_DIR = process.env.SOFIA_SKILLS_DIR
+const SKILLS_DIR = process.env.PABLO_SKILLS_DIR || process.env.SOFIA_SKILLS_DIR
   || join(fileURLToPath(new URL('.', import.meta.url)), '..', 'skills');
 
 let cache = null;

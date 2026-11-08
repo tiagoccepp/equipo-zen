@@ -1,4 +1,4 @@
-// Sofia — UI Lovable-oscura + loop de voz dinámico upstream
+// Pablo — UI Lovable-oscura + loop de voz dinámico upstream
 // (VAD continuo + barge-in + gate de audio + work-events).
 
 import './app.css';
@@ -7,7 +7,7 @@ import { isTauri, tinvoke } from './lib/tauri.ts';
 import {
   Client,
   decir,
-  findOrCreateSofiaSpace,
+  findOrCreatePabloSpace,
   firstProject,
   getSettings,
   listCompanies,
@@ -67,6 +67,55 @@ function agentSpeaking(): boolean {
   return voiceOut.isPlaying || audioSegment !== null;
 }
 
+// Turnos del agente en curso (turnId → agentId): cubren el PENSAMIENTO
+// silencioso, que agentSpeaking() no ve (solo cubre audio en vuelo).
+const activeTurns = new Map<string, string>();
+// Turnos ya cortados: el audio que llegue tarde se descarta (stragglers).
+const interruptedTurns = new Set<string>();
+const MAX_INTERRUPTED = 30;
+
+function noteInterrupted(turnId: string | undefined): void {
+  if (!turnId || interruptedTurns.has(turnId)) return;
+  interruptedTurns.add(turnId);
+  while (interruptedTurns.size > MAX_INTERRUPTED) {
+    const oldest = interruptedTurns.values().next().value;
+    if (oldest === undefined) break;
+    interruptedTurns.delete(oldest);
+  }
+}
+
+/** Marca lo cortado localmente: el segmento en vuelo + todo lo que pensaba. */
+function noteLocalInterrupt(): void {
+  noteInterrupted(audioSegment?.turnId);
+  for (const turnId of activeTurns.keys()) noteInterrupted(turnId);
+}
+
+/** Blancos del interrupt: audio en vuelo primero, después lo que pensaba. */
+function interruptTargets(): Array<{ turnId?: string; agentId?: string }> {
+  const out: Array<{ turnId?: string; agentId?: string }> = [];
+  const seen = new Set<string>();
+  const push = (turnId?: string, agentId?: string): void => {
+    if (!turnId && !agentId) return;
+    const key = `${turnId || ''}|${agentId || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ turnId, agentId });
+  };
+  push(audioSegment?.turnId, audioSegment?.agentId);
+  for (const [turnId, agentId] of activeTurns) push(turnId, agentId);
+  return out;
+}
+
+function isInterruptedTurn(turnId: string | undefined): boolean {
+  return !!turnId && interruptedTurns.has(turnId);
+}
+
+// Gracia de endpointing: una mini-pausa no cierra el turno.
+const GRACE_MS = 1200;
+let graceTimer: number | null = null;
+let graceHint = '';
+let audioEndSent = false;
+
 function maybePlaybackComplete(): void {
   if (audioSegment?.endReceived && !voiceOut.isPlaying) {
     client.playbackComplete(audioSegment.turnId, audioSegment.agentId);
@@ -86,18 +135,58 @@ voiceOut.onDrained = () => {
 const liveMic = new LiveMic({
   onChunk: (b64) => client.audioChunk(b64),
   onSpeechStart: () => {
-    // Arrancar un turno corta lo que sonaba (igual que upstream).
+    liveMic.resetBarge();
+    // Dentro de la gracia se sigue el MISMO turno: los chunks siguen
+    // fluyendo al mismo buffer del servidor, no se manda nada extra.
+    if (graceTimer !== null) {
+      window.clearTimeout(graceTimer);
+      graceTimer = null;
+      graceHint = '';
+      setStatus('grabando tu turno…');
+      return;
+    }
+    // Barge-in total: corta audio en vuelo Y pensamiento silencioso (sin
+    // esto el turno viejo seguía generando y lo del usuario se encolaba
+    // detrás, y el interrupt se sentía muerto).
+    if (agentSpeaking() || activeTurns.size > 0) {
+      const targets = interruptTargets();
+      if (targets.length === 0) {
+        client.interrupt(undefined, undefined);
+      } else {
+        for (const t of targets) client.interrupt(t.turnId, t.agentId);
+      }
+      noteLocalInterrupt();
+      voiceOut.flush();
+      voiceOut.restoreGain();
+      speakingAgent = '';
+      field.setSpeaking('');
+      setStatus('te escucho — la corté.');
+      return;
+    }
+    // Nada que cortar: arrancar un turno (igual que upstream).
     voiceOut.flush();
     voiceOut.restoreGain();
     setStatus('grabando tu turno…');
   },
   onSpeechEnd: (hint) => {
-    // Fin de habla: se marca el tiempo (TTFV) y se cierra el turno. El
-    // modelo decide si avisa, responde por partes o calla; el sistema
-    // no emite voz propia.
+    // Fin de habla: se marca el tiempo (TTFV); el cierre del turno espera
+    // la gracia por si es una mini-pausa. El modelo decide si avisa,
+    // responde por partes o calla; el sistema no emite voz propia.
+    liveMic.resetBarge();
     lastSpeechEndAt = performance.now();
-    client.audioEnd(hint);
-    setStatus('transcribiendo…');
+    graceHint = hint;
+    audioEndSent = false;
+    setStatus('¿terminaste?…');
+    if (graceTimer !== null) window.clearTimeout(graceTimer);
+    graceTimer = window.setTimeout(() => {
+      graceTimer = null;
+      if (audioEndSent) return;
+      audioEndSent = true;
+      // Hint más fresco no-vacío: el actual del navegador o el guardado.
+      const best = browserSpeech.latestUtterance() || graceHint;
+      client.audioEnd(best);
+      setStatus('transcribiendo…');
+    }, GRACE_MS);
   },
   onDiscarded: () => {
     client.audioCancel('too_short', 0);
@@ -110,6 +199,7 @@ const liveMic = new LiveMic({
   },
   onInterrupt: () => {
     client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
+    noteLocalInterrupt();
     voiceOut.flush();
     voiceOut.restoreGain();
     speakingAgent = '';
@@ -180,8 +270,8 @@ function layoutOrbs(): void {
     slots.push({ id: a.id, cx: cellW * (i + 0.5), cy: h / 2 - 8, r });
   });
   if (list.length === 0) {
-    orbAgents.push({ id: 'sofia', name: 'Sofia', color: '#38D1FF' });
-    slots.push({ id: 'sofia', cx: w / 2, cy: h / 2 - 8, r: Math.min(128, h / 2 - 30) });
+    orbAgents.push({ id: 'pablo', name: 'Pablo', color: '#38D1FF' });
+    slots.push({ id: 'pablo', cx: w / 2, cy: h / 2 - 8, r: Math.min(128, h / 2 - 30) });
   }
   field.setAgents(orbAgents);
   field.setSlots(slots);
@@ -193,7 +283,7 @@ window.addEventListener('resize', layoutOrbs);
 // ── Cliente ─────────────────────────────────────────────────────────
 let lastSpeechEndAt = 0;
 const turnText = new Map<string, string>();
-const agentName = (id: string): string => agents.get(id)?.name || 'Sofia';
+const agentName = (id: string): string => agents.get(id)?.name || 'Pablo';
 
 const client = new Client({
   onReady: (list, meetingId) => {
@@ -206,8 +296,8 @@ const client = new Client({
         // Sin storage: cada carga crea reunión nueva.
       }
     }
-    const sofia = list.find((a) => a.role === 'ceo') || list[0];
-    greetEl.textContent = sofia ? `¿En qué te ayudo, señor? — ${sofia.name}` : '¿En qué te ayudo, señor?';
+    const pablo = list.find((a) => a.role === 'ceo') || list[0];
+    greetEl.textContent = pablo ? `¿En qué te ayudo, señor? — ${pablo.name}` : '¿En qué te ayudo, señor?';
     setStatus(voiceSession ? 'te escucho…' : 'a la orden');
     layoutOrbs();
   },
@@ -219,8 +309,9 @@ const client = new Client({
     const who = names.filter(Boolean);
     if (who.length > 1) setStatus(`ronda: ${who.join(', ')}`);
   },
-  onAgentStart: (agentId) => {
+  onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
+    if (turnId) activeTurns.set(turnId, agentId);
   },
   onSpeakStart: (agentId) => {
     // Primera palabra audible del modelo: marca TTFV (voz) para telemetría.
@@ -235,7 +326,8 @@ const client = new Client({
   onDelta: (agentId, delta) => {
     turnText.set(agentId, (turnText.get(agentId) || '') + delta);
   },
-  onAgentEnd: (agentId, text) => {
+  onAgentEnd: (agentId, text, turnId) => {
+    if (turnId) activeTurns.delete(turnId);
     const full = text || turnText.get(agentId) || '';
     turnText.delete(agentId);
     if (full.trim()) {
@@ -248,12 +340,12 @@ const client = new Client({
       if (!voiceSession) setStatus('a la orden');
     }
   },
-  onMp3: (b64) => {
-    if (!voiceOn) return;
+  onMp3: (b64, turnId) => {
+    if (!voiceOn || isInterruptedTurn(turnId)) return;
     void voiceOut.unlock().then(() => voiceOut.playMp3(b64));
   },
-  onPcm: (b64, rate) => {
-    if (!voiceOn) return;
+  onPcm: (b64, rate, turnId) => {
+    if (!voiceOn || isInterruptedTurn(turnId)) return;
     void voiceOut.unlock().then(() => voiceOut.enqueuePcm(b64, rate));
   },
   onAudioStart: (turnId, agentId) => {
@@ -277,7 +369,11 @@ const client = new Client({
       field.setSpeaking('');
     }
   },
-  onInterrupted: (agentId) => {
+  onInterrupted: (agentId, turnId) => {
+    if (turnId) {
+      activeTurns.delete(turnId);
+      noteInterrupted(turnId);
+    }
     voiceOut.flush();
     voiceOut.restoreGain();
     audioSegment = null;
@@ -328,7 +424,8 @@ const client = new Client({
     btn.classList.toggle('off', !enabled);
     btn.setAttribute('aria-pressed', String(enabled));
   },
-  onNoResponse: (note) => {
+  onNoResponse: (note, turnId) => {
+    if (turnId) activeTurns.delete(turnId);
     addMsg('sistema', note, 'sys');
     setStatus(voiceSession ? 'te escucho…' : 'a la orden');
   },
@@ -354,6 +451,11 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     return;
   }
   if (!on) {
+    if (graceTimer !== null) {
+      window.clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    graceHint = '';
     liveMic.stop(true);
     browserSpeech.stop();
     client.audioStop();
@@ -373,7 +475,15 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     setStatus('a la orden');
     return;
   }
-  browserSpeech.start();
+  // El ASR del navegador (hint) sigue el idioma de escucha del servidor.
+  let locale = 'en-US';
+  try {
+    const settings = await getSettings();
+    locale = settings.stt.language.startsWith('en') ? 'en-US' : 'es-ES';
+  } catch {
+    // Sin backend: inglés por defecto.
+  }
+  browserSpeech.start(locale);
   voiceSession = true;
   voiceGroup = group;
   micBtn.classList.toggle('live', !group);
@@ -450,7 +560,7 @@ $('btn-test-voice').addEventListener('click', () => {
   void (async () => {
     try {
       setStatus('probando voz…');
-      const b64 = await decir('Atenta, señor. ¿Me escucha bien?');
+      const b64 = await decir('Pablo here, sir. Can you hear me clearly?');
       await voiceOut.unlock();
       await voiceOut.playMp3(b64);
       setStatus(voiceSession ? 'te escucho…' : 'a la orden');
@@ -466,13 +576,29 @@ let currentCompany = '';
 let currentGoal = '';
 
 function meetingKey(companyId: string, goalId: string): string {
-  return `sofia.meeting.${companyId}.${goalId}`;
+  return `pablo.meeting.${companyId}.${goalId}`;
+}
+
+// Read-through: la clave vieja de Sofia se lee una vez y se re-graba en la nueva.
+function readMeetingKey(companyId: string, goalId: string): string | undefined {
+  try {
+    const fresh = window.localStorage.getItem(meetingKey(companyId, goalId));
+    if (fresh) return fresh;
+    const legacy = window.localStorage.getItem(`sofia.meeting.${companyId}.${goalId}`);
+    if (legacy) {
+      window.localStorage.setItem(meetingKey(companyId, goalId), legacy);
+      return legacy;
+    }
+  } catch {
+    // Sin storage: cada carga crea reunión nueva.
+  }
+  return undefined;
 }
 
 function connectTo(companyId: string, goalId: string): void {
   currentCompany = companyId;
   currentGoal = goalId;
-  const meetingId = window.localStorage.getItem(meetingKey(companyId, goalId)) || undefined;
+  const meetingId = readMeetingKey(companyId, goalId);
   client.connect(companyId, goalId, meetingId);
 }
 
@@ -706,20 +832,23 @@ async function renderSettings(): Promise<void> {
   });
   box.appendChild(settingRow('🔑 clave Deepgram', dgInput));
 
-  const langInput = document.createElement('input');
-  langInput.type = 'text';
-  langInput.value = s.stt.language;
-  langInput.setAttribute('aria-label', 'Idioma de escucha');
-  langInput.addEventListener('change', () => save({ 'stt.language': langInput.value.trim() || 'es' }));
-  box.appendChild(settingRow('🗣️ idioma oído', langInput));
+  const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English' };
+  const sttLang = (s.stt.language === 'es' || s.stt.language === 'en')
+    ? s.stt.language
+    : (s.stt.language.startsWith('en') ? 'en' : 'es');
+  const langSel = settingSelect(['es', 'en'], sttLang, LANG_LABELS);
+  langSel.setAttribute('aria-label', 'Idioma de escucha');
+  langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
+  box.appendChild(settingRow('🗣️ idioma oído', langSel));
 
   box.appendChild(settingGroup('Voz'));
-  const ttsLang = document.createElement('input');
-  ttsLang.type = 'text';
-  ttsLang.value = s.tts.language;
-  ttsLang.setAttribute('aria-label', 'Idioma de voz');
-  ttsLang.addEventListener('change', () => save({ 'tts.language': ttsLang.value.trim() || 'es' }));
-  box.appendChild(settingRow('🗣️ idioma voz', ttsLang));
+  const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en')
+    ? s.tts.language
+    : (s.tts.language.startsWith('en') ? 'en' : 'es');
+  const ttsSel = settingSelect(['es', 'en'], ttsLangCur, LANG_LABELS);
+  ttsSel.setAttribute('aria-label', 'Idioma de voz');
+  ttsSel.addEventListener('change', () => save({ 'tts.language': ttsSel.value }));
+  box.appendChild(settingRow('🗣️ idioma voz', ttsSel));
 }
 document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderSettings();
@@ -728,8 +857,8 @@ if (isTauri()) {
   $('perms-box').hidden = false;
 }
 
-// Debug: window.__sofia (para auditoría).
-(window as unknown as { __sofia: object }).__sofia = {
+// Debug: window.__pablo (para auditoría; __sofia queda como alias legacy).
+(window as unknown as { __pablo: object; __sofia?: object }).__pablo = {
   client,
   voiceOut,
   liveMic,
@@ -741,6 +870,8 @@ if (isTauri()) {
     return voiceSession;
   }
 };
+(window as unknown as { __pablo: object; __sofia?: object }).__sofia =
+  (window as unknown as { __pablo: object }).__pablo;
 
 // ── Arranque ────────────────────────────────────────────────────────
 layoutOrbs();
@@ -748,7 +879,7 @@ layoutOrbs();
 (async () => {
   try {
     await resolveBase();
-    const space = await findOrCreateSofiaSpace();
+    const space = await findOrCreatePabloSpace();
     connectTo(space.companyId, space.goalId);
   } catch (err) {
     setStatus(`sin backend: ${err instanceof Error ? err.message : 'error'}`);
