@@ -126,6 +126,44 @@ async function* sseEvents(response) {
   }
 }
 
+class TtftTimeout extends Error {}
+
+function isTtftTimeout(error) {
+  return error instanceof TtftTimeout;
+}
+
+// Primer evento SSE con fecha de vencimiento: si el modelo no arranca en
+// ttftMs, se cancela el body (libera el socket) y el turno rota al
+// siguiente modelo en vez de colgarse de una cola lenta.
+async function firstEventWithTimeout(response, ttftMs) {
+  const iter = sseEvents(response)[Symbol.asyncIterator]();
+  let timer = null;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        void response.body?.cancel?.().catch(() => {});
+        reject(new TtftTimeout(`Sin primer token en ${ttftMs}ms`));
+      }, ttftMs);
+    });
+    const result = await Promise.race([iter.next(), timeout]);
+    return { iter, result };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function* sseEventsWithTtft(response, ttftMs) {
+  const { iter, result } = await firstEventWithTimeout(response, ttftMs);
+  if (!result.done) {
+    yield result.value;
+  }
+  for await (const event of { [Symbol.asyncIterator]: () => iter }) {
+    yield event;
+  }
+}
+
 // onDelta(texto, acumulado). Devuelve { text, model, aborted?, partial? }.
 export async function streamChat(keyRing, options, onDelta) {
   if (!keyRing.hasKeys()) {
@@ -151,7 +189,9 @@ export async function streamChat(keyRing, options, onDelta) {
       const filter = createThinkFilter();
       try {
         const response = await requestChat(key, { ...options, model }, true);
-        for await (const event of sseEvents(response)) {
+        const ttftMs = Number(options.ttftMs || 0);
+        const events = ttftMs > 0 ? sseEventsWithTtft(response, ttftMs) : sseEvents(response);
+        for await (const event of events) {
           if (options.signal?.aborted) {
             break;
           }
@@ -194,6 +234,17 @@ export async function streamChat(keyRing, options, onDelta) {
         if (emitted) {
           return { text: emitted, model, partial: true };
         }
+        if (isTtftTimeout(error)) {
+          // Modelo lento pero vivo: no es culpa de la clave; saltar al
+          // siguiente modelo sin gastar el reintento en el mismo.
+          keyRing.logKey('api_call_ttft_timeout', { scope: options.scope, model, keyId: key.id });
+          options.emit?.({
+            type: 'api_rotation_start',
+            scope: options.scope,
+            message: `Modelo lento, probando el siguiente (${model}).`
+          });
+          break;
+        }
         if (!isOwnTimeout(error)) {
           keyRing.reportFailure(key, error);
         }
@@ -212,7 +263,7 @@ export async function streamChat(keyRing, options, onDelta) {
         });
       }
     }
-    if (!isModelNotFound(lastError) && !isEmptyResponse(lastError)) {
+    if (!isModelNotFound(lastError) && !isEmptyResponse(lastError) && !isTtftTimeout(lastError)) {
       break;
     }
   }

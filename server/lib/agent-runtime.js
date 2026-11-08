@@ -36,6 +36,10 @@ export class LiveAgentRuntime {
 
   async respondWithStream(turn, emit, { signal, gate, turnId } = {}) {
     emit({ type: 'agent_state', agentId: this.id, state: 'thinking' });
+    // MODO VOZ (turno hablado, Jarvis): contexto corto, tope chico,
+    // instrucción de brevedad, rotación si el modelo no arranca.
+    // Los turnos de texto mantienen calidad completa.
+    const voiceFast = turn.source === 'audio';
 
     let probeBuffer = '';
     let probeDone = false;
@@ -180,9 +184,11 @@ export class LiveAgentRuntime {
         models: getMinimaxModels(),
         scope: `${this.name} texto`,
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
+        // Sin primer token en 8s se rota al siguiente modelo (colas Zen).
+        ttftMs: voiceFast ? 8000 : 0,
         emit,
         signal,
-        maxTokens: 3000,
+        maxTokens: voiceFast ? 220 : 3000,
         temperature: 0.5,
         messages: [
           { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
@@ -289,7 +295,7 @@ export class LiveAgentRuntime {
   }
 
   buildTurnPrompt(turn) {
-    const recentContext = this.memory.recentContext();
+    const recentContext = this.memory.recentContext(turn.source === 'audio' ? 6 : 12);
     const priorResponses = (turn.priorResponses || [])
       .filter((response) => response.text)
       .map((response) => `${response.name}: ${response.text}`)
@@ -305,6 +311,11 @@ export class LiveAgentRuntime {
         : `El usuario dice: "${turn.text}"`,
       ''
     ];
+
+    if (turn.source === 'audio') {
+      lines.push('MODO VOZ: te están HABLANDO — respondé en máximo 2 oraciones cortas (menos de 30 palabras). Sin listas, sin markdown, sin narrar pasos ni herramientas.');
+      lines.push('');
+    }
 
     if (turn.target?.directMention) {
       lines.push('Te mencionaron directamente. Debés responder.');

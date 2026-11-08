@@ -9,9 +9,12 @@ import {
   decir,
   findOrCreateSofiaSpace,
   firstProject,
+  getSettings,
   listCompanies,
   resolveBase,
-  type Agent
+  saveSettings,
+  type Agent,
+  type PublicSettings
 } from './client.ts';
 import { BrowserSpeech, LiveMic, VoiceOut } from './voice.ts';
 
@@ -561,6 +564,150 @@ async function renderPerms(): Promise<void> {
 }
 document.querySelector('#perms-box')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderPerms();
+});
+
+// ── Ajustes (cerebro, oído, voz) ──────────────────────────────────────
+const LLM_KEY_FIELD: Record<string, { field: string; label: string }> = {
+  minimax: { field: 'llm.apiKey', label: '🔑 clave MiniMax' },
+  deepseek: { field: 'llm.deepseekKey', label: '🔑 clave DeepSeek' },
+  opencode: { field: 'llm.opencodeKey', label: '🔑 clave opencode' },
+  groq: { field: 'llm.groqKey', label: '🔑 clave Groq' }
+};
+
+function settingRow(label: string, control: HTMLElement): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'perm-row';
+  const span = document.createElement('span');
+  span.textContent = label;
+  row.appendChild(span);
+  row.appendChild(control);
+  return row;
+}
+
+function settingGroup(title: string): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = 'set-group';
+  div.textContent = title;
+  return div;
+}
+
+function settingSelect(options: string[], current: string, labels?: Record<string, string>): HTMLSelectElement {
+  const sel = document.createElement('select');
+  for (const opt of options) {
+    const el = document.createElement('option');
+    el.value = opt;
+    el.textContent = labels?.[opt] || opt;
+    sel.appendChild(el);
+  }
+  sel.value = current;
+  return sel;
+}
+
+function flashSaved(): void {
+  const prev = statusEl.textContent;
+  setStatus('ajuste guardado ✓');
+  window.setTimeout(() => {
+    if (statusEl.textContent === 'ajuste guardado ✓') setStatus(prev);
+  }, 1200);
+}
+
+async function renderSettings(): Promise<void> {
+  const box = $('settings-list');
+  box.innerHTML = '';
+  let s: PublicSettings;
+  try {
+    s = await getSettings();
+  } catch {
+    box.textContent = 'Sin backend.';
+    return;
+  }
+  const save = (patch: Record<string, string>, rerender = false): void => {
+    void saveSettings(patch)
+      .then(() => {
+        flashSaved();
+        if (rerender) void renderSettings();
+      })
+      .catch((err) => addMsg('sistema', `Ajuste falló: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
+  };
+
+  box.appendChild(settingGroup('Cerebro'));
+  const provLabels: Record<string, string> = {};
+  for (const p of s.llm.providerOptions) provLabels[p.id] = p.label;
+  const provSel = settingSelect(s.llm.providerOptions.map((p) => p.id), s.llm.provider, provLabels);
+  provSel.setAttribute('aria-label', 'Proveedor de razonamiento');
+  provSel.addEventListener('change', () => save({ 'llm.provider': provSel.value }, true));
+  box.appendChild(settingRow('🧠 proveedor', provSel));
+
+  const modelSel = settingSelect(s.llm.modelOptions, s.llm.model);
+  modelSel.setAttribute('aria-label', 'Modelo');
+  modelSel.addEventListener('change', () => save({ 'llm.model': modelSel.value }));
+  box.appendChild(settingRow('📦 modelo', modelSel));
+
+  const keyInfo = LLM_KEY_FIELD[s.llm.provider] || LLM_KEY_FIELD.opencode;
+  const masked = s.llm.provider === 'minimax' ? s.llm.apiKeyMasked
+    : s.llm.provider === 'deepseek' ? s.llm.deepseekKeyMasked
+    : s.llm.provider === 'opencode' ? s.llm.opencodeKeyMasked : '';
+  const keyInput = document.createElement('input');
+  keyInput.type = 'password';
+  keyInput.placeholder = masked || 'vacía — pegá la clave';
+  keyInput.setAttribute('aria-label', keyInfo.label);
+  keyInput.addEventListener('change', () => {
+    if (!keyInput.value) return;
+    save({ [keyInfo.field]: keyInput.value });
+    keyInput.value = '';
+  });
+  box.appendChild(settingRow(keyInfo.label, keyInput));
+
+  box.appendChild(settingGroup('Oído'));
+  const sttSel = settingSelect(s.stt.providerOptions, s.stt.provider);
+  sttSel.setAttribute('aria-label', 'Proveedor de transcripción');
+  sttSel.addEventListener('change', () => save({ 'stt.provider': sttSel.value }));
+  box.appendChild(settingRow('👂 transcripción', sttSel));
+
+  const wSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
+  wSel.setAttribute('aria-label', 'Modelo Whisper local');
+  wSel.addEventListener('change', () => save({ 'stt.whisperModel': wSel.value }));
+  box.appendChild(settingRow('📦 whisper local', wSel));
+
+  const groqInput = document.createElement('input');
+  groqInput.type = 'password';
+  groqInput.placeholder = s.stt.groqKeyMasked || 'vacía';
+  groqInput.setAttribute('aria-label', 'Clave Groq STT');
+  groqInput.addEventListener('change', () => {
+    if (!groqInput.value) return;
+    save({ 'stt.groqKey': groqInput.value });
+    groqInput.value = '';
+  });
+  box.appendChild(settingRow('🔑 clave Groq', groqInput));
+
+  const dgInput = document.createElement('input');
+  dgInput.type = 'password';
+  dgInput.placeholder = s.stt.deepgramKeyMasked || 'vacía';
+  dgInput.setAttribute('aria-label', 'Clave Deepgram');
+  dgInput.addEventListener('change', () => {
+    if (!dgInput.value) return;
+    save({ 'stt.deepgramKey': dgInput.value });
+    dgInput.value = '';
+  });
+  box.appendChild(settingRow('🔑 clave Deepgram', dgInput));
+
+  const langInput = document.createElement('input');
+  langInput.type = 'text';
+  langInput.value = s.stt.language;
+  langInput.setAttribute('aria-label', 'Idioma de escucha');
+  langInput.addEventListener('change', () => save({ 'stt.language': langInput.value.trim() || 'es' }));
+  box.appendChild(settingRow('🗣️ idioma oído', langInput));
+
+  box.appendChild(settingGroup('Voz'));
+  const ttsLang = document.createElement('input');
+  ttsLang.type = 'text';
+  ttsLang.value = s.tts.language;
+  ttsLang.setAttribute('aria-label', 'Idioma de voz');
+  ttsLang.addEventListener('change', () => save({ 'tts.language': ttsLang.value.trim() || 'es' }));
+  box.appendChild(settingRow('🗣️ idioma voz', ttsLang));
+}
+document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
+  if ((e.target as HTMLDetailsElement).open) void renderSettings();
 });
 if (isTauri()) {
   $('perms-box').hidden = false;

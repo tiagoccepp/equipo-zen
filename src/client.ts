@@ -104,6 +104,52 @@ export async function decir(texto: string): Promise<string> {
   return data.audio;
 }
 
+export interface ProviderOption {
+  id: string;
+  label: string;
+}
+
+export interface PublicSettings {
+  llm: {
+    provider: string;
+    providerOptions: ProviderOption[];
+    apiKeySet: boolean;
+    apiKeyMasked: string;
+    deepseekKeySet: boolean;
+    deepseekKeyMasked: string;
+    opencodeKeySet: boolean;
+    opencodeKeyMasked: string;
+    model: string;
+    modelOptions: string[];
+  };
+  stt: {
+    provider: string;
+    providerOptions: string[];
+    whisperModel: string;
+    whisperModelOptions: string[];
+    groqKeySet: boolean;
+    groqKeyMasked: string;
+    deepgramKeySet: boolean;
+    deepgramKeyMasked: string;
+    language: string;
+  };
+  tts: { engine: string; language: string; url: string };
+}
+
+export async function getSettings(): Promise<PublicSettings> {
+  const data = await apiJson<{ settings: PublicSettings }>('/api/settings');
+  return data.settings;
+}
+
+export async function saveSettings(patch: Record<string, string>): Promise<PublicSettings> {
+  const data = await apiJson<{ settings: PublicSettings }>('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch)
+  });
+  return data.settings;
+}
+
 export class Client {
   private ws: WebSocket | null = null;
   private ev: ClientEvents;

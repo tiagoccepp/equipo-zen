@@ -1054,7 +1054,7 @@ export class MeetingSession {
     const turnId = nanoid(8);
     const accepted = this.turnQueue.push(
       turnId,
-      (signal) => this.processUserTurn(turnId, text, signal),
+      (signal) => this.processUserTurn(turnId, text, signal, source),
       (error) => {
         this.send({
           type: 'error',
@@ -1106,6 +1106,11 @@ export class MeetingSession {
   }
 
   shouldUseAiRouter(route) {
+    // Equipos chicos (Sofia + 2): el heurístico ya resuelve saludo/mención/
+    // ronda sin gastar una llamada LLM (un saludo medido: 12s de router IA).
+    if ((this.sessionAgents?.length || 0) <= 3) {
+      return false;
+    }
     return Boolean(route.greeting || route.groupAddressed);
   }
 
@@ -1210,7 +1215,7 @@ export class MeetingSession {
     };
   }
 
-  async processUserTurn(turnId, text, signal) {
+  async processUserTurn(turnId, text, signal, source = 'text') {
     const route = await this.routeUserTurn(turnId, text);
     if (signal?.aborted) {
       return;
@@ -1251,6 +1256,7 @@ export class MeetingSession {
       const response = await agent.respond({
         speaker: 'Usuario',
         text,
+        source,
         route,
         target,
         priorResponses: route.responses || []

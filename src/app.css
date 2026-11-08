@@ -341,6 +341,31 @@ body {
   padding: 6px 10px;
   font: inherit;
   font-size: 13px;
+  max-width: 46%;
+}
+
+.perm-row input[type="password"],
+.perm-row input[type="text"] {
+  background: #1e1e1e;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  width: 46%;
+}
+
+.perm-row input::placeholder {
+  color: var(--muted);
+}
+
+.set-group {
+  color: var(--pink-soft);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 12px 4px 2px;
 }
 
 @media (max-width: 560px) {
