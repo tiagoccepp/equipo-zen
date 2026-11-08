@@ -188,7 +188,7 @@ export class LiveAgentRuntime {
         ttftMs: voiceFast ? 8000 : 0,
         emit,
         signal,
-        maxTokens: voiceFast ? 220 : 3000,
+        maxTokens: voiceFast ? 1000 : 3000,
         temperature: 0.5,
         messages: [
           { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
