@@ -1,8 +1,9 @@
 import { GROQ_STT_MODEL, WHISPER_URL, getGroqKey, getSttLanguage, getSttProvider, getWhisperModel } from './settings.js';
 
 // STT del usuario. Proveedores:
-//  - local  (default): Whisper open source de OpenAI vía faster-whisper
-//              (server/stt/whisper_server.py, 100% en la máquina).
+//  - local  (default): Parakeet-TDT-0.6B-v3 vía sherpa-onnx
+//              (server/stt/parakeet_server.py, :7790, ~0.4s en CPU),
+//              con fallback a Whisper faster-whisper (:7789).
 //  - groq   : Whisper hosteado por Groq (API OpenAI-compatible, rapidísimo).
 //  - browser: SpeechRecognition del navegador (solo el hint del cliente).
 
@@ -43,22 +44,37 @@ export async function whisperHealthy() {
   }
 }
 
-async function transcribeLocal(wavBase64) {
-  const response = await fetch(`${WHISPER_URL}/v1/transcribe`, {
+const PARAKEET_URL = process.env.PARAKEET_URL || 'http://127.0.0.1:7790';
+
+async function postTranscribe(url, wavBase64, withModel) {
+  const payload = { audio_base64: wavBase64, language: getSttLanguage() };
+  if (withModel) {
+    payload.model = getWhisperModel();
+  }
+  const response = await fetch(`${url}/v1/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      audio_base64: wavBase64,
-      language: getSttLanguage(),
-      model: getWhisperModel()
-    }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(STT_TIMEOUT_MS)
   });
   if (!response.ok) {
-    throw new Error(`Whisper local HTTP ${response.status}`);
+    throw new Error(`STT local HTTP ${response.status}`);
   }
   const body = await response.json();
   return String(body.text || '').trim();
+}
+
+async function transcribeLocal(wavBase64) {
+  // Parakeet primero (rápido); Whisper de respaldo (compatible).
+  try {
+    const text = await postTranscribe(PARAKEET_URL, wavBase64, false);
+    if (text) {
+      return text;
+    }
+  } catch {
+    // Caído o lento: sigue Whisper.
+  }
+  return postTranscribe(WHISPER_URL, wavBase64, true);
 }
 
 async function transcribeGroq(wavBase64) {

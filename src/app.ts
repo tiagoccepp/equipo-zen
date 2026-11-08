@@ -303,6 +303,13 @@ const client = new Client({
   onLiveTranscript: (text) => {
     setStatus(`…${text.slice(-60)}`);
   },
+  onAutoWorkChanged: (enabled) => {
+    autoWorkOn = enabled;
+    const btn = $('btn-autowork');
+    btn.classList.toggle('on', enabled);
+    btn.classList.toggle('off', !enabled);
+    btn.setAttribute('aria-pressed', String(enabled));
+  },
   onNoResponse: (note) => {
     addMsg('sistema', note, 'sys');
     setStatus(voiceSession ? 'te escucho…' : 'a la orden');
@@ -409,6 +416,16 @@ voiceBtn.addEventListener('click', () => {
     speakingAgent = '';
     field.setSpeaking('');
   }
+});
+
+let autoWorkOn = true;
+$('btn-autowork').addEventListener('click', () => {
+  autoWorkOn = !autoWorkOn;
+  client.setAutoWork(autoWorkOn);
+  const btn = $('btn-autowork');
+  btn.classList.toggle('on', autoWorkOn);
+  btn.classList.toggle('off', !autoWorkOn);
+  btn.setAttribute('aria-pressed', String(autoWorkOn));
 });
 
 $('btn-test-voice').addEventListener('click', () => {

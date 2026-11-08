@@ -25,6 +25,7 @@ export interface ClientEvents {
   onInterrupted: (agentId: string) => void;
   onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
   onLiveTranscript: (text: string) => void;
+  onAutoWorkChanged: (enabled: boolean) => void;
   onNoResponse: (note: string) => void;
   onVoiceTranscript: (text: string, source: string) => void;
   onTranscribeEmpty: () => void;
@@ -173,6 +174,9 @@ export class Client {
           break;
         case 'user_audio_transcript_delta':
           if (m.delta || m.text) this.ev.onLiveTranscript(String(m.delta || m.text));
+          break;
+        case 'auto_work_changed':
+          this.ev.onAutoWorkChanged(Boolean(m.enabled));
           break;
         case 'agent_turn_complete':
           this.ev.onAgentEnd(String(m.agentId || ''), String(m.text || ''));
