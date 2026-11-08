@@ -1275,13 +1275,16 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "enigo",
+ "glib",
  "image",
+ "log",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "uuid",
+ "webkit2gtk",
  "xcap",
 ]
 
