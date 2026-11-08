@@ -23,6 +23,7 @@ export class VoiceOut {
   private frame: Float32Array<ArrayBuffer> | null = null;
   private active = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
+  private preamble: AudioBuffer | null = null;
 
   private ensure(): AudioContext {
     if (this.context && this.context.state !== 'closed') {
@@ -74,6 +75,35 @@ export class VoiceOut {
     copy.set(bytes);
     const buffer = await ctx.decodeAudioData(copy.buffer);
     this.schedule(buffer);
+  }
+
+  /** Pre-carga el acuse local ("Enseguida, señor…") para soltarlo en 0ms
+   *  cuando termina el turno del usuario, mientras el servidor transcribe.
+   *  La respuesta real se encola después por el schedule normal. */
+  async primePreamble(url: string): Promise<void> {
+    try {
+      const ctx = this.ensure();
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const raw = await res.arrayBuffer();
+      this.preamble = await ctx.decodeAudioData(raw.slice(0));
+    } catch {
+      this.preamble = null;
+    }
+  }
+
+  /** Suelta el acuse pre-cargado. False si no hay nada (sigue todo igual). */
+  playPreamble(): boolean {
+    if (!this.preamble || !this.context) return false;
+    try {
+      if (this.context.state === 'suspended') {
+        void this.context.resume().catch(() => {});
+      }
+      this.schedule(this.preamble);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private schedule(buffer: AudioBuffer): void {

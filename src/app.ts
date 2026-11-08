@@ -92,6 +92,12 @@ const liveMic = new LiveMic({
     setStatus('grabando tu turno…');
   },
   onSpeechEnd: (hint) => {
+    // Acuse instantáneo (0ms, audio local pre-cargado): Sofia confirma que
+    // escuchó mientras el servidor transcribe + piensa + sintetiza. Solo 1:1;
+    // en grupo el acuse con voz de sistema confundiría (¿quién habló?).
+    if (voiceSession && !voiceGroup) {
+      voiceOut.playPreamble();
+    }
     client.audioEnd(hint);
     setStatus('transcribiendo…');
   },
@@ -361,6 +367,10 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   browserSpeech.start();
   voiceSession = true;
   voiceGroup = group;
+  // Pre-carga del acuse: un fetch, se decodifica una vez, dura toda la sesión.
+  if (!group) {
+    void voiceOut.primePreamble('/audio/preamble.mp3');
+  }
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
   setStatus(group ? 'te escuchan todos — hablá nomás' : 'te escucho…');

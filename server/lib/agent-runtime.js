@@ -168,6 +168,20 @@ export class LiveAgentRuntime {
         enqueueSentence(sentence);
         sentenceBuffer = sentenceBuffer.slice(sentence.length);
       }
+      // Sin punto final a la vista y buffer largo: sub-corte en cláusula
+      // (~120 caracteres) para adelantar el primer audio — el TTFA del TTS
+      // lo manda el tamaño del chunk, no el modelo. No corta dentro de
+      // etiquetas [TAREA_...] (se hablarían en voz alta).
+      if (sentenceBuffer.length > 140) {
+        const clause = sentenceBuffer.match(/^[\s\S]{60,140}?(?:[,;:—–]|(?=\s+(?:y|o|pero|porque|que|como|cuando|donde)\s))/);
+        if (clause) {
+          const head = clause[0];
+          if (!(head.lastIndexOf('[') > head.lastIndexOf(']'))) {
+            enqueueSentence(head);
+            sentenceBuffer = sentenceBuffer.slice(head.length);
+          }
+        }
+      }
     };
 
     const flushVisible = () => {
