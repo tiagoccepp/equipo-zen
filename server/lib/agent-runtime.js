@@ -6,7 +6,7 @@ import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
-import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripTaskTags } from './text.js';
+import { cleanAgentText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
@@ -52,6 +52,19 @@ export class LiveAgentRuntime {
     const tagFilter = createTagFilter();
     let gateToken = null;
     let audioRunner = Promise.resolve();
+    // Telemetría Fase 0-lite: marcas de tiempo del turno (primera palabra
+    // hablable, primer audio). Medir nunca puede romper hablar.
+    const turnT0 = Date.now();
+    let thinkChars = 0;
+    let speakAnnounced = false;
+    let firstAudioMarked = false;
+    const markTelemetry = (event, extra = {}) => {
+      try {
+        this.meetingSession?.logTelemetry?.(event, { agentId: this.id, ms: Date.now() - turnT0, ...extra }, turnId);
+      } catch {
+        // Silencio: telemetría caída no interrumpe el turno.
+      }
+    };
 
     const ensureGateToken = async (sampleRate) => {
       if (!gateToken && gate) {
@@ -68,7 +81,7 @@ export class LiveAgentRuntime {
       if (!this.meetingSession?.voiceEnabled) {
         return;
       }
-      const spoken = stripTaskTags(sentence).trim();
+      const spoken = stripSpeechLeaks(sentence).trim();
       if (!spoken || signal?.aborted) {
         return;
       }
@@ -94,6 +107,10 @@ export class LiveAgentRuntime {
         }
         return;
       }
+      if (!firstAudioMarked) {
+        firstAudioMarked = true;
+        markTelemetry('agent_first_audio');
+      }
       const partRate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
       const token = await ensureGateToken(partRate);
       for (const part of parts) {
@@ -113,14 +130,13 @@ export class LiveAgentRuntime {
         });
     };
 
-    const handleDelta = (rawDelta) => {
-      if (silenced) return;
-      // Limpieza de caracteres de otro alfabeto antes de mostrar y de hablar.
-      let delta = stripForeignScript(rawDelta);
-      if (!delta) return;
-
+    // Texto hablable que sale del parser de partes: probe SILENCIO, deltas
+    // visibles y corte de oraciones para TTS (igual que antes, pero solo
+    // con lo que el modelo marcó —o dejó— como hablado).
+    const handleSpeak = (text) => {
+      if (silenced || !text) return;
       if (!probeDone) {
-        probeBuffer += delta;
+        probeBuffer += text;
         const normalized = normalize(stripTaskTags(probeBuffer));
         if (normalized.length < SILENCE_PROBE_LENGTH && 'silencio'.startsWith(normalized.slice(0, 8))) {
           return; // todavía puede ser SILENCIO: no emitir
@@ -130,17 +146,22 @@ export class LiveAgentRuntime {
           return;
         }
         probeDone = true;
-        delta = probeBuffer;
+        text = probeBuffer;
         probeBuffer = '';
       }
+      if (!speakAnnounced) {
+        speakAnnounced = true;
+        markTelemetry('agent_first_speak', { thinkChars });
+        emit({ type: 'agent_speak_start', turnId, agentId: this.id });
+      }
 
-      const visible = tagFilter.push(delta);
+      const visible = tagFilter.push(text);
       if (visible) {
         seq += 1;
         emit({ type: 'agent_transcript_delta', delta: visible, seq });
       }
 
-      sentenceBuffer += delta;
+      sentenceBuffer += text;
       // Corta en fin de oración con un mínimo de largo (evita TTS por "Ok.").
       let match;
       while ((match = sentenceBuffer.match(/[^.!?…]*[.!?…]+[\s"')\]]*/))) {
@@ -165,6 +186,30 @@ export class LiveAgentRuntime {
           }
         }
       }
+    };
+
+    // El modelo marca su stream: [PIENSO] privado, [AVANCE] visual,
+    // texto plano hablado. El parser incremental lo separa por canal
+    // aunque los tags lleguen partidos entre deltas.
+    const streamParts = createPartsParser({
+      onSpeak: handleSpeak,
+      onThink: (content) => {
+        thinkChars += content.length;
+      },
+      onProgress: (content) => {
+        const clean = content.trim();
+        if (clean && !silenced) {
+          emit({ type: 'agent_progress', turnId, agentId: this.id, text: clean.slice(0, 200) });
+        }
+      }
+    });
+
+    const handleDelta = (rawDelta) => {
+      if (silenced) return;
+      // Limpieza de caracteres de otro alfabeto antes de mostrar y de hablar.
+      const delta = stripForeignScript(rawDelta);
+      if (!delta) return;
+      streamParts.push(delta);
     };
 
     const flushVisible = () => {
@@ -209,10 +254,14 @@ export class LiveAgentRuntime {
       return { ...emptyAgentResponse(), backend: 'stream' };
     }
 
-    // Lo retenido por el filtro que al final NO era una etiqueta se muestra.
+    // Cierre de partes (avance sin cerrar se muestra; think sin cerrar se
+    // descarta: el pensamiento nunca se habla) + lo retenido por el filtro.
+    streamParts.flush();
     flushVisible();
 
-    const rawText = cleanAgentText(result.text, this.name);
+    // El texto guardado pela think/avance (nunca fueron para el usuario);
+    // las [TAREA_*] se conservan para el parser de tareas.
+    const rawText = cleanAgentText(stripProgressBlocks(stripPrivateBlocks(result.text)), this.name);
     const spokenText = stripTaskTags(rawText);
 
     if (!rawText || silenced || isSilenceResponse(spokenText)) {
@@ -269,7 +318,7 @@ export class LiveAgentRuntime {
     // los agentes son mudos aunque set_voice esté en true.
     if (this.meetingSession?.voiceEnabled && !signal?.aborted) {
       try {
-        const spoken = stripTaskTags(text).trim();
+        const spoken = stripSpeechLeaks(text).trim();
         if (spoken) {
           const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
           if (!signal?.aborted) {
@@ -310,7 +359,7 @@ export class LiveAgentRuntime {
     ];
 
     if (turn.source === 'audio') {
-      lines.push('MODO VOZ: te están HABLANDO — conversá como si tuvieras a la persona enfrente: resumido y natural, ni telegrama ni discurso. Sin listas, sin markdown, sin narrar pasos ni herramientas.');
+      lines.push('MODO VOZ: te están HABLANDO — conversá como si tuvieras a la persona enfrente: resumido y natural, ni telegrama ni discurso. Sin listas, sin markdown, sin narrar pasos ni herramientas. Pensá en [PIENSO], avisá progreso con [AVANCE], lo demás se habla.');
       lines.push('');
     }
 
@@ -501,6 +550,22 @@ export function buildSystemInstruction(agent, context = {}) {
     '- No saludes al inicio de cada respuesta. Ya estás en la conversación.',
     '- Hablá resumido como en una charla real; si te piden detalle, explayate sin culpa.',
     '- Si es un saludo, respondé breve y con onda. Nada más.',
+    '',
+    'CÓMO SE ESCUCHA LO QUE EMITÍS (llamada de voz y chat):',
+    '',
+    'Todo lo que emitas SE ESCUCHA o SE VE en el momento: no hay borrador.',
+    'Hablás cuando querés: podés avisar antes de actuar, responder por partes,',
+    'o callar. Tres canales, con tags:',
+    '- Texto normal = SE HABLA. Si vas a tardar (buscar, revisar, delegar),',
+    '  emití PRIMERO un preámbulo de UNA frase con la ACCIÓN ("te lo busco,',
+    '  dame un segundo"), nunca tu proceso mental. Sin preámbulo si respondés',
+    '  directo o el usuario solo confirma/corrige.',
+    '- [PIENSO]...[/PIENSO] = privado, jamás se escucha ni se muestra. Todo',
+    '  tu razonamiento va acá adentro, SIEMPRE con tags, antes o entre habla.',
+    '- [AVANCE]...[/AVANCE] = progreso que se VE pero NO se habla ("revisando',
+    '  3 archivos…"). Corto, una línea.',
+    'Cada parte hablada debe tener sentido sola si te interrumpen. Si te',
+    'interrumpen, al reanudar NO repitas lo que ya se escuchó.',
     '',
     'CUANDO EL PEDIDO VIENE INCOMPLETO (pasa casi siempre):',
     '',

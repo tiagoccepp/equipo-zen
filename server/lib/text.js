@@ -185,3 +185,130 @@ export function cleanTranscript(value) {
 export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// ── Partes del stream (Fase 1: el LLM dueño de lo expresivo) ─────────────
+// El modelo marca su stream con tags (case-insensitive):
+//   [PIENSO]...[/PIENSO]  privado: NUNCA se muestra ni se habla
+//   [AVANCE]...[/AVANCE]  progreso: se muestra en UI, NUNCA se habla
+//   <think>...</think>    thinking nativo: igual que PIENSO
+//   texto plano           hablado + mostrado (default: lo que no es tag se escucha)
+
+export function stripPrivateBlocks(value) {
+  let text = String(value || '');
+  text = text.replace(/\[PIENSO\][\s\S]*?(\[\/PIENSO\]|$)/gi, ' ');
+  text = text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, ' ');
+  return text;
+}
+
+export function stripProgressBlocks(value) {
+  return String(value || '').replace(/\[AVANCE\][\s\S]*?(\[\/AVANCE\]|$)/gi, ' ');
+}
+
+// Última defensa antes del TTS: pela TODO lo no-hablable. Si algo pasa,
+// el usuario lo escucha — este filtro no puede fallar abierto.
+export function stripSpeechLeaks(value) {
+  let text = stripPrivateBlocks(stripProgressBlocks(value));
+  text = stripTaskTags(text);
+  // Restos de tags en mayúsculas ([HABLA], [/AVANCE] huérfanos): fuera.
+  // Minúsculas entre corchetes se conservan (pueden ser prosa).
+  text = text.replace(/\[\/?[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ _/-]*\]/g, ' ');
+  // Restos de tags angulados con solo letras (<think> huérfano). <3 sobrevive.
+  text = text.replace(/<\/?[A-Za-z][A-Za-z]*>/g, ' ');
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+const PART_TAG_RE = /\[(PIENSO|AVANCE)\]|\[\/(PIENSO|AVANCE)\]|<think>|<\/think>/i;
+
+function partialTagTail(buffer) {
+  // ¿Termina el buffer con algo que podría ser el principio de un tag?
+  // Se retiene hasta decidir (evita hablar "[PIE" suelto).
+  const m1 = buffer.match(/\[[A-Za-z/]{0,9}$/);
+  if (m1) {
+    return m1[0].length;
+  }
+  const m2 = buffer.match(/<[A-Za-z/]{0,8}$/);
+  if (m2) {
+    return m2[0].length;
+  }
+  return 0;
+}
+
+// Parser incremental: los tags llegan partidos entre deltas. Callbacks:
+// onSpeak(texto hablable), onThink(contenido, cerrado?), onProgress(texto).
+// Todo tag desconocido pasa como texto (fail-open a hablar).
+export function createPartsParser({ onSpeak, onThink, onProgress }) {
+  let buffer = '';
+  let mode = 'speak'; // speak | think | progress
+  let held = '';
+
+  const emitHeld = (closed) => {
+    if (mode === 'think') {
+      if (held) {
+        onThink?.(held, closed);
+      }
+    } else if (mode === 'progress') {
+      if (held.trim()) {
+        onProgress?.(held);
+      }
+    }
+    held = '';
+  };
+
+  const route = (text) => {
+    if (!text) {
+      return;
+    }
+    if (mode === 'speak') {
+      onSpeak?.(text);
+    } else {
+      held += text;
+    }
+  };
+
+  const drain = (final) => {
+    for (;;) {
+      const m = buffer.match(PART_TAG_RE);
+      if (!m || m.index === undefined) {
+        let text = buffer;
+        buffer = '';
+        if (!final) {
+          const hold = partialTagTail(text);
+          if (hold > 0) {
+            buffer = text.slice(text.length - hold);
+            text = text.slice(0, text.length - hold);
+          }
+        }
+        route(text);
+        return;
+      }
+      route(buffer.slice(0, m.index));
+      const tag = m[0].toUpperCase();
+      buffer = buffer.slice(m.index + m[0].length);
+      if (tag === '[PIENSO]' || tag === '<THINK>') {
+        emitHeld(true);
+        mode = 'think';
+      } else if (tag === '[AVANCE]') {
+        emitHeld(true);
+        mode = 'progress';
+      } else {
+        // Cierre (o cierre huérfano): vuelta a habla.
+        emitHeld(true);
+        mode = 'speak';
+      }
+    }
+  };
+
+  return {
+    push(delta) {
+      buffer += String(delta || '');
+      drain(false);
+    },
+    flush() {
+      drain(true);
+      // Sin cerrar al final: el think se descarta (nunca se habla),
+      // el avance se muestra igual.
+      emitHeld(false);
+      mode = 'speak';
+    }
+  };
+}

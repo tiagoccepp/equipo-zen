@@ -92,8 +92,10 @@ const liveMic = new LiveMic({
     setStatus('grabando tu turno…');
   },
   onSpeechEnd: (hint) => {
-    // El acuse lo ordena el servidor (agent_ack) post-STT y solo si el
-    // turno lo amerita (no es saludo). Acá solo se cierra el turno.
+    // Fin de habla: se marca el tiempo (TTFV) y se cierra el turno. El
+    // modelo decide si avisa, responde por partes o calla; el sistema
+    // no emite voz propia.
+    lastSpeechEndAt = performance.now();
     client.audioEnd(hint);
     setStatus('transcribiendo…');
   },
@@ -189,6 +191,7 @@ function layoutOrbs(): void {
 window.addEventListener('resize', layoutOrbs);
 
 // ── Cliente ─────────────────────────────────────────────────────────
+let lastSpeechEndAt = 0;
 const turnText = new Map<string, string>();
 const agentName = (id: string): string => agents.get(id)?.name || 'Sofia';
 
@@ -219,12 +222,15 @@ const client = new Client({
   onAgentStart: (agentId) => {
     turnText.set(agentId, '');
   },
-  onAck: () => {
-    // Acuse local pre-cargado: el servidor lo pide cuando el turno tarda
-    // (no-saludo). Solo 1:1; en grupo confunde quién habló.
-    if (voiceSession && !voiceGroup) {
-      voiceOut.playPreamble();
-    }
+  onSpeakStart: (agentId) => {
+    // Primera palabra audible del modelo: marca TTFV (voz) para telemetría.
+    const dt = lastSpeechEndAt ? Math.round(performance.now() - lastSpeechEndAt) : -1;
+    console.info(`[ttfv] ${agentName(agentId)} primera palabra a +${dt}ms del fin de habla`);
+    (window as any).__lastTtfvMs = dt;
+  },
+  onProgress: (_agentId, text) => {
+    // Avance del modelo: se ve, no se habla. Estado transitorio.
+    setStatus(`…${text.slice(0, 80)}`);
   },
   onDelta: (agentId, delta) => {
     turnText.set(agentId, (turnText.get(agentId) || '') + delta);
@@ -370,10 +376,6 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   browserSpeech.start();
   voiceSession = true;
   voiceGroup = group;
-  // Pre-carga del acuse: un fetch, se decodifica una vez, dura toda la sesión.
-  if (!group) {
-    void voiceOut.primePreamble('/audio/preamble.mp3');
-  }
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
   setStatus(group ? 'te escuchan todos — hablá nomás' : 'te escucho…');
