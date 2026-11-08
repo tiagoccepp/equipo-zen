@@ -130,6 +130,37 @@ let audioEndSent = false;
 // confirmación de habla son dos caminos al mismo corte; sin esto el
 // segundo manda un duplicado siempre.
 let interruptSentForTurn = false;
+// Corte sobre AUDIO en vuelo: exige habla más larga que sobre pensamiento
+// (con audio hay eco; sin audio cualquier habla real es el usuario).
+const CUT_OVER_AUDIO_MS = 1200;
+let pendingCutTimer: number | null = null;
+
+function cancelPendingCut(): void {
+  if (pendingCutTimer !== null) {
+    window.clearTimeout(pendingCutTimer);
+    pendingCutTimer = null;
+  }
+}
+
+/** Corte dirigido: audio en vuelo + turnos pensando. Una vez por turno. */
+function cutAgent(): void {
+  if (interruptSentForTurn) return;
+  pruneActiveTurns();
+  if (!agentSpeaking() && activeTurns.size === 0) return;
+  const targets = interruptTargets();
+  if (targets.length === 0) {
+    client.interrupt(undefined, undefined);
+  } else {
+    for (const t of targets) client.interrupt(t.turnId, t.agentId);
+  }
+  noteLocalInterrupt();
+  interruptSentForTurn = true;
+  voiceOut.flush();
+  voiceOut.restoreGain();
+  speakingAgent = '';
+  field.setSpeaking('');
+  setStatus('te escucho — la corté.');
+}
 
 function maybePlaybackComplete(): void {
   if (audioSegment?.endReceived && !voiceOut.isPlaying) {
@@ -168,32 +199,39 @@ const liveMic = new LiveMic({
     voiceOut.restoreGain();
     setStatus('grabando tu turno…');
   },
-  onSpeechConfirmed: () => {
-    // Habla REAL (sostenida ≥ minSpeechMs): recién acá se corta. Cubre
-    // audio en vuelo Y pensamiento silencioso (sin esto último el turno
-    // viejo seguía generando y lo del usuario se encolaba detrás).
+  onSpeechConfirmed: (ms) => {
+    // Habla REAL (sostenida ≥ minSpeechMs). Sobre pensamiento silencioso
+    // se corta ya (sin audio no hay eco: es el usuario seguro). Sobre
+    // audio en vuelo se exigen 1200 ms totales: el barge-in acústico ya
+    // corta lo fuerte a ~300 ms; esto cubre lo suave sin que un ruido
+    // ambiente largo corte.
     if (interruptSentForTurn) return;
     pruneActiveTurns();
     if (!agentSpeaking() && activeTurns.size === 0) return;
-    const targets = interruptTargets();
-    if (targets.length === 0) {
-      client.interrupt(undefined, undefined);
-    } else {
-      for (const t of targets) client.interrupt(t.turnId, t.agentId);
+    if (!agentSpeaking()) {
+      cutAgent();
+      return;
     }
-    noteLocalInterrupt();
-    interruptSentForTurn = true;
-    voiceOut.flush();
-    voiceOut.restoreGain();
-    speakingAgent = '';
-    field.setSpeaking('');
-    setStatus('te escucho — la corté.');
+    if (ms >= CUT_OVER_AUDIO_MS) {
+      cutAgent();
+      return;
+    }
+    cancelPendingCut();
+    pendingCutTimer = window.setTimeout(() => {
+      pendingCutTimer = null;
+      if (liveMic.userSpeaking) cutAgent();
+    }, CUT_OVER_AUDIO_MS - ms);
+  },
+  onTurnStats: (stats) => {
+    // Telemetría al servidor (DB): con esto afino umbrales con datos reales.
+    client.voiceStats({ ...stats });
   },
   onSpeechEnd: (hint) => {
     // Fin de habla: se marca el tiempo (TTFV); el cierre del turno espera
     // la gracia por si es una mini-pausa. El modelo decide si avisa,
     // responde por partes o calla; el sistema no emite voz propia.
     liveMic.resetBarge();
+    cancelPendingCut();
     lastSpeechEndAt = performance.now();
     graceHint = hint;
     audioEndSent = false;
@@ -222,6 +260,7 @@ const liveMic = new LiveMic({
     // Barge-in acústico (rápido, durante audio): si la confirmación ya
     // cortó este turno, no duplicar.
     if (interruptSentForTurn) return;
+    cancelPendingCut();
     interruptSentForTurn = true;
     client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
     noteLocalInterrupt();

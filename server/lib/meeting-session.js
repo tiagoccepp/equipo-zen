@@ -480,6 +480,13 @@ export class MeetingSession {
       return;
     }
 
+    if (message.type === 'client_stats' && message.stats && typeof message.stats === 'object') {
+      // Telemetría de voz del cliente (VAD/barge por turno): números para
+      // afinar umbrales con datos reales. Se guarda tal cual llega.
+      this.logTelemetry('client_voice', message.stats);
+      return;
+    }
+
     if (message.type === 'reset') {
       // "Reiniciar reunión" = cerrar la reunión actual (queda en el
       // historial, reanudable solo por lista) y abrir una nueva.

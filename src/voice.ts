@@ -135,14 +135,17 @@ export class VoiceOut {
   }
 
   duck(): void {
+    // Duck suave (0.5, no 0.2) y transiciones lentas: el duck profundo y
+    // rápido se escuchaba como si Pablo se alejara y acercara al micrófono
+    // cada vez que el ambiente rozaba el umbral.
     if (this.master && this.context) {
-      this.master.gain.setTargetAtTime(0.2, this.context.currentTime, 0.03);
+      this.master.gain.setTargetAtTime(0.5, this.context.currentTime, 0.08);
     }
   }
 
   restoreGain(): void {
     if (this.master && this.context) {
-      this.master.gain.setTargetAtTime(1, this.context.currentTime, 0.05);
+      this.master.gain.setTargetAtTime(1, this.context.currentTime, 0.2);
     }
   }
 
@@ -154,10 +157,20 @@ export class VoiceOut {
 
 // ── VAD continuo + barge-in ───────────────────────────────────────────
 
+export interface TurnVoiceStats {
+  speechMs: number;
+  maxRms: number;
+  duckFrames: number;
+  bargeInterrupts: number;
+  floor: number;
+  startEff: number;
+}
+
 export interface LiveMicOptions {
+  onTurnStats?: (stats: TurnVoiceStats) => void;
   onChunk: (base64: string) => void;
   onSpeechStart: () => void;
-  onSpeechConfirmed: () => void;
+  onSpeechConfirmed: (speechMs: number) => void;
   onSpeechEnd: (hint: string) => void;
   onDiscarded: () => void;
   onInterrupt: () => void;
@@ -205,6 +218,10 @@ export class LiveMic {
   private watchdog: number | null = null;
   private onsetFrames = 0;
   private confirmed = false;
+  private turnMaxRms = 0;
+  private turnStartEff = 0;
+  private totalDuckFrames = 0;
+  private totalBargeInterrupts = 0;
   private static readonly MAX_TURN_MS = 30000;
   private static readonly STALL_MS = 1500;
   private static readonly ONSET_FRAMES = 4;
@@ -335,13 +352,21 @@ export class LiveMic {
     }
     const rms = pcm.length > 0 ? Math.sqrt(sum / pcm.length) : 0;
     this.lastFrameAt = performance.now();
-    // Calibración de piso de ruido: primeros 40 frames (~2.4s) sin habla.
-    if (!this.speaking && this.calib.length < 40) {
-      this.calib.push(rms);
-      if (this.calib.length === 40) {
-        const sorted = [...this.calib].sort((a, b) => a - b);
-        // Tope: si el usuario habló durante la calibración, no arruinar el próximo turno.
-        this.floor = Math.min(sorted[35] * 2.2, 0.04);
+    // Piso de ruido adaptativo: arranque rápido (20 frames) + seguimiento
+    // lento del ambiente mientras no hay habla ni agente sonando. Sin esto,
+    // el autoGain del mic y los cambios de ambiente dejaban el umbral
+    // clavado y cualquier ruido cortaba al agente.
+    if (!this.speaking && !this.opts.isAgentSpeaking()) {
+      if (this.calib.length < 20) {
+        this.calib.push(rms);
+        if (this.calib.length === 20) {
+          const sorted = [...this.calib].sort((a, b) => a - b);
+          // Tope: si el usuario habló durante la calibración, no arruinar el próximo turno.
+          this.floor = Math.min(sorted[17] * 2.2, 0.04);
+        }
+      } else {
+        // Seguidor lento (tau ~6s): sube y baja con el ambiente real.
+        this.floor = Math.min(0.04, Math.max(0, this.floor + (rms - this.floor) * 0.01));
       }
     }
     const durationMs = (pcm.length / 16000) * 1000;
@@ -375,11 +400,13 @@ export class LiveMic {
     this.barge = decision.state;
 
     if (decision.interrupt) {
+      this.totalBargeInterrupts += 1;
       this.bargePhase = 'cut';
       this.opts.onDuck(false);
       this.opts.onInterrupt();
       // Sigue el flujo normal: este chunk abre el turno de la persona.
     } else if (decision.duck) {
+      this.totalDuckFrames += 1;
       this.bargePhase = 'listening';
       this.opts.onDuck(true);
       this.preBuffer.push({ data, durationMs });
@@ -408,6 +435,8 @@ export class LiveMic {
         this.silenceMs = 0;
         this.speechMs = 0;
         this.confirmed = false;
+        this.turnMaxRms = 0;
+        this.turnStartEff = startEff;
         this.opts.resetHint();
         this.opts.onSpeechStart();
         // Flush del pre-buffer: no se pierde el ataque.
@@ -421,12 +450,13 @@ export class LiveMic {
 
     this.opts.onChunk(data);
     this.speechMs += durationMs;
+    if (rms > this.turnMaxRms) this.turnMaxRms = rms;
     // Habla sostenida: el turno ya es real (minSpeechMs no lo va a
     // descartar) — avisar una vez para que el interrupt corte acá y no
     // con cualquier tos que apenas abre el VAD.
     if (!this.confirmed && this.speechMs >= this.tuning.minSpeechMs) {
       this.confirmed = true;
-      this.opts.onSpeechConfirmed();
+      this.opts.onSpeechConfirmed(Math.round(this.speechMs));
     }
     if (rms < contEff) {
       this.silenceMs += durationMs;
@@ -449,6 +479,15 @@ export class LiveMic {
     this.opts.onMeter?.(0, false);
     const speechMs = Math.round(this.speechMs);
     this.speechMs = 0;
+    // Stats del turno para telemetría (afinar umbrales con datos reales).
+    this.opts.onTurnStats?.({
+      speechMs,
+      maxRms: Math.round(this.turnMaxRms * 10000) / 10000,
+      duckFrames: this.totalDuckFrames,
+      bargeInterrupts: this.totalBargeInterrupts,
+      floor: Math.round(this.floor * 10000) / 10000,
+      startEff: Math.round(this.turnStartEff * 10000) / 10000
+    });
     if (!hint && speechMs < this.tuning.minSpeechMs) {
       this.opts.resetHint();
       this.opts.onDiscarded();

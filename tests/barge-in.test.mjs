@@ -78,7 +78,7 @@ test('un "perdón—" murmurado baja el volumen del agente pero no lo interrumpe
   assert.deepEqual(state, idleBargeInState(), 'y el estado queda limpio');
 });
 
-test('la persona arranca a hablar y sostiene la voz: corta al agente en ~300 ms', () => {
+test('la persona arranca a hablar y sostiene la voz: corta al agente en ~360 ms', () => {
   // Envolvente real de "perdón, pará un segundo": ataque suave y después
   // energía sostenida de voz cerca del micrófono.
   const voz = [0.042, 0.104, 0.155, 0.121, 0.168, 0.132, 0.149, 0.118];
@@ -94,7 +94,7 @@ test('la persona arranca a hablar y sostiene la voz: corta al agente en ~300 ms'
 
   const latencia = interrupt.atMs - inicioVozMs;
   assert.ok(latencia >= BARGE_IN.confirmMs, `no puede cortar antes de ${BARGE_IN.confirmMs} ms (cortó a ${latencia} ms)`);
-  assert.ok(latencia <= 320, `tiene que cortar dentro de ~250-300 ms (cortó a ${latencia} ms)`);
+  assert.ok(latencia <= BARGE_IN.confirmMs + 2 * FRAME_MS, `tiene que cortar apenas confirma (cortó a ${latencia} ms)`);
 });
 
 test('el ruido de fondo constante por debajo del umbral no toca al agente', () => {

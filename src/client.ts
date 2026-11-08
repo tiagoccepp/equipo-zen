@@ -294,6 +294,12 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId }));
   }
 
+  /** Telemetría de voz del cliente (VAD/barge por turno): para afinar
+   *  umbrales con datos reales en vez de adivinar. Fire-and-forget. */
+  voiceStats(stats: Record<string, number>): void {
+    this.ws?.send(JSON.stringify({ type: 'client_stats', stats }));
+  }
+
   playbackComplete(turnId: string, agentId: string): void {
     this.ws?.send(JSON.stringify({ type: 'playback_complete', turnId, agentId }));
   }

@@ -7,12 +7,16 @@
 //
 // El razonamiento, en criollo:
 //
-//  1. Apenas entra algo por encima del umbral de voz bajamos el volumen del
-//     agente (duck). Es instantáneo y reversible: si era un carraspeo, no
-//     pasó nada; si era la persona arrancando a hablar, ya la escuchamos
-//     por encima del agente.
+//  1. Apenas entra algo CLARAMENTE por encima del umbral (1.1×) bajamos
+//     el volumen del agente (duck). Es instantáneo y reversible: si era un
+//     carraspeo, no pasó nada; si era la persona arrancando a hablar, ya
+//     la escuchamos por encima del agente. El margen existe porque el ruido
+//     que vive justo en el umbral hacía parpadear el volumen (se escuchaba
+//     como si el agente se alejara y acercara). Una vez atenuado, hold
+//     mínimo de 400 ms antes de restaurar, por la misma razón.
 //  2. Recién cortamos al agente cuando la voz se SOSTIENE por encima de
-//     1.4× el umbral durante `confirmMs`. El factor 1.4 existe por el eco:
+//     1.5× el umbral durante `confirmMs` (300 ms). El factor existe por el
+//     eco:
 //     el parlante devuelve al micrófono la voz del propio agente con un RMS
 //     moderado y sostenido, apenas arriba del umbral de arranque. Ese eco
 //     hace duck (inofensivo, y encima baja el eco) pero nunca llega a
@@ -31,6 +35,8 @@ export type BargeInState = {
   quietMs: number;
   // Si el audio del agente está atenuado y le debemos una restauración.
   ducked: boolean;
+  // Ms desde que se atenuó (para el hold mínimo anti-parpadeo).
+  duckMs: number;
 };
 
 export type BargeInInput = {
@@ -62,13 +68,20 @@ export type BargeInDecision = {
 export const BARGE_IN = {
   // Cuánto más fuerte que el umbral de voz tiene que ser un frame para
   // contar como "la persona está hablando" y no como eco del agente.
-  confirmRatio: 1.4,
-  // Voz fuerte sostenida necesaria para cortar al agente. Son 4 frames de
-  // 60 ms: con 250 ms la cuantización empujaba la confirmación al quinto
-  // frame (300 ms de voz fuerte + el ataque = ~360 ms desde que la persona
-  // abre la boca), y se sentía tarde. 240 ms sigue siendo mucho más que
-  // cualquier transitorio (un portazo dura menos de 100 ms).
-  confirmMs: 240,
+  // 1.5× (antes 1.4×): con el mic sensible cualquier ruido cortaba.
+  confirmRatio: 1.5,
+  // Voz fuerte sostenida necesaria para cortar al agente. 300 ms (5 frames
+  // de 60 ms): un transitorio (portazo <100 ms, tos corta) no llega, y la
+  // voz real igual corta en ~360 ms desde que la persona abre la boca.
+  confirmMs: 300,
+  // Margen para EMPEZAR a atenuar: evita que el ruido que vive justo en
+  // el umbral haga parpadear el volumen del agente (se escuchaba como si
+  // se alejara y acercara al micrófono).
+  duckMargin: 1.1,
+  // Hold mínimo del duck: una vez atenuado, no se restaura antes de esto
+  // aunque haya silencio (anti-parpadeo; el restore igual espera releaseMs
+  // de silencio, lo que llegue último manda).
+  minDuckHoldMs: 400,
   // Silencio necesario para soltar el duck (histéresis entre sílabas).
   releaseMs: 160,
   // Cuánto audio previo guardamos para que la frase que dispara el
@@ -78,10 +91,10 @@ export const BARGE_IN = {
 } as const;
 
 export function idleBargeInState(): BargeInState {
-  return { loudMs: 0, quietMs: 0, ducked: false };
+  return { loudMs: 0, quietMs: 0, ducked: false, duckMs: 0 };
 }
 
-const IDLE: BargeInDecision['state'] = { loudMs: 0, quietMs: 0, ducked: false };
+const IDLE: BargeInDecision['state'] = { loudMs: 0, quietMs: 0, ducked: false, duckMs: 0 };
 
 export function evaluateBargeIn(state: BargeInState, input: BargeInInput): BargeInDecision {
   const rms = Number.isFinite(input.rms) ? Math.max(0, input.rms) : 0;
@@ -98,7 +111,9 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
     return { duck: false, interrupt: false, reset: state.ducked, state: { ...IDLE } };
   }
 
-  if (rms >= startThreshold) {
+  // Entrada al duck con margen: el ruido que vive justo en el umbral no
+  // atenúa (parpadeo), recién 1.1× para arriba.
+  if (rms >= startThreshold * BARGE_IN.duckMargin) {
     const loudMs = rms >= startThreshold * BARGE_IN.confirmRatio
       ? state.loudMs + durationMs
       : state.loudMs;
@@ -113,7 +128,7 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
       duck: true,
       interrupt: false,
       reset: false,
-      state: { loudMs, quietMs: 0, ducked: true }
+      state: { loudMs, quietMs: 0, ducked: true, duckMs: state.duckMs + durationMs }
     };
   }
 
@@ -124,7 +139,9 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
   }
 
   const quietMs = state.quietMs + durationMs;
-  if (quietMs >= BARGE_IN.releaseMs) {
+  const duckMs = state.duckMs + durationMs;
+  // Restore solo con silencio suficiente Y hold cumplido (lo último manda).
+  if (quietMs >= BARGE_IN.releaseMs && duckMs >= BARGE_IN.minDuckHoldMs) {
     return {
       duck: false,
       interrupt: false,
@@ -133,12 +150,13 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
     };
   }
 
-  // Pausa corta: seguimos atenuados y no perdemos lo acumulado.
+  // Pausa corta (o hold sin cumplir): seguimos atenuados y no perdemos
+  // lo acumulado.
   return {
     duck: false,
     interrupt: false,
     reset: false,
-    state: { loudMs: state.loudMs, quietMs, ducked: state.ducked }
+    state: { loudMs: state.loudMs, quietMs, ducked: state.ducked, duckMs }
   };
 }
 
