@@ -198,6 +198,12 @@ export class LiveMic {
   private silenceMs = 0;
   private speechMs = 0;
   private lastMeterAt = 0;
+  private lastFrameAt = 0;
+  private calib: number[] = [];
+  private floor = 0;
+  private watchdog: number | null = null;
+  private static readonly MAX_TURN_MS = 30000;
+  private static readonly STALL_MS = 1500;
   private preBuffer: Array<{ data: string; durationMs: number }> = [];
   private barge: BargeInState = idleBargeInState();
   bargePhase: 'idle' | 'listening' | 'cut' = 'idle';
@@ -259,10 +265,31 @@ export class LiveMic {
     this.worklet = worklet;
     this.barge = idleBargeInState();
     this.bargePhase = 'idle';
+    this.calib = [];
+    this.floor = 0;
+    this.lastFrameAt = performance.now();
+    // Watchdog: si los frames se cortan (o el turno se eterniza) hablando,
+    // se fuerza el cierre. Sin esto, WebKit trabado = "grabando" eterno.
+    if (this.watchdog !== null) {
+      window.clearInterval(this.watchdog);
+    }
+    this.watchdog = window.setInterval(() => {
+      if (!this.speaking) {
+        return;
+      }
+      const gap = performance.now() - this.lastFrameAt;
+      if (gap > LiveMic.STALL_MS || this.speechMs > LiveMic.MAX_TURN_MS) {
+        this.endSpeech(this.opts.hintText());
+      }
+    }, 500);
     return true;
   }
 
   stop(cancelSpeech: boolean): void {
+    if (this.watchdog !== null) {
+      window.clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
     if (this.worklet) {
       this.worklet.port.onmessage = null;
       this.worklet.disconnect();
@@ -297,6 +324,16 @@ export class LiveMic {
       sum += v * v;
     }
     const rms = pcm.length > 0 ? Math.sqrt(sum / pcm.length) : 0;
+    this.lastFrameAt = performance.now();
+    // Calibración de piso de ruido: primeros 40 frames (~2.4s) sin habla.
+    if (!this.speaking && this.calib.length < 40) {
+      this.calib.push(rms);
+      if (this.calib.length === 40) {
+        const sorted = [...this.calib].sort((a, b) => a - b);
+        // Tope: si el usuario habló durante la calibración, no arruinar el próximo turno.
+        this.floor = Math.min(sorted[35] * 2.2, 0.04);
+      }
+    }
     const durationMs = (pcm.length / 16000) * 1000;
     // Base64 del PCM crudo.
     const bytes = new Uint8Array(buf);
@@ -307,6 +344,9 @@ export class LiveMic {
     const data = btoa(bin);
 
     const { start, cont } = thresholds(this.tuning.sensitivity);
+    // El piso ambiente manda si supera al umbral teórico (mic ruidoso).
+    const contEff = Math.max(cont, this.floor);
+    const startEff = Math.max(start, this.floor * 1.4);
     const now = performance.now();
     if (now - this.lastMeterAt > 180) {
       this.lastMeterAt = now;
@@ -318,7 +358,7 @@ export class LiveMic {
     const decision = evaluateBargeIn(this.barge, {
       rms,
       durationMs,
-      startThreshold: start,
+      startThreshold: startEff,
       agentSpeaking: this.opts.isAgentSpeaking(),
       userSpeaking: this.speaking
     });
@@ -345,7 +385,7 @@ export class LiveMic {
     if (!this.speaking) {
       this.preBuffer.push({ data, durationMs });
       this.preBuffer = trimPreBuffer(this.preBuffer);
-      if (rms >= start) {
+      if (rms >= startEff) {
         this.speaking = true;
         this.silenceMs = 0;
         this.speechMs = 0;
@@ -362,26 +402,33 @@ export class LiveMic {
 
     this.opts.onChunk(data);
     this.speechMs += durationMs;
-    if (rms < cont) {
+    if (rms < contEff) {
       this.silenceMs += durationMs;
     } else {
       this.silenceMs = 0;
     }
 
     if (this.silenceMs >= this.tuning.endSilenceMs) {
-      this.speaking = false;
-      this.silenceMs = 0;
-      this.opts.onMeter?.(rms, false);
-      const hint = this.opts.hintText();
-      const speechMs = Math.round(this.speechMs);
-      this.speechMs = 0;
-      if (!hint && speechMs < this.tuning.minSpeechMs) {
-        this.opts.resetHint();
-        this.opts.onDiscarded();
-        return;
-      }
-      this.opts.onSpeechEnd(hint);
+      this.endSpeech(this.opts.hintText());
     }
+  }
+
+  /** Cierre único del turno (VAD, watchdog o tope): idempotente. */
+  private endSpeech(hint: string): void {
+    if (!this.speaking) {
+      return;
+    }
+    this.speaking = false;
+    this.silenceMs = 0;
+    this.opts.onMeter?.(0, false);
+    const speechMs = Math.round(this.speechMs);
+    this.speechMs = 0;
+    if (!hint && speechMs < this.tuning.minSpeechMs) {
+      this.opts.resetHint();
+      this.opts.onDiscarded();
+      return;
+    }
+    this.opts.onSpeechEnd(hint);
   }
 }
 
