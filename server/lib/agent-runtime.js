@@ -1,4 +1,5 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
+import { renderSkillsSection } from './skills.js';
 import { getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
@@ -314,6 +315,10 @@ export class LiveAgentRuntime {
     lines.push('Tus tareas actuales:');
     lines.push(tasksFormatted);
     lines.push('');
+    const skills = renderSkillsSection(turn.text || '', { scope: 'chat' });
+    if (skills) {
+      lines.push(skills);
+    }
     lines.push('---');
     lines.push('');
     lines.push(`Criterio de routing: ${turn.route.reason}`);

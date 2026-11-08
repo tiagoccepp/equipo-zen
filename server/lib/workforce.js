@@ -17,6 +17,7 @@ import {
 import { hasLiveSession, isUserSpeaking } from './priority.js';
 import { logEvent } from './session-log.js';
 import { clasificarComando, ejecutar, renderHerramientas, renderResultado } from './herramientas.js';
+import { renderSkillsSection } from './skills.js';
 import { andamiar, renderAndamiaje } from './andamiaje.js';
 import { construirApp, renderBuildReport } from './native-build.js';
 import {
@@ -733,6 +734,7 @@ export class Workforce {
       `Tus skills: ${agent.domains.join(', ')}.`,
       `Compañeros (pueden haber dejado archivos en el workspace): ${teammates || 'ninguno'}.`,
       '',
+      renderSkillsSection(`${task.text || ''} ${goal?.title || ''}`, { scope: 'work' }),
       'Trabajás editando archivos del workspace compartido. En CADA respuesta ejecutás UNA acción:',
       '- Para escribir un archivo respondé EXACTAMENTE así (el contenido va CRUDO entre los marcadores, sin escapar):',
       '{"action":"write_file","path":"ruta/relativa"}',
