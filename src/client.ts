@@ -11,7 +11,7 @@ export interface Agent {
 }
 
 export interface ClientEvents {
-  onReady: (agents: Agent[]) => void;
+  onReady: (agents: Agent[], meetingId?: string) => void;
   onUserText: (text: string) => void;
   onRoute: (names: string[]) => void;
   onAgentStart: (agentId: string) => void;
@@ -19,6 +19,12 @@ export interface ClientEvents {
   onAgentEnd: (agentId: string, text: string) => void;
   onMp3: (base64: string) => void;
   onPcm: (base64: string, rate: number) => void;
+  onAudioStart: (turnId: string, agentId: string) => void;
+  onAudioEnd: (turnId: string, agentId: string) => void;
+  onAgentState: (agentId: string, state: string) => void;
+  onInterrupted: (agentId: string) => void;
+  onWorkEvent: (kind: string, agentId: string) => void;
+  onLiveTranscript: (text: string) => void;
   onNoResponse: (note: string) => void;
   onVoiceTranscript: (text: string, source: string) => void;
   onTranscribeEmpty: () => void;
@@ -105,7 +111,7 @@ export class Client {
     this.ev = events;
   }
 
-  connect(companyId: string, goalId: string): void {
+  connect(companyId: string, goalId: string, meetingId?: string): void {
     this.close();
     const url = httpBase
       ? `${httpBase.replace(/^http/, 'ws')}/meeting`
@@ -113,7 +119,7 @@ export class Client {
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'hello', companyId, goalId }));
+      ws.send(JSON.stringify({ type: 'hello', companyId, goalId, meetingId: meetingId || undefined }));
       // Sofia habla: sin esto el servidor jamás emite audio (voiceEnabled).
       ws.send(JSON.stringify({ type: 'set_voice', enabled: true }));
     };
@@ -126,6 +132,8 @@ export class Client {
       }
       switch (m.type) {
         case 'meeting_ready':
+          this.ev.onReady((m.agents || []) as Agent[], String(m.meetingId || ''));
+          break;
         case 'agents_updated':
           this.ev.onReady((m.agents || []) as Agent[]);
           break;
@@ -146,6 +154,25 @@ export class Client {
           break;
         case 'agent_audio_mp3':
           this.ev.onMp3(String(m.data || ''));
+          break;
+        case 'agent_audio_start':
+          this.ev.onAudioStart(String(m.turnId || ''), String(m.agentId || ''));
+          break;
+        case 'agent_audio_end':
+          this.ev.onAudioEnd(String(m.turnId || ''), String(m.agentId || ''));
+          break;
+        case 'agent_state':
+          this.ev.onAgentState(String(m.agentId || ''), String(m.state || ''));
+          break;
+        case 'agent_interrupted':
+        case 'turn_cancelled':
+          this.ev.onInterrupted(String(m.agentId || ''));
+          break;
+        case 'work_event':
+          this.ev.onWorkEvent(String(m.kind || (m as { event?: string }).event || ''), String((m as { agentId?: string }).agentId || ''));
+          break;
+        case 'user_audio_transcript_delta':
+          if (m.delta || m.text) this.ev.onLiveTranscript(String(m.delta || m.text));
           break;
         case 'agent_turn_complete':
           this.ev.onAgentEnd(String(m.agentId || ''), String(m.text || ''));
@@ -180,6 +207,10 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'set_voice', enabled }));
   }
 
+  audioPrepare(): void {
+    this.ws?.send(JSON.stringify({ type: 'audio_prepare' }));
+  }
+
   audioStart(): void {
     this.ws?.send(JSON.stringify({ type: 'audio_start' }));
   }
@@ -188,8 +219,28 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'audio_chunk', data: base64, mimeType: 'audio/pcm;rate=16000' }));
   }
 
-  audioEnd(): void {
-    this.ws?.send(JSON.stringify({ type: 'audio_end' }));
+  audioEnd(hint?: string): void {
+    this.ws?.send(JSON.stringify({ type: 'audio_end', transcriptHint: hint || undefined }));
+  }
+
+  audioCancel(reason: string, speechMs: number): void {
+    this.ws?.send(JSON.stringify({ type: 'audio_cancel', reason, speechMs }));
+  }
+
+  audioStop(): void {
+    this.ws?.send(JSON.stringify({ type: 'audio_stop' }));
+  }
+
+  interrupt(turnId?: string, agentId?: string): void {
+    this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId }));
+  }
+
+  playbackComplete(turnId: string, agentId: string): void {
+    this.ws?.send(JSON.stringify({ type: 'playback_complete', turnId, agentId }));
+  }
+
+  setAutoWork(enabled: boolean): void {
+    this.ws?.send(JSON.stringify({ type: 'set_auto_work', enabled }));
   }
 
   close(): void {

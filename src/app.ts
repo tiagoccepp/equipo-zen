@@ -1,11 +1,11 @@
-// Sofia — UI Lovable-oscura + orbes upstream + backend Equipo.
+// Sofia — UI Lovable-oscura + loop de voz dinámico upstream
+// (VAD continuo + barge-in + gate de audio + work-events).
 
 import './app.css';
 import { OrbField, type OrbAgent, type OrbSlot } from './lib/call-orbs.ts';
 import { isTauri, tinvoke } from './lib/tauri.ts';
 import {
   Client,
-  apiBase,
   decir,
   findOrCreateSofiaSpace,
   firstProject,
@@ -13,7 +13,7 @@ import {
   resolveBase,
   type Agent
 } from './client.ts';
-import { PttMic, VoiceOut } from './voice.ts';
+import { BrowserSpeech, LiveMic, VoiceOut } from './voice.ts';
 
 const $ = (id: string): HTMLElement => {
   const el = document.getElementById(id);
@@ -51,31 +51,99 @@ function addMsg(who: string, text: string, cls = ''): void {
   streamEl.scrollTop = streamEl.scrollHeight;
 }
 
-// ── Voz ─────────────────────────────────────────────────────────────
+// ── Voz: salida + entrada continua ───────────────────────────────────
 const voiceOut = new VoiceOut();
+const browserSpeech = new BrowserSpeech();
 let voiceOn = true;
 let speakingAgent = '';
+let audioSegment: { turnId: string; agentId: string; endReceived: boolean } | null = null;
+let voiceSession = false;
+let voiceGroup = false;
+
+function agentSpeaking(): boolean {
+  return voiceOut.isPlaying || audioSegment !== null;
+}
+
+function maybePlaybackComplete(): void {
+  if (audioSegment?.endReceived && !voiceOut.isPlaying) {
+    client.playbackComplete(audioSegment.turnId, audioSegment.agentId);
+    if (speakingAgent === audioSegment.agentId) {
+      speakingAgent = '';
+      field.setSpeaking('');
+    }
+    audioSegment = null;
+    if (!liveMic.userSpeaking) setStatus('a la orden');
+  }
+}
 
 voiceOut.onDrained = () => {
-  speakingAgent = '';
-  field.setSpeaking('');
-  if (!pttOn) setStatus('a la orden');
+  maybePlaybackComplete();
 };
 
-const mic = new PttMic({
-  onFrame: (b64) => client.audioChunk(b64)
+const liveMic = new LiveMic({
+  onChunk: (b64) => client.audioChunk(b64),
+  onSpeechStart: () => {
+    // Arrancar un turno corta lo que sonaba (igual que upstream).
+    voiceOut.flush();
+    voiceOut.restoreGain();
+    setStatus('grabando tu turno…');
+  },
+  onSpeechEnd: (hint) => {
+    client.audioEnd(hint);
+    setStatus('transcribiendo…');
+  },
+  onDiscarded: () => {
+    client.audioCancel('too_short', 0);
+    setStatus('ruido descartado.');
+    window.setTimeout(() => {
+      if (voiceSession && statusEl.textContent === 'ruido descartado.') {
+        setStatus(voiceGroup ? 'te escuchan todos' : 'te escucho…');
+      }
+    }, 900);
+  },
+  onInterrupt: () => {
+    client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
+    voiceOut.flush();
+    voiceOut.restoreGain();
+    speakingAgent = '';
+    field.setSpeaking('');
+    addMsg('sistema', '⏵ la cortaste — te escucha.', 'sys');
+  },
+  onDuck: (ducked) => {
+    if (ducked) {
+      voiceOut.duck();
+      setStatus('te escucho…');
+    } else {
+      voiceOut.restoreGain();
+    }
+  },
+  isAgentSpeaking: agentSpeaking,
+  hintText: () => browserSpeech.latestUtterance(),
+  resetHint: () => browserSpeech.resetUtterance()
 });
-let pttOn = false;
-let pttGroup = false;
 
-// ── Orbes (código upstream verbatim, tema dark) ──────────────────────
-const field = new OrbField(canvas, {
-  energy: () => voiceOut.level()
-});
+// ── Orbes (upstream, tema dark) ──────────────────────────────────────
+// Amplitud que mueve las partículas del que habla: audio REAL; 0 si le
+// pisás la voz (barge); respiración sintética solo si nunca hubo audio.
+function callEnergy(): number {
+  if (!speakingAgent || liveMic.bargePhase !== 'idle') {
+    return 0;
+  }
+  const level = voiceOut.level();
+  if (level > 0.05) {
+    return level;
+  }
+  if (voiceOut.levelAvailable) {
+    return 0;
+  }
+  return 0.28 + 0.22 * Math.sin(performance.now() / 210);
+}
+
+const field = new OrbField(canvas, { energy: callEnergy });
 field.setTheme('dark');
 
 const agents = new Map<string, Agent>();
-let sofiaId = '';
+const working = new Set<string>();
 
 function layoutOrbs(): void {
   const list = [...agents.values()].slice(0, 6);
@@ -110,7 +178,6 @@ function layoutOrbs(): void {
   }
   field.setAgents(orbAgents);
   field.setSlots(slots);
-  // start() no arranca sin orbes: va DESPUÉS de setAgents (es idempotente).
   field.start();
 }
 
@@ -121,18 +188,24 @@ const turnText = new Map<string, string>();
 const agentName = (id: string): string => agents.get(id)?.name || 'Sofia';
 
 const client = new Client({
-  onReady: (list) => {
+  onReady: (list, meetingId) => {
     agents.clear();
     for (const a of list) agents.set(a.id, a);
+    if (meetingId && currentCompany && currentGoal) {
+      try {
+        window.localStorage.setItem(meetingKey(currentCompany, currentGoal), meetingId);
+      } catch {
+        // Sin storage: cada carga crea reunión nueva.
+      }
+    }
     const sofia = list.find((a) => a.role === 'ceo') || list[0];
-    sofiaId = sofia?.id || '';
     greetEl.textContent = sofia ? `¿En qué te ayudo, señor? — ${sofia.name}` : '¿En qué te ayudo, señor?';
-    setStatus('a la orden');
+    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
     layoutOrbs();
   },
   onUserText: (text) => {
     addMsg('vos', text, 'me');
-    setStatus('procesando…');
+    setStatus('orquestando respuesta…');
   },
   onRoute: (names) => {
     const who = names.filter(Boolean);
@@ -140,9 +213,6 @@ const client = new Client({
   },
   onAgentStart: (agentId) => {
     turnText.set(agentId, '');
-    speakingAgent = agentId;
-    field.setSpeaking(agentId);
-    setStatus(`habla ${agentName(agentId).toLowerCase()}…`);
   },
   onDelta: (agentId, delta) => {
     turnText.set(agentId, (turnText.get(agentId) || '') + delta);
@@ -153,10 +223,11 @@ const client = new Client({
     if (full.trim()) {
       addMsg(agentName(agentId).toLowerCase(), full);
     }
-    if (!voiceOut.playing) {
+    // El subtítulo sigue al AUDIO, no al texto: si suena, no se limpia acá.
+    if (!audioSegment && speakingAgent === agentId) {
       speakingAgent = '';
       field.setSpeaking('');
-      setStatus('a la orden');
+      if (!voiceSession) setStatus('a la orden');
     }
   },
   onMp3: (b64) => {
@@ -167,16 +238,60 @@ const client = new Client({
     if (!voiceOn) return;
     void voiceOut.unlock().then(() => voiceOut.enqueuePcm(b64, rate));
   },
+  onAudioStart: (turnId, agentId) => {
+    audioSegment = { turnId, agentId, endReceived: false };
+    speakingAgent = agentId;
+    field.setSpeaking(agentId);
+    setStatus(`habla ${agentName(agentId).toLowerCase()}…`);
+  },
+  onAudioEnd: (turnId, agentId) => {
+    if (audioSegment?.turnId === turnId && audioSegment?.agentId === agentId) {
+      audioSegment.endReceived = true;
+      maybePlaybackComplete();
+    }
+  },
+  onAgentState: (agentId, state) => {
+    if (state === 'speaking' && !audioSegment) {
+      speakingAgent = agentId;
+      field.setSpeaking(agentId);
+    } else if ((state === 'idle' || state === 'interrupted') && speakingAgent === agentId && !audioSegment) {
+      speakingAgent = '';
+      field.setSpeaking('');
+    }
+  },
+  onInterrupted: (agentId) => {
+    voiceOut.flush();
+    voiceOut.restoreGain();
+    audioSegment = null;
+    if (!agentId || speakingAgent === agentId) {
+      speakingAgent = '';
+      field.setSpeaking('');
+    }
+    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+  },
+  onWorkEvent: (kind, agentId) => {
+    // task_started → arco giratorio; task_done/blocked → fuera.
+    if (kind === 'task_started' || kind === 'task_queued' || kind === 'comando' || kind === 'file_written') {
+      if (agentId) working.add(agentId);
+    } else if (kind === 'task_done' || kind === 'task_blocked') {
+      if (agentId) working.delete(agentId);
+    }
+    field.setWorking([...working]);
+  },
+  onLiveTranscript: (text) => {
+    setStatus(`…${text.slice(-60)}`);
+  },
   onNoResponse: (note) => {
     addMsg('sistema', note, 'sys');
-    setStatus('a la orden');
+    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
   },
   onVoiceTranscript: (text, source) => {
     addMsg('vos · voz', `${text}  [${source}]`, 'me');
+    setStatus('orquestando respuesta…');
   },
   onTranscribeEmpty: () => {
     addMsg('sistema', 'No te escuché; probá de nuevo.', 'sys');
-    setStatus('a la orden');
+    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
   },
   onError: (message) => {
     addMsg('sistema', message, 'sys');
@@ -186,12 +301,53 @@ const client = new Client({
   }
 });
 
-// ── Acciones ────────────────────────────────────────────────────────
+// ── Sesión de voz continua ──────────────────────────────────────────
+async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
+  if (on === voiceSession && group === voiceGroup) {
+    return;
+  }
+  if (!on) {
+    liveMic.stop(true);
+    browserSpeech.stop();
+    client.audioStop();
+    voiceSession = false;
+    voiceGroup = false;
+    micBtn.classList.remove('live');
+    callBtn.classList.remove('live');
+    setStatus('a la orden');
+    return;
+  }
+  voiceOut.flush();
+  await voiceOut.unlock();
+  client.audioPrepare();
+  const ok = await liveMic.start();
+  if (!ok) {
+    addMsg('sistema', 'No pude abrir el micrófono.', 'sys');
+    setStatus('a la orden');
+    return;
+  }
+  browserSpeech.start();
+  voiceSession = true;
+  voiceGroup = group;
+  micBtn.classList.toggle('live', !group);
+  callBtn.classList.toggle('live', group);
+  setStatus(group ? 'te escuchan todos — hablá nomás' : 'te escucho…');
+}
+
+micBtn.addEventListener('click', () => {
+  void (voiceSession && !voiceGroup ? setVoiceSession(false, false) : setVoiceSession(true, false));
+});
+callBtn.addEventListener('click', () => {
+  void (voiceSession && voiceGroup ? setVoiceSession(false, false) : setVoiceSession(true, true));
+});
+
+// ── Texto (corta el audio en vuelo, como upstream) ──────────────────
 function submitPrompt(): void {
   const text = promptEl.value.trim();
   if (!text) return;
   promptEl.value = '';
   promptEl.style.height = 'auto';
+  voiceOut.flush();
   void voiceOut.unlock();
   client.sendText(text);
 }
@@ -212,44 +368,11 @@ document.querySelectorAll('.chip[data-say]').forEach((chip) => {
   chip.addEventListener('click', () => {
     const text = (chip as HTMLElement).dataset.say || '';
     if (!text) return;
+    voiceOut.flush();
     void voiceOut.unlock();
     client.sendText(text);
   });
 });
-
-async function togglePtt(group: boolean): Promise<void> {
-  if (pttOn) {
-    stopPtt();
-    return;
-  }
-  voiceOut.stop();
-  await voiceOut.unlock();
-  client.audioStart();
-  const ok = await mic.start();
-  if (!ok) {
-    addMsg('sistema', 'No pude abrir el micrófono.', 'sys');
-    return;
-  }
-  pttOn = true;
-  pttGroup = group;
-  micBtn.classList.toggle('live', !group);
-  callBtn.classList.toggle('live', group);
-  micBtn.setAttribute('aria-pressed', String(!group));
-  setStatus(group ? 'te escuchan todos — tocá de nuevo para mandar' : 'escuchando — tocá de nuevo para mandar');
-}
-
-function stopPtt(): void {
-  if (!pttOn) return;
-  pttOn = false;
-  mic.stop();
-  client.audioEnd();
-  micBtn.classList.remove('live');
-  callBtn.classList.remove('live');
-  setStatus('transcribiendo…');
-}
-
-micBtn.addEventListener('click', () => void togglePtt(false));
-callBtn.addEventListener('click', () => void togglePtt(true));
 
 voiceBtn.addEventListener('click', () => {
   voiceOn = !voiceOn;
@@ -259,7 +382,8 @@ voiceBtn.addEventListener('click', () => {
   voiceBtn.textContent = voiceOn ? '🔊 voz' : '🔇 muda';
   voiceBtn.setAttribute('aria-pressed', String(voiceOn));
   if (!voiceOn) {
-    voiceOut.stop();
+    voiceOut.flush();
+    audioSegment = null;
     speakingAgent = '';
     field.setSpeaking('');
   }
@@ -272,16 +396,33 @@ $('btn-test-voice').addEventListener('click', () => {
       const b64 = await decir('Atenta, señor. ¿Me escucha bien?');
       await voiceOut.unlock();
       await voiceOut.playMp3(b64);
-      setStatus('a la orden');
+      setStatus(voiceSession ? 'te escucho…' : 'a la orden');
     } catch (err) {
       addMsg('sistema', `Probar voz falló: ${err instanceof Error ? err.message : 'error'}`, 'sys');
-      setStatus('a la orden');
+      setStatus(voiceSession ? 'te escucho…' : 'a la orden');
     }
   })();
 });
 
 // ── Empresas (opcional) ─────────────────────────────────────────────
 let currentCompany = '';
+let currentGoal = '';
+
+function meetingKey(companyId: string, goalId: string): string {
+  return `sofia.meeting.${companyId}.${goalId}`;
+}
+
+function connectTo(companyId: string, goalId: string): void {
+  currentCompany = companyId;
+  currentGoal = goalId;
+  const meetingId = window.localStorage.getItem(meetingKey(companyId, goalId)) || undefined;
+  client.connect(companyId, goalId, meetingId);
+}
+
+// El servidor devuelve el meetingId en meeting_ready: persistirlo acá.
+// (Se engancha vía onReady la primera vez: el Client no lo expone, así que
+// lo guardamos cuando el servidor lo mande en un evento futuro. Por ahora
+// el hello sin meetingId crea o reutiliza por company+goal en el servidor.)
 async function renderCompanies(): Promise<void> {
   const box = $('companies-list');
   box.innerHTML = '';
@@ -294,8 +435,7 @@ async function renderCompanies(): Promise<void> {
       void (async () => {
         const goalId = await firstProject(c.id).catch(() => null);
         if (!goalId) return;
-        currentCompany = c.id;
-        client.connect(c.id, goalId);
+        connectTo(c.id, goalId);
         setStatus(`con ${c.name}…`);
         void renderCompanies();
       })();
@@ -309,7 +449,8 @@ document.querySelector('.companies')?.addEventListener('toggle', (e) => {
 
 // ── Puente orbe desktop (solo Tauri) ────────────────────────────────
 function orbState(): string {
-  if (pttOn) return 'escuchando';
+  if (liveMic.userSpeaking) return 'escuchando';
+  if (voiceSession) return 'escuchando';
   if (speakingAgent) return 'hablando';
   return 'idle';
 }
@@ -318,15 +459,18 @@ if (isTauri()) {
   const tick = async () => {
     try {
       const cmd = await tinvoke<string | null>('main_poll');
-      if (cmd === 'toggle-mic') void togglePtt(false);
-      else if (cmd === 'expand') await tinvoke('expand_from_orb').catch(() => {});
+      if (cmd === 'toggle-mic') {
+        void (voiceSession ? setVoiceSession(false, false) : setVoiceSession(true, false));
+      } else if (cmd === 'expand') {
+        await tinvoke('expand_from_orb').catch(() => {});
+      }
     } catch {
       // Núcleo aún no listo.
     }
     try {
       await tinvoke('orb_report', {
         nuevo: orbState(),
-        nivel: pttOn ? mic.level : speakingAgent ? 0.7 : 0
+        nivel: voiceSession ? Math.max(liveMic.level, 0.15) : speakingAgent ? 0.7 : 0
       });
     } catch {
       // Idem.
@@ -336,17 +480,64 @@ if (isTauri()) {
   window.setInterval(() => void tick(), 500);
 }
 
-// Debug: window.__sofia = { client, voiceOut, mic, agents } (para auditoría).
+// ── Permisos de computadora (solo desktop) ────────────────────────────
+const PERM_CAPS = ['pantalla', 'mouse', 'teclado'] as const;
+const PERM_LEVELS = ['permitir', 'preguntar', 'bloquear'] as const;
+const PERM_LABEL: Record<string, string> = {
+  pantalla: '🖥️ ver pantalla',
+  mouse: '🖱️ mover/click',
+  teclado: '⌨️ teclas/escribir'
+};
+
+async function renderPerms(): Promise<void> {
+  if (!isTauri()) return;
+  const box = $('perms-box');
+  box.hidden = false;
+  const list = $('perms-list');
+  list.innerHTML = '';
+  const current: Record<string, string> = await tinvoke<Record<string, string>>('get_permissions').catch(() => ({}));
+  for (const cap of PERM_CAPS) {
+    const row = document.createElement('div');
+    row.className = 'perm-row';
+    const label = document.createElement('span');
+    label.textContent = PERM_LABEL[cap];
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', PERM_LABEL[cap]);
+    for (const lv of PERM_LEVELS) {
+      const opt = document.createElement('option');
+      opt.value = lv;
+      opt.textContent = lv;
+      sel.appendChild(opt);
+    }
+    sel.value = current[cap] || 'preguntar';
+    sel.addEventListener('change', () => {
+      void tinvoke('set_permission', { cap, level: sel.value }).catch((err) => {
+        addMsg('sistema', `Permiso falló: ${String(err)}`, 'sys');
+      });
+    });
+    row.appendChild(label);
+    row.appendChild(sel);
+    list.appendChild(row);
+  }
+}
+document.querySelector('#perms-box')?.addEventListener('toggle', (e) => {
+  if ((e.target as HTMLDetailsElement).open) void renderPerms();
+});
+if (isTauri()) {
+  $('perms-box').hidden = false;
+}
+
+// Debug: window.__sofia (para auditoría).
 (window as unknown as { __sofia: object }).__sofia = {
   client,
   voiceOut,
-  mic,
+  liveMic,
   agents,
   get voiceOn() {
     return voiceOn;
   },
-  get pttOn() {
-    return pttOn;
+  get voiceSession() {
+    return voiceSession;
   }
 };
 
@@ -357,8 +548,7 @@ layoutOrbs();
   try {
     await resolveBase();
     const space = await findOrCreateSofiaSpace();
-    currentCompany = space.companyId;
-    client.connect(space.companyId, space.goalId);
+    connectTo(space.companyId, space.goalId);
   } catch (err) {
     setStatus(`sin backend: ${err instanceof Error ? err.message : 'error'}`);
   }

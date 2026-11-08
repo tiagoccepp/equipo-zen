@@ -324,6 +324,25 @@ body {
   color: var(--pink-soft);
 }
 
+.perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid #262626;
+  padding: 10px 4px;
+  font-size: 14px;
+}
+
+.perm-row select {
+  background: #1e1e1e;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
 @media (max-width: 560px) {
   .orbs {
     height: 220px;
