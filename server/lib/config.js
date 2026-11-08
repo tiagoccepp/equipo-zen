@@ -85,6 +85,25 @@ export const LLM_PROVIDERS = {
     thinking: 'disabled',
     tokenParam: 'max_tokens'
   },
+  groq: {
+    id: 'groq',
+    label: 'Groq',
+    url: process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions',
+    envKey: 'GROQ_API_KEY',
+    settingKey: 'llm.groqKey',
+    defaultModel: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
+    models: uniqueModelList([
+      process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
+      'qwen/qwen3.8-27b'
+    ]),
+    // OpenAI-compatible puro: sin parámetro thinking.
+    thinking: null,
+    tokenParam: 'max_completion_tokens',
+    // Groq va tras Cloudflare: sin UA de navegador devuelve 403/1010.
+    extraHeaders: {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+    }
+  },
   opencode: {
     id: 'opencode',
     label: 'opencode Zen',

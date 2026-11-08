@@ -4,6 +4,41 @@ import { cleanTranscript, getShortError } from './text.js';
 
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 
+// Alucinaciones típicas de Whisper/Parakeet sobre ruido (teclado, ventilador,
+// silencio): si la transcripción es SOLO esto, no fue un turno, fue ruido.
+const JUNK_PHRASES = [
+  'thank you', 'thanks for watching', 'subscribe', 'suscribete', 'suscríbete',
+  'gracias por ver', 'hasta la proxima', 'hasta la próxima', 'amara.org',
+  'sous-titres', 'all rights reserved', 'todos los derechos reservados',
+  'silence', 'silencio', 'you', 'shh', 'hmm', 'mmm', 'eh', 'ah', 'oh',
+  'laughter', 'risa', 'applause', 'aplausos', 'music', 'musica', 'música',
+  'transcribe', 'transcripción', 'inaudible'
+];
+
+function normalizeJunk(text) {
+  return String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export function isJunkTranscript(text) {
+  const norm = normalizeJunk(text);
+  if (!norm) {
+    return true;
+  }
+  if (norm.length < 2) {
+    return true;
+  }
+  // Gruñidos ("mmm", "eh eh") = ruido; pero "sí"/"no" solos son válidos.
+  const GRUNTS = new Set(['mmm', 'eh', 'ah', 'oh', 'shh', 'hmm', 'mmm', 'ehem']);
+  const words = norm.split(' ');
+  if (words.length > 1 && words.length <= 3 && new Set(words).size === 1) {
+    return true;
+  }
+  if (words.length === 1 && GRUNTS.has(words[0])) {
+    return true;
+  }
+  return JUNK_PHRASES.some((phrase) => norm === phrase || norm.startsWith(`${phrase} `) || norm.endsWith(` ${phrase}`));
+}
+
 // Captura el audio del turno (PCM 16kHz del micrófono) y lo transcribe con
 // el proveedor elegido en Ajustes: Whisper local (default), Groq, o el
 // SpeechRecognition del navegador (hint). El hint siempre viaja como red
@@ -73,6 +108,10 @@ export class CaptureTranscriberRuntime {
   finalize(text, source) {
     const finalText = cleanTranscript(text);
     if (!finalText || finalText === this.lastFinalized) {
+      return;
+    }
+    if (isJunkTranscript(finalText)) {
+      this.callbacks.emit({ type: 'audio_transcription_empty', message: 'Solo ruido de fondo; seguí hablando nomás.' });
       return;
     }
     this.lastFinalized = finalText;

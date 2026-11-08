@@ -115,6 +115,7 @@ const EDITABLE_KEYS = new Set([
   'llm.apiKey',
   'llm.deepseekKey',
   'llm.opencodeKey',
+  'llm.groqKey',
   'llm.model',
   'stt.provider',
   'stt.whisperModel',
@@ -123,7 +124,7 @@ const EDITABLE_KEYS = new Set([
   'tts.language'
 ]);
 
-const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'stt.groqKey']);
+const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey']);
 
 function mask(value) {
   if (!value) {

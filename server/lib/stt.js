@@ -90,7 +90,8 @@ async function transcribeGroq(wavBase64) {
 
   const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key}` },
+    // Cloudflare 1010 sin UA de navegador (verificado 2026-11-08).
+    headers: { Authorization: `Bearer ${key}`, 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36' },
     body: form,
     signal: AbortSignal.timeout(STT_TIMEOUT_MS)
   });

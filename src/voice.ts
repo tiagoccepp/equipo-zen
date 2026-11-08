@@ -202,8 +202,10 @@ export class LiveMic {
   private calib: number[] = [];
   private floor = 0;
   private watchdog: number | null = null;
+  private onsetFrames = 0;
   private static readonly MAX_TURN_MS = 30000;
   private static readonly STALL_MS = 1500;
+  private static readonly ONSET_FRAMES = 4;
   private preBuffer: Array<{ data: string; durationMs: number }> = [];
   private barge: BargeInState = idleBargeInState();
   bargePhase: 'idle' | 'listening' | 'cut' = 'idle';
@@ -385,7 +387,15 @@ export class LiveMic {
     if (!this.speaking) {
       this.preBuffer.push({ data, durationMs });
       this.preBuffer = trimPreBuffer(this.preBuffer);
+      // Confirmación de arranque: el habla real sostiene el nivel varios
+      // frames; un click de teclado es 1-3 frames y muere acá.
       if (rms >= startEff) {
+        this.onsetFrames += 1;
+      } else {
+        this.onsetFrames = 0;
+      }
+      if (this.onsetFrames >= LiveMic.ONSET_FRAMES) {
+        this.onsetFrames = 0;
         this.speaking = true;
         this.silenceMs = 0;
         this.speechMs = 0;
