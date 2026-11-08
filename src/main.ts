@@ -1751,7 +1751,21 @@ async function autoEnterLastSpace() {
     const data = await apiJson<{ projects: Project[] }>(
       `/api/companies/${encodeURIComponent(company.id)}/projects`
     );
-    const project = (data.projects || [])[0];
+    let project = (data.projects || [])[0];
+    if (!project) {
+      // Empresa sin proyectos (ej. disco efímero tras un deploy): la
+      // persona necesita un dónde para hablar. Se crea uno general,
+      // solo cuando hay cero (nunca duplica).
+      const created = await apiJson<{ project: Project }>(
+        `/api/companies/${encodeURIComponent(company.id)}/projects`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'Charla general' })
+        }
+      );
+      project = created.project;
+    }
     if (project && state.companyId === company.id) {
       enterProject(project.id, project);
     }
