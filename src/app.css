@@ -1,0 +1,335 @@
+/* Sofia — remix oscuro Lovable (tokens: .audit/lovable/TOKENS.md).
+   Dark real #1b1b1b / depth #0a0a0a, mesh tenue rosa→periwinkle→naranja,
+   prompt gigante radio 20, botón táctil, pills 20-24px, highlight #fd49a8. */
+
+:root {
+  --bg: #1b1b1b;
+  --depth: #0a0a0a;
+  --card: #232323;
+  --ink: #f5f4ef;
+  --muted: #8a8a86;
+  --line: #333332;
+  --pink: #fd49a8;
+  --pink-soft: #ff66f4;
+  --peri: #7491ff;
+  --ocean: #4d91ff;
+  --warm: #f4bf75;
+  --radius: 20px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Mesh tenue full-bleed: rosa arriba-izq, peri centro, naranja abajo-der. */
+.mesh {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(42rem 30rem at 12% -6%, rgba(253, 73, 168, 0.16), transparent 62%),
+    radial-gradient(46rem 34rem at 88% 22%, rgba(116, 145, 255, 0.15), transparent 64%),
+    radial-gradient(40rem 30rem at 50% 108%, rgba(244, 191, 117, 0.1), transparent 62%),
+    radial-gradient(30rem 22rem at 78% 88%, rgba(255, 102, 244, 0.07), transparent 60%);
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 40px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-height: 100vh;
+}
+
+/* ── Orbes (upstream call-orbs, tema dark) ── */
+.stage {
+  text-align: center;
+}
+
+.orbs {
+  position: relative;
+  height: 300px;
+}
+
+#orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.orb-cells {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.orb-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.orb-hole {
+  border-radius: 50%;
+}
+
+.orb-name {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-family: ui-monospace, "Roboto Mono", monospace;
+}
+
+.greet {
+  margin: 6px 0 4px;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-family: ui-monospace, "Roboto Mono", monospace;
+  letter-spacing: 0.06em;
+}
+
+/* ── Composer gigante ── */
+.composer {
+  background: rgba(10, 10, 10, 0.82);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(253, 73, 168, 0.05);
+  padding: 16px 16px 12px;
+  backdrop-filter: blur(8px);
+}
+
+.composer:focus-within {
+  border-color: rgba(253, 73, 168, 0.45);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 0 32px rgba(253, 73, 168, 0.12);
+}
+
+#prompt {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+#prompt::placeholder {
+  color: #5c5c59;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  gap: 10px;
+}
+
+.composer-actions .left {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: #1e1e1e;
+  color: var(--ink);
+  border-radius: 22px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pill:hover {
+  border-color: #4a4a48;
+}
+
+.pill.live {
+  border-color: var(--pink);
+  color: #ffd3e8;
+  box-shadow: 0 0 18px rgba(253, 73, 168, 0.35);
+}
+
+.pill.on {
+  border-color: rgba(77, 145, 255, 0.55);
+}
+
+.pill.off {
+  opacity: 0.55;
+}
+
+/* Botón táctil: inset shadows layerados (firma Lovable). */
+.send {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(180deg, #ff7abd, var(--pink) 55%, #d12d86);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.45),
+    inset 0 -3px 6px rgba(120, 10, 70, 0.55),
+    inset 2px 0 4px rgba(255, 255, 255, 0.18),
+    inset -2px 0 4px rgba(120, 10, 70, 0.3),
+    0 6px 18px rgba(253, 73, 168, 0.35);
+}
+
+.send:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 3px 8px rgba(120, 10, 70, 0.6),
+    inset 0 -1px 2px rgba(255, 255, 255, 0.2),
+    0 2px 8px rgba(253, 73, 168, 0.3);
+}
+
+.send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── Chips + stream ── */
+.quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  color: var(--ink);
+  border-color: var(--pink);
+}
+
+.stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+.msg {
+  background: rgba(10, 10, 10, 0.6);
+  border: 1px solid #262626;
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.msg b {
+  font-family: ui-monospace, "Roboto Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pink-soft);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.msg.me b {
+  color: var(--peri);
+}
+
+.msg.sys {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.msg.sys b {
+  color: var(--muted);
+}
+
+/* ── Empresas ── */
+.companies {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 16px;
+  background: rgba(10, 10, 10, 0.5);
+}
+
+.companies summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.companies button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-top: 1px solid #262626;
+  color: var(--ink);
+  padding: 10px 4px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.companies button:hover,
+.companies button.active {
+  color: var(--pink-soft);
+}
+
+@media (max-width: 560px) {
+  .orbs {
+    height: 220px;
+  }
+
+  .greet {
+    font-size: 24px;
+  }
+}

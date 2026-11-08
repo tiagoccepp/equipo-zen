@@ -3,15 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#07090D" />
-    <title>Orbe — Equipo</title>
+    <title>Orbe</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+      #orb-canvas { position: fixed; inset: 0; width: 100%; height: 100%; cursor: pointer; }
+      #expandBtn {
+        position: fixed; right: 4px; bottom: 4px; width: 26px; height: 26px;
+        border-radius: 50%; border: 1px solid rgba(253, 73, 168, 0.5);
+        background: rgba(10, 10, 10, 0.7); color: #fd49a8; font-size: 14px;
+        cursor: pointer; line-height: 1;
+      }
+    </style>
   </head>
   <body>
-    <div id="orb" role="button" tabindex="0" aria-label="Hablar con el equipo">
-      <canvas id="orbCanvas" aria-hidden="true"></canvas>
-      <span id="orbLabel">Equipo</span>
-    </div>
-    <button id="expandBtn" type="button" aria-label="Abrir la ventana principal">⤢</button>
+    <canvas id="orb-canvas"></canvas>
+    <button id="expandBtn" aria-label="Abrir Sofia">⤢</button>
     <script type="module" src="/src/orb.ts"></script>
   </body>
 </html>

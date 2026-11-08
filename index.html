@@ -3,18 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f3ed" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171913" />
-    <meta name="description" content="Simulador local de empresas: conversá por voz o texto con equipos de empleados IA." />
-    <title>Equipo — Simulaciones</title>
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231c1b19'/%3E%3Cg fill='%23f4f1ea'%3E%3Ccircle cx='35' cy='38' r='13'/%3E%3Ccircle cx='68' cy='42' r='10'/%3E%3Cpath d='M12 82c0-14 10-24 23-24s23 10 23 24z'/%3E%3Cpath d='M56 82c0-11 7-19 17-19s17 8 17 19z'/%3E%3C/g%3E%3C/svg%3E"
-    />
+    <meta name="theme-color" content="#0a0a0a" />
+    <title>Sofia — a la orden</title>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <div class="mesh" aria-hidden="true"></div>
+    <main class="shell">
+      <section class="stage">
+        <div class="orbs" id="orbs" aria-hidden="true">
+          <canvas id="orb-canvas"></canvas>
+          <div class="orb-cells" id="orb-cells"></div>
+        </div>
+        <h1 class="greet" id="greet">¿En qué te ayudo, señor?</h1>
+        <p class="status" id="status">conectando…</p>
+      </section>
+
+      <section class="composer">
+        <textarea
+          id="prompt"
+          rows="2"
+          placeholder="Pedile algo a Sofia…"
+          aria-label="Pedile algo a Sofia"
+        ></textarea>
+        <div class="composer-actions">
+          <div class="left">
+            <button id="btn-mic" class="pill" type="button" aria-pressed="false">🎤 hablar</button>
+            <button id="btn-call" class="pill" type="button" aria-pressed="false">📞 llamar a todos</button>
+            <button id="btn-voice" class="pill on" type="button" aria-pressed="true">🔊 voz</button>
+          </div>
+          <button id="btn-send" class="send" type="button" aria-label="Enviar">↑</button>
+        </div>
+      </section>
+
+      <section class="quick">
+        <button class="chip" type="button" data-say="Preséntense, por favor.">Preséntense</button>
+        <button class="chip" type="button" data-say="¿En qué anda el equipo?">¿En qué andan?</button>
+        <button class="chip" type="button" id="btn-test-voice">Probar voz</button>
+      </section>
+
+      <section class="stream" id="stream" aria-live="polite"></section>
+
+      <details class="companies">
+        <summary>Empresas</summary>
+        <div id="companies-list"></div>
+      </details>
+    </main>
+    <script type="module" src="/src/app.ts"></script>
   </body>
 </html>

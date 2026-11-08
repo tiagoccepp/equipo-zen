@@ -120,6 +120,22 @@ export function createApp({ store }) {
     res.json({ settings: publicSettings() });
   });
 
+  // TTS directo (Edge, sin turno LLM): botón "probar voz" y avisos.
+  app.get('/api/decir', async (req, res) => {
+    const texto = String(req.query.texto || '').slice(0, 280);
+    if (!texto.trim()) {
+      res.status(400).json({ error: 'falta texto' });
+      return;
+    }
+    try {
+      const { synthesizeEdgeMp3 } = await import('./edge-tts.js');
+      const mp3 = await synthesizeEdgeMp3(texto, { voice: 'F1' });
+      res.json({ audio: mp3.data, mimeType: mp3.mimeType });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'tts' });
+    }
+  });
+
   app.put('/api/settings', (req, res) => {
     const applied = applySettings(req.body?.settings || req.body || {});
     res.json({ applied, settings: publicSettings() });

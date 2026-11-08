@@ -25,12 +25,10 @@
     "express": "^5.2.1",
     "nanoid": "^5.1.6",
     "node-edge-tts": "^1.2.12",
-    "three": "^0.128.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",
-    "@types/three": "^0.128.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.7"
   }
