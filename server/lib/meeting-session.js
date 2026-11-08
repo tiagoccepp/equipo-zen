@@ -1237,6 +1237,12 @@ export class MeetingSession {
       return;
     }
 
+    // Acuse hablado (el cliente suelta su audio local): solo turnos de VOZ
+    // que NO son saludo. Un "hola" se responde directo, sin "enseguida".
+    if (source === 'audio' && !route.greeting) {
+      this.send({ type: 'agent_ack', turnId });
+    }
+
     for (const target of route.targets) {
       if (signal?.aborted) {
         return;

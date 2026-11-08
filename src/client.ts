@@ -15,6 +15,7 @@ export interface ClientEvents {
   onUserText: (text: string) => void;
   onRoute: (names: string[]) => void;
   onAgentStart: (agentId: string) => void;
+  onAck: () => void;
   onDelta: (agentId: string, delta: string) => void;
   onAgentEnd: (agentId: string, text: string) => void;
   onMp3: (base64: string) => void;
@@ -192,6 +193,9 @@ export class Client {
           break;
         case 'agent_turn_start':
           this.ev.onAgentStart(String(m.agentId || ''));
+          break;
+        case 'agent_ack':
+          this.ev.onAck();
           break;
         case 'agent_transcript_delta':
           this.ev.onDelta(String(m.agentId || ''), String(m.delta || ''));

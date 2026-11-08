@@ -223,6 +223,7 @@ export type ServerMessage =
   | { type: 'route_decision'; turnId: string; route: RouteDecision }
   | { type: 'no_agent_response'; turnId: string; note: string }
   | { type: 'agent_turn_start'; turnId: string; agentId: string }
+  | { type: 'agent_ack'; turnId: string }
   | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string; seq?: number }
   | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType?: string; seq?: number }
   | { type: 'agent_audio_mp3'; turnId: string; agentId: string; data: string; mimeType?: string }

@@ -37,8 +37,9 @@ export class LiveAgentRuntime {
 
   async respondWithStream(turn, emit, { signal, gate, turnId } = {}) {
     emit({ type: 'agent_state', agentId: this.id, state: 'thinking' });
-    // MODO VOZ (turno hablado, Jarvis): contexto corto, tope chico,
-    // instrucción de brevedad, rotación si el modelo no arranca.
+    // MODO VOZ (turno hablado): contexto corto, tope 1000, instrucción
+    // conversacional (resumido, sin tope de palabras), rotación si el
+    // modelo no arranca.
     // Los turnos de texto mantienen calidad completa.
     const voiceFast = turn.source === 'audio';
 
@@ -76,27 +77,8 @@ export class LiveAgentRuntime {
         return;
       }
       if (parts.length === 0) {
-        // Sin Supertonic: Deepgram Aura (nube con clave, voces ES) → Edge
-        // TTS (nube sin clave) → speechSynthesis del cliente.
-        if (getDeepgramKey()) {
-          try {
-            const dgParts = await synthesizeDeepgram(spoken, this.agent?.voice || 'M1');
-            if (dgParts.length > 0 && !signal?.aborted) {
-              const dgToken = await ensureGateToken(16000);
-              if (!signal?.aborted) {
-                for (const part of dgParts) {
-                  if (signal?.aborted) {
-                    return;
-                  }
-                  gate.sendChunk(dgToken, part.data, part.mimeType);
-                }
-                return;
-              }
-            }
-          } catch {
-            // Cae a Edge.
-          }
-        }
+        // Sin TTS propio (Deepgram ya se intentó en generateAudioParts):
+        // Edge TTS (nube sin clave) → speechSynthesis del cliente.
         try {
           const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
           if (signal?.aborted) {
@@ -328,7 +310,7 @@ export class LiveAgentRuntime {
     ];
 
     if (turn.source === 'audio') {
-      lines.push('MODO VOZ: te están HABLANDO — respondé en máximo 2 oraciones cortas (menos de 30 palabras). Sin listas, sin markdown, sin narrar pasos ni herramientas.');
+      lines.push('MODO VOZ: te están HABLANDO — conversá como si tuvieras a la persona enfrente: resumido y natural, ni telegrama ni discurso. Sin listas, sin markdown, sin narrar pasos ni herramientas.');
       lines.push('');
     }
 
@@ -370,7 +352,7 @@ export class LiveAgentRuntime {
     lines.push(`Criterio de routing: ${turn.route.reason}`);
     lines.push('');
     lines.push('Recordá:');
-    lines.push('- Si tenés algo útil que decir, decilo en máximo 2 oraciones.');
+    lines.push('- Si tenés algo útil que decir, decilo como en una charla: resumido, sin enrollarte.');
     lines.push('- Si no tenés nada que aportar más allá de lo que ya dijeron, respondé solo: SILENCIO');
     lines.push('- No repitas lo que ya dijo un compañero.');
     lines.push('- Hablá como vos, no como un asistente.');
@@ -378,13 +360,24 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  // TTS de una oración, locales primero: Piper (25-300ms) → Supertonic
-  // (si está arriba). Devuelve las partes de audio (no emite chunks; el
-  // gate decide cuándo salen). Si ningún local responde, [] y speakSentence
-  // cae a Deepgram → Edge → voz del navegador.
+  // TTS de una oración: Deepgram Aura primero (la elegida: javier-es M /
+  // selena-es F), luego locales (Piper → Supertonic). Devuelve las partes
+  // de audio (no emite chunks; el gate decide cuándo salen). Si nada
+  // responde, [] y speakSentence cae a Edge → voz del navegador.
   async generateAudioParts(text, emit, signal) {
     if (!text?.trim() || signal?.aborted) {
       return [];
+    }
+
+    if (getDeepgramKey()) {
+      try {
+        const dgParts = await synthesizeDeepgram(text, this.agent?.voice || 'M1');
+        if (dgParts.length > 0) {
+          return dgParts;
+        }
+      } catch {
+        // Aura caído: cae a locales.
+      }
     }
 
     try {
@@ -506,7 +499,7 @@ export function buildSystemInstruction(agent, context = {}) {
     '- No des listas ni bullets salvo que alguien te pida que organices algo.',
     '- No uses palabras técnicas sin necesidad.',
     '- No saludes al inicio de cada respuesta. Ya estás en la conversación.',
-    '- Máximo 2 oraciones por turno, salvo que te pidan explicar algo en detalle.',
+    '- Hablá resumido como en una charla real; si te piden detalle, explayate sin culpa.',
     '- Si es un saludo, respondé breve y con onda. Nada más.',
     '',
     'CUANDO EL PEDIDO VIENE INCOMPLETO (pasa casi siempre):',

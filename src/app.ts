@@ -92,12 +92,8 @@ const liveMic = new LiveMic({
     setStatus('grabando tu turno…');
   },
   onSpeechEnd: (hint) => {
-    // Acuse instantáneo (0ms, audio local pre-cargado): Sofia confirma que
-    // escuchó mientras el servidor transcribe + piensa + sintetiza. Solo 1:1;
-    // en grupo el acuse con voz de sistema confundiría (¿quién habló?).
-    if (voiceSession && !voiceGroup) {
-      voiceOut.playPreamble();
-    }
+    // El acuse lo ordena el servidor (agent_ack) post-STT y solo si el
+    // turno lo amerita (no es saludo). Acá solo se cierra el turno.
     client.audioEnd(hint);
     setStatus('transcribiendo…');
   },
@@ -222,6 +218,13 @@ const client = new Client({
   },
   onAgentStart: (agentId) => {
     turnText.set(agentId, '');
+  },
+  onAck: () => {
+    // Acuse local pre-cargado: el servidor lo pide cuando el turno tarda
+    // (no-saludo). Solo 1:1; en grupo confunde quién habló.
+    if (voiceSession && !voiceGroup) {
+      voiceOut.playPreamble();
+    }
   },
   onDelta: (agentId, delta) => {
     turnText.set(agentId, (turnText.get(agentId) || '') + delta);
