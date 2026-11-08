@@ -269,14 +269,36 @@ const client = new Client({
     }
     setStatus(voiceSession ? 'te escucho…' : 'a la orden');
   },
-  onWorkEvent: (kind, agentId) => {
+  onWorkEvent: (kind, agentId, event) => {
     // task_started → arco giratorio; task_done/blocked → fuera.
-    if (kind === 'task_started' || kind === 'task_queued' || kind === 'comando' || kind === 'file_written') {
+    if (kind === 'task_started' || kind === 'task_queued' || kind === 'comando' || kind === 'file_written' || kind === 'web') {
       if (agentId) working.add(agentId);
     } else if (kind === 'task_done' || kind === 'task_blocked') {
       if (agentId) working.delete(agentId);
     }
     field.setWorking([...working]);
+    // Feed de actividad: que SE VEA que laburan.
+    const who = String(event.agentName || agentName(agentId) || 'equipo');
+    const str = (k: string): string => String(event[k] || '');
+    if (kind === 'comando' && str('cmd')) {
+      addMsg('tools', `⚙️ ${who} ejecuta: ${str('cmd').slice(0, 120)}`, 'sys');
+    } else if (kind === 'file_written' && str('path')) {
+      addMsg('tools', `📝 ${who} ${event.edited ? 'editó' : 'escribió'}: ${str('path')}`, 'sys');
+    } else if (kind === 'web' && str('url')) {
+      addMsg('tools', `🌐 ${who} leyó: ${str('url').slice(0, 100)}`, 'sys');
+    } else if (kind === 'task_started' && str('text')) {
+      addMsg('tools', `▶️ ${who}: ${str('text').slice(0, 140)}`, 'sys');
+    } else if (kind === 'task_done') {
+      addMsg('tools', `✅ ${who} terminó${str('summary') ? `: ${str('summary').slice(0, 160)}` : ''}`, 'sys');
+    } else if (kind === 'task_blocked') {
+      addMsg('tools', `⛔ ${who} bloqueado: ${str('reason').slice(0, 140)}`, 'sys');
+    } else if (kind === 'build_ok') {
+      addMsg('tools', `🔨 ${who}: build OK`, 'sys');
+    } else if (kind === 'build_failed') {
+      addMsg('tools', `🔨 ${who}: build falló`, 'sys');
+    } else if (kind === 'task_queued' && str('text')) {
+      addMsg('tools', `📋 ${who} encoló: ${str('text').slice(0, 140)}`, 'sys');
+    }
   },
   onLiveTranscript: (text) => {
     setStatus(`…${text.slice(-60)}`);

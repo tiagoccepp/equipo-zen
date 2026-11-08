@@ -23,7 +23,7 @@ export interface ClientEvents {
   onAudioEnd: (turnId: string, agentId: string) => void;
   onAgentState: (agentId: string, state: string) => void;
   onInterrupted: (agentId: string) => void;
-  onWorkEvent: (kind: string, agentId: string) => void;
+  onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
   onLiveTranscript: (text: string) => void;
   onNoResponse: (note: string) => void;
   onVoiceTranscript: (text: string, source: string) => void;
@@ -169,7 +169,7 @@ export class Client {
           this.ev.onInterrupted(String(m.agentId || ''));
           break;
         case 'work_event':
-          this.ev.onWorkEvent(String(m.kind || (m as { event?: string }).event || ''), String((m as { agentId?: string }).agentId || ''));
+          this.ev.onWorkEvent(String(m.kind || ''), String((m as { agentId?: string }).agentId || ''), m as Record<string, unknown>);
           break;
         case 'user_audio_transcript_delta':
           if (m.delta || m.text) this.ev.onLiveTranscript(String(m.delta || m.text));

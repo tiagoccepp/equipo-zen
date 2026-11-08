@@ -751,6 +751,8 @@ export class Workforce {
       '- Otras acciones (solo el JSON, nada más):',
       '{"action":"read_file","path":"ruta/relativa"}',
       '{"action":"list_files"}',
+      '{"action":"web","url":"https://…"}',
+      '  ↑ Leer una página web (docs, precios, referencias). Solo http/https, devuelve texto recortado.',
       renderHerramientas(goal?.stack),
       '{"action":"consultar","a":"nombre de un compañero","pregunta":"lo que necesitás saber"}',
       '  ↑ Consultale a quien sabe en vez de adivinar. Te contesta EN EL ACTO con su criterio.',
@@ -1162,6 +1164,35 @@ export class Workforce {
         } catch (error) {
           log.push({ step, action: 'read_file', path: action.path, ok: false });
           lastObservation = `No pude leer ${action.path}: ${String(error?.message).slice(0, 120)}`;
+        }
+      } else if (action.action === 'web') {
+        try {
+          const url = String(action.url || '');
+          if (!/^https?:\/\//.test(url)) {
+            throw new Error('URL inválida (solo http/https)');
+          }
+          const res = await fetch(url, {
+            signal: AbortSignal.timeout(15000),
+            headers: { 'User-Agent': 'EquipoAgent/1.0', Accept: 'text/html,text/plain' },
+            redirect: 'follow'
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const html = (await res.text()).slice(0, 120000);
+          const text = html
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60000);
+          log.push({ step, action: 'web', path: url.slice(0, 120), ok: true });
+          this.emitEvent(companyId, { kind: 'web', taskId: task.id, agentId: agent.id, agentName: agent.name, url: url.slice(0, 200) });
+          lastObservation = `Contenido de ${url} (texto, recortado):\n${text || '(vacío)'}`;
+        } catch (error) {
+          log.push({ step, action: 'web', path: String(action.url || '').slice(0, 120), ok: false });
+          lastObservation = `No pude leer ${String(action.url || '')}: ${String(error?.message).slice(0, 120)}`;
         }
       } else if (action.action === 'edit_file') {
         try {
