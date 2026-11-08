@@ -1,10 +1,12 @@
-// Orbe desktop: LA MISMA esfera de partículas del modo llamada
-// (upstream call-orbs.ts verbatim). Clic = hablar, ⤢ = abrir Sofia.
+// Orbe minimizado: esfera upstream + mini-UI glass.
+// 🎤 = hablar (toggle voz), ⤢ = abrir Sofia, arrastrar = mover.
 
 import { invoke } from '@tauri-apps/api/core';
 import { OrbField } from './lib/call-orbs.ts';
 
 const canvas = document.getElementById('orb-canvas') as HTMLCanvasElement;
+const statusEl = document.getElementById('orb-status') as HTMLElement;
+const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
 
 let level = 0;
 const field = new OrbField(canvas, { energy: () => level });
@@ -12,21 +14,29 @@ field.setTheme('dark');
 field.setAgents([{ id: 'sofia', name: 'Sofia', color: '#38D1FF' }]);
 
 function layout(): void {
-  const w = window.innerWidth || 148;
-  const h = window.innerHeight || 148;
+  const r = canvas.getBoundingClientRect();
+  const w = r.width || 148;
+  const h = r.height || 148;
   field.resize(w, h);
-  const r = Math.min(w, h) / 2 - 8;
-  field.setSlots([{ id: 'sofia', cx: w / 2, cy: h / 2, r }]);
+  field.setSlots([{ id: 'sofia', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 6 }]);
 }
 window.addEventListener('resize', layout);
 layout();
 field.start();
+
+const STATUS_LABEL: Record<string, string> = {
+  idle: 'sofia',
+  escuchando: '● escuchando',
+  hablando: '♪ hablando'
+};
 
 async function poll(): Promise<void> {
   try {
     const { estado, nivel } = await invoke<{ estado: string; nivel: number }>('orb_poll');
     level = Math.max(0, Math.min(1, nivel || 0));
     field.setSpeaking(estado === 'hablando' || estado === 'escuchando' ? 'sofia' : '');
+    statusEl.textContent = STATUS_LABEL[estado] || 'sofia';
+    micBtn.classList.toggle('live', estado === 'escuchando');
   } catch {
     // Núcleo aún no listo.
   }
@@ -34,22 +44,24 @@ async function poll(): Promise<void> {
 window.setInterval(() => void poll(), 250);
 void poll();
 
-let downAt = 0;
-canvas.addEventListener('pointerdown', () => {
-  downAt = Date.now();
-});
-canvas.addEventListener('pointerup', (e) => {
-  // Arrastre = mover; clic corto = hablar.
-  if (Date.now() - downAt > 220) return;
-  e.preventDefault();
+micBtn.addEventListener('click', () => {
   void invoke('orb_command', { cmd: 'toggle-mic' });
 });
-canvas.addEventListener('pointermove', (e) => {
-  if (e.buttons === 1 && Date.now() - downAt > 220) {
-    void invoke('orb_drag');
-  }
+canvas.addEventListener('click', () => {
+  void invoke('orb_command', { cmd: 'toggle-mic' });
 });
-
 document.getElementById('expandBtn')?.addEventListener('click', () => {
   void invoke('orb_command', { cmd: 'expand' });
 });
+
+// Arrastre desde el fondo del glass.
+let dragging = false;
+document.getElementById('glass')?.addEventListener('pointerdown', (e) => {
+  if ((e.target as HTMLElement).closest('button,canvas')) return;
+  dragging = true;
+  void invoke('orb_drag');
+});
+window.addEventListener('pointerup', () => {
+  dragging = false;
+});
+void dragging;

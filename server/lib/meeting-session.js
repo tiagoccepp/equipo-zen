@@ -25,8 +25,10 @@ import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
 // Paciencia: cuánto se espera tras el último fragmento antes de rutear.
-const USER_TURN_SETTLE_MS = Number(process.env.USER_TURN_SETTLE_MS || 2600);
-const USER_TURN_SETTLE_EXTENDED_MS = Number(process.env.USER_TURN_SETTLE_EXTENDED_MS || 6000);
+const USER_TURN_SETTLE_MS = Number(process.env.USER_TURN_SETTLE_MS || 400);
+const USER_TURN_SETTLE_EXTENDED_MS = Number(process.env.USER_TURN_SETTLE_EXTENDED_MS || 2000);
+// Voz: el VAD ya enmarcó el turno (800 ms de silencio); esperar acá es puro waste.
+const USER_TURN_SETTLE_VOICE_MS = Number(process.env.USER_TURN_SETTLE_VOICE_MS || 200);
 
 // Tipos de telemetría que alimentan el auto-ajuste del router: se persisten
 // en SQLite además del ring en RAM.
@@ -1021,9 +1023,11 @@ export class MeetingSession {
       this.pendingUser = { texts: [text], source };
     }
     const combined = this.pendingUser.texts.join('\n');
-    const settleMs = MeetingSession.seemsUnfinished(combined)
-      ? USER_TURN_SETTLE_EXTENDED_MS
-      : USER_TURN_SETTLE_MS;
+    const settleMs = this.pendingUser.source === 'audio'
+      ? USER_TURN_SETTLE_VOICE_MS
+      : MeetingSession.seemsUnfinished(combined)
+        ? USER_TURN_SETTLE_EXTENDED_MS
+        : USER_TURN_SETTLE_MS;
     this.pendingUser.timer = setTimeout(() => this.flushPendingUser(), settleMs);
   }
 
