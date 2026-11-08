@@ -9,7 +9,49 @@ import { broadcastToCompany } from './lib/meeting-session.js';
 import { initSettings } from './lib/settings.js';
 import { Store } from './lib/store.js';
 import { whisperHealthy } from './lib/stt.js';
-import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable } from './lib/supertonic.js';
+import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable, synthesize } from './lib/supertonic.js';
+
+// Calienta TTS (una frase corta) y STT Parakeet (0.5s de silencio) para que
+// el primer turno real no pague la carga de modelos. Fire-and-forget.
+async function prewarmLocalModels() {
+  const out = { tts: 'skip', stt: 'skip' };
+  try {
+    const parts = await synthesize('Hola.', 'M1', {});
+    out.tts = parts.length > 0 ? 'warm' : 'empty';
+  } catch {
+    out.tts = 'down';
+  }
+  try {
+    // WAV 16k mono, 0.5s de silencio.
+    const pcm = Buffer.alloc(16000);
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(16000, 24);
+    header.writeUInt32LE(32000, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(pcm.length, 40);
+    const wav = Buffer.concat([header, pcm]).toString('base64');
+    const url = process.env.PARAKEET_URL || 'http://127.0.0.1:7790';
+    const res = await fetch(`${url}/v1/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio_base64: wav, language: 'es' }),
+      signal: AbortSignal.timeout(60000)
+    });
+    out.stt = res.ok ? 'warm' : `http${res.status}`;
+  } catch {
+    out.stt = 'down';
+  }
+  return out;
+}
 import { telemetry } from './lib/telemetry.js';
 import { Workforce } from './lib/workforce.js';
 import { attachMeetingServer } from './lib/ws.js';
@@ -48,6 +90,11 @@ server.listen(PORT, HOST, () => {
       console.log(ok
         ? 'Whisper local: OK (tu voz se transcribe en la máquina).'
         : 'Whisper local no responde todavía: el STT usará el hint del navegador.');
+    });
+    // Prewarm: calentar TTS/STT en fondo para que el primer turno no pague
+    // la carga del modelo (Parakeet frío 3.4s → tibio 0.4s).
+    void prewarmLocalModels().then((r) => {
+      console.log(`Prewarm modelos: tts=${r.tts} stt=${r.stt}`);
     });
   }, 4000);
 });
