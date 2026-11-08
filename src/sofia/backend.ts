@@ -1,6 +1,20 @@
 // Adaptador Sofia ↔ protocolo Equipo (WebSocket meetings + HTTP api).
 // Habla el mismo backend que la UI clásica; solo cambia la cara.
 
+import { desktopApiBase } from '../lib/tauri.ts';
+
+let httpBase = '';
+
+// Desktop empaquetado: el sidecar vive en puerto efímero. Resolver una
+// vez en el arranque, antes del primer fetch (igual que la UI clásica).
+export async function resolveBase(): Promise<void> {
+  httpBase = await desktopApiBase();
+}
+
+export function apiBase(): string {
+  return httpBase;
+}
+
 export interface SofiaAgent {
   id: string;
   name: string;
@@ -25,9 +39,8 @@ export interface BackendEvents {
   onClose: () => void;
 }
 
-const apiBase = '';
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiBase + path, init);
+  const res = await fetch(httpBase + path, init);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} en ${path}`);
   }
@@ -78,8 +91,10 @@ export class SofiaBackend {
 
   connect(companyId: string, goalId: string): void {
     this.close();
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/meeting`);
+    const url = httpBase
+      ? `${httpBase.replace(/^http/, 'ws')}/meeting`
+      : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/meeting`;
+    const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'hello', companyId, goalId }));

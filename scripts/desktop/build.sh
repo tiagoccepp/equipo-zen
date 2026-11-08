@@ -41,5 +41,8 @@ trap restore EXIT INT TERM
 npm prune --omit=dev
 # Tauri no limpia el AppDir entre intentos: un resto de devDeps rompería linuxdeploy.
 rm -rf src-tauri/target/release/bundle
+# build.rs cachea los assets del frontend: sin esto, un dist/ nuevo (ej.
+# sofia.html) NO entra al binario aunque el código sea fresco.
+rm -rf src-tauri/target/release/build/equipo-*
 # CLI pineado al lockfile: el local se podó con los devDeps.
 npx --yes "@tauri-apps/cli@$CLI_VER" build --bundles "$BUNDLES" "$@"

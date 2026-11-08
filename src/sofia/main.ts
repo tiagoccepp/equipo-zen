@@ -13,7 +13,7 @@ import { THEME_PALETTES } from './config/config';
 import { SttCapture } from './audio/SttCapture';
 import { SessionPanel } from './app/session/SessionPanel';
 import { deriveState, type VoiceSignals } from './integration/signals';
-import { SofiaBackend, findOrCreateSofiaSpace, listCompanies, type SofiaAgent } from './backend';
+import { SofiaBackend, apiBase, findOrCreateSofiaSpace, listCompanies, resolveBase, type SofiaAgent } from './backend';
 import { SofiaAudioOut } from './audio-out';
 
 const $ = (id: string): HTMLElement | null => document.getElementById(id);
@@ -309,7 +309,7 @@ async function bootstrap(): Promise<void> {
         // Cambiar de contexto = re-hola; Sofia sigue siendo la cara.
         void (async () => {
           try {
-            const res = await fetch(`/api/companies/${encodeURIComponent(c.id)}/projects`);
+            const res = await fetch(`${apiBase()}/api/companies/${encodeURIComponent(c.id)}/projects`);
             const data = (await res.json()) as { projects?: Array<{ id: string }> };
             const goalId = data.projects?.[0]?.id;
             if (!goalId) return;
@@ -352,6 +352,7 @@ async function bootstrap(): Promise<void> {
   // ── Arranque: Sofia directo ───────────────────────────────────────
   setCaption('Conectando…');
   try {
+    await resolveBase();
     const space = await findOrCreateSofiaSpace();
     currentCompany = space.companyId;
     backend.connect(space.companyId, space.goalId);
