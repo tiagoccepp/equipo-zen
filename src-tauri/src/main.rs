@@ -25,8 +25,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 const CAPS: [&str; 3] = ["pantalla", "mouse", "teclado"];
 const LEVELS: [&str; 3] = ["permitir", "preguntar", "bloquear"];
 const APPROVAL_TTL_SECS: u64 = 120;
-const ORB_W: i32 = 232;
-const ORB_H: i32 = 296;
+const ORB_W: i32 = 200;
+const ORB_H: i32 = 264;
 const ORB_MARGIN: i32 = 24;
 
 struct Sidecar {

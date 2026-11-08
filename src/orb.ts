@@ -15,8 +15,8 @@ field.setAgents([{ id: 'sofia', name: 'Sofia', color: '#38D1FF' }]);
 
 function layout(): void {
   const r = canvas.getBoundingClientRect();
-  const w = r.width || 148;
-  const h = r.height || 148;
+  const w = r.width || 176;
+  const h = r.height || 176;
   field.resize(w, h);
   field.setSlots([{ id: 'sofia', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 6 }]);
 }
@@ -47,21 +47,28 @@ void poll();
 micBtn.addEventListener('click', () => {
   void invoke('orb_command', { cmd: 'toggle-mic' });
 });
-canvas.addEventListener('click', () => {
-  void invoke('orb_command', { cmd: 'toggle-mic' });
+// Clic en la esfera = hablar; arrastrar = mover (umbral 6px).
+let downAt: { x: number; y: number } | null = null;
+let dragging = false;
+canvas.addEventListener('pointerdown', (e) => {
+  downAt = { x: e.clientX, y: e.clientY };
+  dragging = false;
+});
+window.addEventListener('pointermove', (e) => {
+  if (!downAt || dragging) return;
+  if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) {
+    dragging = true;
+    void invoke('orb_drag');
+  }
+});
+window.addEventListener('pointerup', () => {
+  if (downAt && !dragging) {
+    void invoke('orb_command', { cmd: 'toggle-mic' });
+  }
+  downAt = null;
 });
 document.getElementById('expandBtn')?.addEventListener('click', () => {
   void invoke('orb_command', { cmd: 'expand' });
 });
 
-// Arrastre desde el fondo del glass.
-let dragging = false;
-document.getElementById('glass')?.addEventListener('pointerdown', (e) => {
-  if ((e.target as HTMLElement).closest('button,canvas')) return;
-  dragging = true;
-  void invoke('orb_drag');
-});
-window.addEventListener('pointerup', () => {
-  dragging = false;
-});
-void dragging;
+// Arrastre desde la esfera (fondo transparente, sin card).
