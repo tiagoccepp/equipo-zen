@@ -21,7 +21,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
     "concurrently": "^10.0.3",
-    "dotenv": "^17.2.3",
+    "dotenv": "^18.0.9",
     "express": "^5.2.1",
     "nanoid": "^5.1.6",
     "node-edge-tts": "^1.2.12",
