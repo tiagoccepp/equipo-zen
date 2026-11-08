@@ -191,11 +191,16 @@ function submitPrompt(): void {
   const text = promptEl.value.trim();
   if (!text) return;
   promptEl.value = '';
+  promptEl.style.height = 'auto';
   void voiceOut.unlock();
   client.sendText(text);
 }
 
 sendBtn.addEventListener('click', submitPrompt);
+promptEl.addEventListener('input', () => {
+  promptEl.style.height = 'auto';
+  promptEl.style.height = `${Math.min(promptEl.scrollHeight, 160)}px`;
+});
 promptEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -330,6 +335,20 @@ if (isTauri()) {
   void tick();
   window.setInterval(() => void tick(), 500);
 }
+
+// Debug: window.__sofia = { client, voiceOut, mic, agents } (para auditoría).
+(window as unknown as { __sofia: object }).__sofia = {
+  client,
+  voiceOut,
+  mic,
+  agents,
+  get voiceOn() {
+    return voiceOn;
+  },
+  get pttOn() {
+    return pttOn;
+  }
+};
 
 // ── Arranque ────────────────────────────────────────────────────────
 layoutOrbs();

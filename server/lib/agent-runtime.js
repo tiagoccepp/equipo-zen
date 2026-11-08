@@ -222,7 +222,7 @@ export class LiveAgentRuntime {
 
   // ── Backend mock: deltas con timing realista, sin claves ──────────────
 
-  async respondWithMock(turn, emit, { signal } = {}) {
+  async respondWithMock(turn, emit, { signal, gate, turnId } = {}) {
     const domain = this.agent.domains?.[0] || 'mi área';
     const text = turn.route?.greeting
       ? `¡Buenas! Por acá ${this.name}, listo para arrancar. (modo simulación)`
@@ -240,6 +240,28 @@ export class LiveAgentRuntime {
       seq += 1;
       emit({ type: 'agent_transcript_delta', delta: (index > 0 ? ' ' : '') + words[index], seq });
       await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    // El mock también habla si hay modo llamada: sin esto, sin claves LLM
+    // los agentes son mudos aunque set_voice esté en true.
+    if (this.meetingSession?.voiceEnabled && !signal?.aborted) {
+      try {
+        const spoken = stripTaskTags(text).trim();
+        if (spoken) {
+          const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
+          if (!signal?.aborted) {
+            let token = null;
+            if (gate) {
+              token = await gate.acquire(turnId, this.id, { signal, sampleRate: 24000 });
+            }
+            emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: mp3.data, mimeType: mp3.mimeType });
+            if (gate && token) {
+              gate.finish(token, 'complete');
+            }
+          }
+        }
+      } catch {
+        // Sin audio del servidor: el cliente se encarga (voz navegador).
+      }
     }
     emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
     return { rawText: text, text, audioChunks: [], usedMock: true, backend: 'mock', interrupted: Boolean(signal?.aborted) };
