@@ -99,7 +99,7 @@ export function getDeepgramKey() {
 }
 
 export function getSttLanguage() {
-  return dbValue('stt.language') || 'es';
+  return dbValue('stt.language') || 'auto';
 }
 
 // ── TTS (voz) ────────────────────────────────────────────────────────────

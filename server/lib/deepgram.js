@@ -39,9 +39,13 @@ function authHeaders(extra = {}) {
 // formato inteligente + keyterm "Pablo" para que el nombre propio entre
 // siempre (antes Sofia, renombrado 2026-11-08).
 export async function transcribeDeepgram(wavBase64) {
+  // 'auto' (default): detect_language del lado Deepgram — el usuario mezcla
+  // ES/EN y forzar un idioma hace que el otro salga basura ('and' por una
+  // frase en español, visto 2026-11-08). Verificado Nova-3 200 OK.
+  const sttLang = String(getSttLanguage() || 'auto').toLowerCase();
   const params = new URLSearchParams({
     model: DEEPGRAM_STT_MODEL,
-    language: getSttLanguage(),
+    ...(sttLang.startsWith('auto') ? { detect_language: 'true' } : { language: sttLang }),
     smart_format: 'true',
     punctuate: 'true',
     keyterms: 'Pablo:2'

@@ -67,9 +67,20 @@ function agentSpeaking(): boolean {
   return voiceOut.isPlaying || audioSegment !== null;
 }
 
-// Turnos del agente en curso (turnId → agentId): cubren el PENSAMIENTO
-// silencioso, que agentSpeaking() no ve (solo cubre audio en vuelo).
-const activeTurns = new Map<string, string>();
+// Turnos del agente en curso (turnId → {agentId, at}): cubren el
+// PENSAMIENTO silencioso, que agentSpeaking() no ve (solo cubre audio en
+// vuelo). Con hora para podar entradas rancias (un complete perdido no
+// puede dejar interrupts fantasma para siempre).
+const activeTurns = new Map<string, { agentId: string; at: number }>();
+const ACTIVE_TURN_MAX_AGE_MS = 90000;
+
+/** Saca turnos que el servidor ya no va a cerrar (completes perdidos). */
+function pruneActiveTurns(): void {
+  const now = Date.now();
+  for (const [turnId, v] of activeTurns) {
+    if (now - v.at > ACTIVE_TURN_MAX_AGE_MS) activeTurns.delete(turnId);
+  }
+}
 // Turnos ya cortados: el audio que llegue tarde se descarta (stragglers).
 const interruptedTurns = new Set<string>();
 const MAX_INTERRUPTED = 30;
@@ -102,7 +113,7 @@ function interruptTargets(): Array<{ turnId?: string; agentId?: string }> {
     out.push({ turnId, agentId });
   };
   push(audioSegment?.turnId, audioSegment?.agentId);
-  for (const [turnId, agentId] of activeTurns) push(turnId, agentId);
+  for (const [turnId, v] of activeTurns) push(turnId, v.agentId);
   return out;
 }
 
@@ -115,6 +126,10 @@ const GRACE_MS = 1200;
 let graceTimer: number | null = null;
 let graceHint = '';
 let audioEndSent = false;
+// Un solo interrupt por turno del usuario: el barge-in acústico y la
+// confirmación de habla son dos caminos al mismo corte; sin esto el
+// segundo manda un duplicado siempre.
+let interruptSentForTurn = false;
 
 function maybePlaybackComplete(): void {
   if (audioSegment?.endReceived && !voiceOut.isPlaying) {
@@ -145,28 +160,34 @@ const liveMic = new LiveMic({
       setStatus('grabando tu turno…');
       return;
     }
-    // Barge-in total: corta audio en vuelo Y pensamiento silencioso (sin
-    // esto el turno viejo seguía generando y lo del usuario se encolaba
-    // detrás, y el interrupt se sentía muerto).
-    if (agentSpeaking() || activeTurns.size > 0) {
-      const targets = interruptTargets();
-      if (targets.length === 0) {
-        client.interrupt(undefined, undefined);
-      } else {
-        for (const t of targets) client.interrupt(t.turnId, t.agentId);
-      }
-      noteLocalInterrupt();
-      voiceOut.flush();
-      voiceOut.restoreGain();
-      speakingAgent = '';
-      field.setSpeaking('');
-      setStatus('te escucho — la corté.');
-      return;
-    }
-    // Nada que cortar: arrancar un turno (igual que upstream).
+    // Turno nuevo: el interrupt (si hace falta) lo manda onSpeechConfirmed
+    // cuando el habla se sostiene — una tos o un "eh" que el VAD apenas
+    // abre y minSpeechMs descarta jamás debe cortar al agente.
+    interruptSentForTurn = false;
     voiceOut.flush();
     voiceOut.restoreGain();
     setStatus('grabando tu turno…');
+  },
+  onSpeechConfirmed: () => {
+    // Habla REAL (sostenida ≥ minSpeechMs): recién acá se corta. Cubre
+    // audio en vuelo Y pensamiento silencioso (sin esto último el turno
+    // viejo seguía generando y lo del usuario se encolaba detrás).
+    if (interruptSentForTurn) return;
+    pruneActiveTurns();
+    if (!agentSpeaking() && activeTurns.size === 0) return;
+    const targets = interruptTargets();
+    if (targets.length === 0) {
+      client.interrupt(undefined, undefined);
+    } else {
+      for (const t of targets) client.interrupt(t.turnId, t.agentId);
+    }
+    noteLocalInterrupt();
+    interruptSentForTurn = true;
+    voiceOut.flush();
+    voiceOut.restoreGain();
+    speakingAgent = '';
+    field.setSpeaking('');
+    setStatus('te escucho — la corté.');
   },
   onSpeechEnd: (hint) => {
     // Fin de habla: se marca el tiempo (TTFV); el cierre del turno espera
@@ -198,6 +219,10 @@ const liveMic = new LiveMic({
     }, 900);
   },
   onInterrupt: () => {
+    // Barge-in acústico (rápido, durante audio): si la confirmación ya
+    // cortó este turno, no duplicar.
+    if (interruptSentForTurn) return;
+    interruptSentForTurn = true;
     client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
     noteLocalInterrupt();
     voiceOut.flush();
@@ -311,7 +336,7 @@ const client = new Client({
   },
   onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
-    if (turnId) activeTurns.set(turnId, agentId);
+    if (turnId) activeTurns.set(turnId, { agentId, at: Date.now() });
   },
   onSpeakStart: (agentId) => {
     // Primera palabra audible del modelo: marca TTFV (voz) para telemetría.
@@ -832,11 +857,11 @@ async function renderSettings(): Promise<void> {
   });
   box.appendChild(settingRow('🔑 clave Deepgram', dgInput));
 
-  const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English' };
-  const sttLang = (s.stt.language === 'es' || s.stt.language === 'en')
+  const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English', auto: 'Auto' };
+  const sttLang = (s.stt.language === 'es' || s.stt.language === 'en' || s.stt.language === 'auto')
     ? s.stt.language
-    : (s.stt.language.startsWith('en') ? 'en' : 'es');
-  const langSel = settingSelect(['es', 'en'], sttLang, LANG_LABELS);
+    : (s.stt.language.startsWith('en') ? 'en' : (s.stt.language.startsWith('auto') ? 'auto' : 'es'));
+  const langSel = settingSelect(['auto', 'es', 'en'], sttLang, LANG_LABELS);
   langSel.setAttribute('aria-label', 'Idioma de escucha');
   langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
   box.appendChild(settingRow('🗣️ idioma oído', langSel));

@@ -157,6 +157,7 @@ export class VoiceOut {
 export interface LiveMicOptions {
   onChunk: (base64: string) => void;
   onSpeechStart: () => void;
+  onSpeechConfirmed: () => void;
   onSpeechEnd: (hint: string) => void;
   onDiscarded: () => void;
   onInterrupt: () => void;
@@ -203,6 +204,7 @@ export class LiveMic {
   private floor = 0;
   private watchdog: number | null = null;
   private onsetFrames = 0;
+  private confirmed = false;
   private static readonly MAX_TURN_MS = 30000;
   private static readonly STALL_MS = 1500;
   private static readonly ONSET_FRAMES = 4;
@@ -405,6 +407,7 @@ export class LiveMic {
         this.speaking = true;
         this.silenceMs = 0;
         this.speechMs = 0;
+        this.confirmed = false;
         this.opts.resetHint();
         this.opts.onSpeechStart();
         // Flush del pre-buffer: no se pierde el ataque.
@@ -418,6 +421,13 @@ export class LiveMic {
 
     this.opts.onChunk(data);
     this.speechMs += durationMs;
+    // Habla sostenida: el turno ya es real (minSpeechMs no lo va a
+    // descartar) — avisar una vez para que el interrupt corte acá y no
+    // con cualquier tos que apenas abre el VAD.
+    if (!this.confirmed && this.speechMs >= this.tuning.minSpeechMs) {
+      this.confirmed = true;
+      this.opts.onSpeechConfirmed();
+    }
     if (rms < contEff) {
       this.silenceMs += durationMs;
     } else {

@@ -467,11 +467,12 @@ export function emptyAgentResponse() {
   return { rawText: '', text: '', audioChunks: [], usedMock: false };
 }
 
-// Reglas de idioma del prompt: inglés si stt.language empieza con 'en',
-// español rioplatense si no. Sin store inicializado (tests) el default es
-// 'es', así que el comportamiento viejo queda intacto.
+// Reglas de idioma del prompt: inglés si tts.language empieza con 'en',
+// español rioplatense si no. Sigue a la VOZ, no al oído: el oído es auto
+// (el usuario mezcla ES/EN) pero lo que escucha tiene un idioma fijo.
+// Sin store inicializado (tests) el default es 'es', comportamiento viejo.
 function languageRules() {
-  if (String(getSttLanguage() || 'es').toLowerCase().startsWith('en')) {
+  if (String(getTtsLanguage() || 'es').toLowerCase().startsWith('en')) {
     return [
       '- Always respond in English.',
       '- ONLY English characters: never mix words or characters from other languages/scripts (no CJK, no unnecessary Spanish).',

@@ -49,7 +49,9 @@ export async function whisperHealthy() {
 const PARAKEET_URL = process.env.PARAKEET_URL || 'http://127.0.0.1:7790';
 
 async function postTranscribe(url, wavBase64, withModel) {
-  const payload = { audio_base64: wavBase64, language: getSttLanguage() };
+  // 'auto': language null — faster-whisper autodetecta; Parakeet ignora.
+  const sttLang = String(getSttLanguage() || 'auto').toLowerCase();
+  const payload = { audio_base64: wavBase64, language: sttLang.startsWith('auto') ? null : sttLang };
   if (withModel) {
     payload.model = getWhisperModel();
   }
@@ -87,7 +89,12 @@ async function transcribeGroq(wavBase64) {
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(wavBase64, 'base64')], { type: 'audio/wav' }), 'turno.wav');
   form.append('model', GROQ_STT_MODEL);
-  form.append('language', getSttLanguage());
+  // 'auto': sin language — Whisper autodetecta (forzar un idioma hace
+  // que el otro salga basura).
+  const groqLang = String(getSttLanguage() || 'auto').toLowerCase();
+  if (!groqLang.startsWith('auto')) {
+    form.append('language', groqLang);
+  }
   form.append('response_format', 'json');
 
   const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
