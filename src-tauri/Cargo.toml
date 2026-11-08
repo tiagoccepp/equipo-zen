@@ -17,6 +17,11 @@ enigo = "0.5"
 image = "0.25"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2"
+glib = "0.18"
 
 [features]
 default = ["custom-protocol"]

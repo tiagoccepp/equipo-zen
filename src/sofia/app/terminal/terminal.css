@@ -1,0 +1,227 @@
+/* =====================================================================
+   Floating terminal windows: glass panels matching the FUI aesthetic.
+   z-index 5 layer, above the stage grid but below the HUD bar.
+   ===================================================================== */
+
+.terminal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.terminal-window {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+
+  background: var(--glass);
+  backdrop-filter: blur(var(--panel-blur));
+  -webkit-backdrop-filter: blur(var(--panel-blur));
+  clip-path: var(--notch);
+  box-shadow:
+    0 0 26px rgba(var(--accent-rgb), 0.07),
+    0 8px 32px rgba(0, 0, 0, 0.4);
+
+  min-width: 300px;
+  min-height: 200px;
+  border-radius: 0;
+}
+
+/* Neon border: same technique as .panel::before */
+.terminal-window::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-faint) 70%);
+  clip-path: var(--notch);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.terminal-window > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---- Tab bar: drag handle + tabs + add button ---- */
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px 0 10px;
+  border-bottom: 1px solid var(--accent-faint);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.terminal-tabs:active {
+  cursor: grabbing;
+}
+
+.terminal-tabs > .led {
+  flex-shrink: 0;
+}
+
+.tab-list {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 1;
+}
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Individual tab */
+.tab {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 5px;
+  margin-bottom: -1px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 140px;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.tab:hover {
+  color: var(--ink);
+  background: rgba(var(--accent-rgb), 0.04);
+}
+.tab.active {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: var(--accent-faint);
+  text-shadow: 0 0 8px var(--accent-soft);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-dim);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.tab:hover .tab-close {
+  opacity: 1;
+}
+.tab-close:hover {
+  color: #ff5a7a;
+}
+
+/* "+" add-tab button */
+.tab-add {
+  appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--ink-dim);
+  font-size: 15px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.tab-add:hover {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+
+/* ---- Tab content area ---- */
+.terminal-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Body: fills remaining space for xterm */
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 6px;
+  overflow: hidden;
+}
+
+/* xterm overrides to match FUI scrollbar */
+.terminal-body .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-soft) transparent;
+}
+.terminal-body .xterm-viewport::-webkit-scrollbar {
+  width: 5px;
+}
+.terminal-body .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--accent-faint);
+  border-radius: 3px;
+}
+
+/* --- Resize handles: 8 invisible edge/corner zones --- */
+.resize-handle {
+  position: absolute;
+  z-index: 2;
+}
+.rh-n {
+  top: -3px; left: 8px; right: 8px; height: 6px;
+  cursor: n-resize;
+}
+.rh-s {
+  bottom: -3px; left: 8px; right: 8px; height: 6px;
+  cursor: s-resize;
+}
+.rh-e {
+  right: -3px; top: 8px; bottom: 8px; width: 6px;
+  cursor: e-resize;
+}
+.rh-w {
+  left: -3px; top: 8px; bottom: 8px; width: 6px;
+  cursor: w-resize;
+}
+.rh-ne {
+  top: -3px; right: -3px; width: 14px; height: 14px;
+  cursor: ne-resize;
+}
+.rh-nw {
+  top: -3px; left: -3px; width: 14px; height: 14px;
+  cursor: nw-resize;
+}
+.rh-se {
+  bottom: -3px; right: -3px; width: 14px; height: 14px;
+  cursor: se-resize;
+}
+.rh-sw {
+  bottom: -3px; left: -3px; width: 14px; height: 14px;
+  cursor: sw-resize;
+}

@@ -1,0 +1,770 @@
+/* =====================================================================
+   Q FUI stage (Tauri webview).
+   Deep space-black, three-column tactical layout, holographic SVG orb,
+   floating glass telemetry panels, and a TAP TO TALK mic. Solid background
+   (no blur/gradient on the stage itself); neon-cyan accent throughout.
+   ===================================================================== */
+
+:root {
+  color-scheme: dark;
+  --bg: #05070b;
+  --accent-rgb: 0, 240, 255;
+  --accent: rgb(var(--accent-rgb));
+  --accent-soft: rgba(var(--accent-rgb), 0.45);
+  --accent-faint: rgba(var(--accent-rgb), 0.14);
+  --glass: rgba(5, 15, 25, 0.72);
+  /* Panel frosted-glass blur. backdrop-filter over the animated orb re-blurred
+     every panel on every orb frame, a standing GPU cost, so it is OFF: the audit
+     flagged it and the owner approved the trade live (2026-07-12), with --glass
+     darkened 0.45 -> 0.72 to keep panels readable without the frost. Raising this
+     above 0px re-buys the frost at that per-frame cost. */
+  --panel-blur: 0px;
+  --ink: #aee7ff;
+  --ink-dim: rgba(174, 231, 255, 0.55);
+  --mono: "Cascadia Code", "Cascadia Mono", "Share Tech Mono", Consolas,
+    "Courier New", ui-monospace, monospace;
+  /* Shared corner-notch outline (top-right clipped). Used by both the panel
+     clip and its ::before neon border so the two always agree. */
+  --notch: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body.q-app {
+  /* Solid deep space-black: zero blur, zero particle clouds, zero gradient. */
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+/* Per-state accent shift (reflected by attachTauri onto body[data-state]).
+   Pure cosmetic tint of the whole FUI; the orb itself is driven by the
+   controller independently. */
+body[data-state="listening"] {
+  --accent: rgb(var(--accent-rgb));
+}
+body[data-state="thinking"] {
+  --accent: rgb(var(--accent-rgb));
+}
+body[data-state="speaking"] {
+  --accent: rgb(var(--accent-rgb));
+}
+
+/* ---------------------------------------------------------------------
+   Session stats strip: compact top-left readout, always visible.
+   --------------------------------------------------------------------- */
+.session-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 7px 16px;
+  background: linear-gradient(180deg, rgba(5, 18, 30, 0.92), rgba(5, 12, 20, 0.4));
+  border-bottom-right-radius: 8px;
+  border-bottom: 1px solid var(--accent-faint);
+  border-right: 1px solid var(--accent-faint);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+  user-select: none;
+}
+.session-strip:hover {
+  opacity: 1;
+}
+.ss-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.ss-label {
+  color: var(--ink-dim);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.ss-item > span:last-child {
+  color: #eafbff;
+  text-shadow: 0 0 6px var(--accent-soft);
+}
+.ss-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--accent-faint);
+  flex-shrink: 0;
+}
+.ss-activity > span:last-child {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* CI status dots: traffic-light indicator in the session strip */
+.ss-ci {
+  gap: 4px;
+}
+.ci-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(100, 100, 100, 0.3);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+.ci-dot.active.ci-green {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+.ci-dot.active.ci-yellow {
+  background: #eab308;
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.6);
+}
+.ci-dot.active.ci-red {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+/* ---------------------------------------------------------------------
+   Top HUD: the (still fully functional) control cluster, restyled as a
+   thin neon bar so it blends with the FUI instead of clashing.
+   --------------------------------------------------------------------- */
+.hud-bar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: linear-gradient(180deg, rgba(5, 18, 30, 0.92), rgba(5, 12, 20, 0.4));
+  border-bottom-left-radius: 8px;
+  border-bottom: 1px solid var(--accent-faint);
+  border-left: 1px solid var(--accent-faint);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+.hud-bar:hover {
+  opacity: 1;
+}
+
+/* Gear icon button */
+.hud-gear {
+  appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--ink-dim);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.hud-gear:hover {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+.hud-gear.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.hud-bar button:not(.hud-gear) {
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--ink);
+  border: 1px solid var(--accent-soft);
+  border-radius: 3px;
+  padding: 3px 11px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.hud-bar button:not(.hud-gear):hover {
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: 0 0 10px var(--accent-faint);
+}
+
+/* ---- Settings drawer ---- */
+.settings-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 19;
+  width: min(480px, 94vw);
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom-left-radius: 10px;
+  border-bottom: 1px solid var(--accent-faint);
+  border-left: 1px solid var(--accent-faint);
+  padding: 48px 18px 16px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  transform: translateY(0);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.settings-drawer[hidden] {
+  display: block;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-12px);
+}
+.settings-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-section {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.settings-label {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px var(--accent-soft);
+  min-width: 48px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.hud-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-drawer button {
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--ink);
+  border: 1px solid var(--accent-soft);
+  border-radius: 3px;
+  padding: 3px 11px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.settings-drawer button:hover {
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: 0 0 10px var(--accent-faint);
+}
+.settings-drawer button.active {
+  background: rgba(var(--accent-rgb), 0.22);
+  color: #eafbff;
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-soft);
+}
+.settings-drawer .speak-input {
+  background: rgba(4, 12, 22, 0.7);
+  color: var(--ink);
+  border: 1px solid var(--accent-soft);
+  border-radius: 3px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 180px;
+  flex: 1;
+}
+.settings-drawer .speak-input::placeholder {
+  color: var(--ink-dim);
+}
+.settings-row {
+  flex-wrap: wrap;
+}
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  cursor: pointer;
+  margin-top: 6px;
+}
+.settings-check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.settings-select {
+  appearance: none;
+  background: rgba(4, 12, 22, 0.7);
+  color: var(--ink);
+  border: 1px solid var(--accent-soft);
+  border-radius: 3px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  min-width: 120px;
+  flex: 1;
+}
+.settings-select option {
+  background: #0a1428;
+  color: var(--ink);
+}
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-slider-label {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  min-width: 36px;
+}
+.settings-range {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  background: var(--accent-faint);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+.settings-slider-val {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  min-width: 30px;
+  text-align: right;
+}
+.theme-btn {
+  min-width: 52px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------
+   The three-column stage. Fills the viewport below the HUD; the center
+   cell mounts the orb, the side columns hold the telemetry panels, and
+   the footer row carries the mic.
+   --------------------------------------------------------------------- */
+.stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(360px, 1.7fr) minmax(230px, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: 22px;
+  padding: 60px 26px 18px;
+  z-index: 1;
+  /* Overlay above the orb canvas; only the panels/mic capture pointer events. */
+  pointer-events: none;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  justify-content: center;
+  min-height: 0;
+  min-width: 0;
+}
+.col-left {
+  grid-column: 1;
+  grid-row: 1;
+}
+.col-right {
+  grid-column: 3;
+  grid-row: 1;
+}
+/* Full-window holographic orb: a transparent WebGL canvas glowing behind the
+   FUI. The panels float over it (their backdrop-filter frosts the glow). */
+#avatar-root {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+#avatar-root canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* The center grid cell is empty space the orb shows through. */
+.col-center {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+/* ---------------------------------------------------------------------
+   Glass telemetry panels: translucent, frosted, corner-notched. The neon
+   border is drawn by a ::before gradient layer that is clipped to the SAME
+   notch outline and masked to a 1px ring, so the border traces the notch
+   (including the diagonal) and is NEVER cut off by the panel's own clip.
+   --------------------------------------------------------------------- */
+.panel {
+  position: relative;
+  pointer-events: auto;
+  background: var(--glass);
+  backdrop-filter: blur(var(--panel-blur));
+  -webkit-backdrop-filter: blur(var(--panel-blur));
+  clip-path: var(--notch);
+  padding: 12px 14px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  box-shadow: 0 0 26px rgba(var(--accent-rgb), 0.07);
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 1px; /* = neon border thickness */
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-faint) 70%);
+  clip-path: var(--notch); /* same outline as the panel */
+  /* Punch out the interior so only the 1px padding ring remains: the frame
+     follows the notched outline, diagonal included. */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* Keep panel content above the border layer. */
+.panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--accent-faint);
+}
+.panel-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px var(--accent-soft);
+}
+.panel-tag {
+  margin-left: auto;
+  color: var(--ink-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--accent-soft);
+  opacity: 0.8;
+}
+.led:nth-child(2) {
+  opacity: 0.55;
+}
+.led:nth-child(3) {
+  opacity: 0.35;
+}
+
+.ok {
+  color: #4dffc3;
+}
+.blink {
+  color: var(--accent);
+  animation: blink 1.4s steps(2, start) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* Transcript panel: a scrolling conversation log (you <-> Q). */
+.transcript {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-soft) transparent;
+  user-select: text;
+}
+.transcript::-webkit-scrollbar {
+  width: 5px;
+}
+.transcript::-webkit-scrollbar-thumb {
+  background: var(--accent-faint);
+  border-radius: 3px;
+}
+.t-empty {
+  color: var(--ink-dim);
+  font-style: italic;
+  opacity: 0.6;
+}
+.t-line {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+.t-role {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-align: right;
+  padding-top: 1px;
+  opacity: 0.85;
+}
+.t-user .t-role {
+  color: var(--ink-dim);
+}
+.t-q .t-role {
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--accent-soft);
+}
+.t-text {
+  color: #cfe9f5;
+  overflow-wrap: break-word;
+  user-select: text;
+}
+.t-q .t-text {
+  color: #eafaff;
+}
+
+
+/* Mic oscilloscope, docked under the TAP TO TALK control (a slim ambient meter). */
+.mic-wave {
+  width: 132px;
+  height: 28px;
+  opacity: 0.75;
+}
+.wave-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px var(--accent-soft));
+}
+.wave-axis {
+  stroke: var(--accent-faint);
+  stroke-width: 1;
+}
+
+
+/* ---------------------------------------------------------------------
+   Footer: the circular TAP TO TALK mic. A new control that drives the same
+   listening toggle as #mic-btn (wired together in main.ts).
+   --------------------------------------------------------------------- */
+.stage-footer {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+.mic-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 78px;
+  pointer-events: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent);
+}
+.mic-icon {
+  width: 58px;
+  height: 58px;
+  padding: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(var(--accent-rgb), 0.22), rgba(4, 14, 24, 0.85) 70%);
+  border: 1.5px solid var(--accent);
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  box-shadow: 0 0 14px var(--accent-soft), inset 0 0 10px rgba(var(--accent-rgb), 0.12);
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.mic-button:hover .mic-icon {
+  box-shadow: 0 0 22px var(--accent), inset 0 0 14px rgba(var(--accent-rgb), 0.2);
+  transform: translateY(-1px);
+}
+.mic-button.active .mic-icon {
+  background: radial-gradient(circle at 50% 45%, rgba(var(--accent-rgb), 0.5), rgba(4, 14, 24, 0.85) 72%);
+  box-shadow: 0 0 30px var(--accent), inset 0 0 16px rgba(var(--accent-rgb), 0.3);
+  animation: micPulse 1.4s ease-in-out infinite;
+}
+@keyframes micPulse {
+  50% {
+    box-shadow: 0 0 40px var(--accent), inset 0 0 20px rgba(var(--accent-rgb), 0.4);
+  }
+}
+.mic-label {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------------
+   Spoken reply caption + state label (kept from the original shell).
+   --------------------------------------------------------------------- */
+.caption {
+  position: fixed;
+  left: 50%;
+  bottom: 128px;
+  transform: translateX(-50%);
+  max-width: min(70vw, 820px);
+  text-align: center;
+  font-size: clamp(16px, 2.2vw, 26px);
+  line-height: 1.35;
+  color: #dff6ff;
+  text-shadow: 0 0 16px var(--accent-soft);
+  pointer-events: none;
+  z-index: 6;
+  /* Bound to a 3-line subtitle so a long reply or error can't balloon up over
+     the orb. The full text still lives in the transcript panel. WebView2 is
+     Chromium, so -webkit-line-clamp is supported. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.status {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  z-index: 20;
+  user-select: none;
+}
+
+/* Compact gracefully on narrow windows: drop the side columns under the orb. */
+@media (max-width: 880px) {
+  .stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+  .col-left {
+    grid-column: 1;
+    grid-row: 1;
+    flex-direction: row;
+  }
+  #avatar-root {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .col-right {
+    grid-column: 1;
+    grid-row: 3;
+    flex-direction: row;
+  }
+  .stage-footer {
+    grid-row: 4;
+  }
+}
+
+/* Compact / mini (PiP) mode: hide everything except the orb and mic. */
+body.mini-mode .hud-bar,
+body.mini-mode .session-strip,
+body.mini-mode .settings-drawer,
+body.mini-mode .col-left,
+body.mini-mode .col-right,
+body.mini-mode .caption,
+body.mini-mode .status,
+body.mini-mode .terminal-layer,
+body.mini-mode #diff-layer {
+  display: none !important;
+}
+body.mini-mode .stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+body.mini-mode .stage-footer {
+  position: fixed;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+body.mini-mode .mic-button {
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+}
+body.mini-mode .mic-label {
+  display: none;
+}
+body.mini-mode .mic-wave {
+  display: none;
+}
+body.mini-mode #mini-restore {
+  display: block;
+}
+#mini-restore {
+  display: none;
+  position: fixed;
+  top: 4px;
+  right: 4px;
+  z-index: 100;
+  background: var(--glass);
+  border: 1px solid var(--accent-faint);
+  color: var(--ink);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}

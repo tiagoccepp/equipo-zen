@@ -3,6 +3,8 @@
 // (xcap) y control de mouse/teclado (enigo). Todo texto visible, en español.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod webview_shim;
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
@@ -520,6 +522,11 @@ fn main() {
                 cmd_orbe: Mutex::new(None),
                 datos,
             });
+
+            // Micrófono en Linux: otorga getUserMedia al webview main.
+            if let Some(main) = app.get_webview_window("main") {
+                webview_shim::apply(&main);
+            }
 
             let mostrar = MenuItem::with_id(app, "mostrar", "Mostrar Equipo", true, None::<&str>)?;
             let orbe =

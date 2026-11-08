@@ -11,7 +11,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
-        orb: 'orb.html'
+        orb: 'orb.html',
+        sofia: 'sofia.html'
       }
     }
   },

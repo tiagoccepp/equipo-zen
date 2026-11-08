@@ -14,8 +14,8 @@
     "windows": [
       {
         "label": "main",
-        "title": "Equipo — tu equipo IA",
-        "url": "index.html",
+        "title": "Sofia — a la orden",
+        "url": "sofia.html",
         "width": 1280,
         "height": 860,
         "minWidth": 900,

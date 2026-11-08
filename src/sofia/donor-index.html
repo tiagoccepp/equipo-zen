@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LYNS Voice</title>
+    <link rel="stylesheet" href="/src/app/shell.css" />
+    <link rel="stylesheet" href="/src/app/terminal/terminal.css" />
+    <link rel="stylesheet" href="/src/app/diff/diff.css" />
+    <link rel="stylesheet" href="/src/app/session/session.css" />
+    <link rel="stylesheet" href="/src/app/library/library.css" />
+  </head>
+  <body class="q-app">
+    <!-- Full-window holographic orb: a transparent WebGL canvas mounts here and
+         glows over the solid background; the FUI panels float on top of it. -->
+    <div id="avatar-root"></div>
+    <button id="mini-restore" type="button">restore</button>
+
+    <!-- Session stats: compact top-left readout -->
+    <div class="session-strip">
+      <span class="ss-item"><span class="ss-label">IN</span> <span id="hud-tokens-in">0</span></span>
+      <span class="ss-item"><span class="ss-label">OUT</span> <span id="hud-tokens-out">0</span></span>
+      <span class="ss-item"><span class="ss-label">COST</span> <span id="hud-cost">$0.00</span></span>
+      <span class="ss-item"><span class="ss-label">TURNS</span> <span id="hud-turns">0</span></span>
+      <span class="ss-item"><span class="ss-label">UP</span> <span id="hud-uptime">0:00</span></span>
+      <span class="ss-item ss-fleet" id="hud-fleet" style="display:none"><span class="ss-label">FLEET</span> <span id="hud-fleet-cost">$0.00 · 1</span></span>
+      <span class="ss-divider"></span>
+      <span class="ss-item ss-activity"><span class="ss-label">ACT</span> <span id="hud-activity">idle</span></span>
+      <span class="ss-divider"></span>
+      <span class="ss-item ss-ci" title="CI status">
+        <span class="ss-label">CI</span>
+        <span class="ci-dot ci-green" id="ci-green"></span>
+        <span class="ci-dot ci-yellow" id="ci-yellow"></span>
+        <span class="ci-dot ci-red" id="ci-red"></span>
+      </span>
+    </div>
+
+    <!-- Top HUD bar: minimal controls, always visible. -->
+    <div class="hud-bar">
+      <button id="settings-btn" class="hud-gear" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65
+                   1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65
+                   0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65
+                   1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0
+                   4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65
+                   0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1
+                   1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65
+                   0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      <button id="terminal-btn">+ terminal</button>
+      <button id="library-btn">library</button>
+      <button id="transcript-btn">transcript</button>
+      <button id="diff-btn">diffs</button>
+      <button id="mini-btn">pip</button>
+    </div>
+
+    <!-- Settings drawer: slides down from the HUD bar. -->
+    <div id="settings-drawer" class="settings-drawer" hidden>
+      <div class="settings-inner">
+        <div class="settings-section">
+          <span class="settings-label">claude</span>
+          <div class="hud-group">
+            <input
+              id="claude-dir"
+              class="speak-input"
+              type="text"
+              aria-label="Project directory for Claude"
+              placeholder="project dir for Claude (it can edit/run there by voice)"
+              autocomplete="off"
+              list="dir-history"
+            />
+            <datalist id="dir-history"></datalist>
+            <button id="claude-browse" title="Browse for a project folder">browse</button>
+            <button id="claude-btn">connect claude</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">model + effort</span>
+          <div class="hud-group settings-row">
+            <select
+              id="set-model"
+              class="settings-select"
+              aria-label="Model"
+              title="Each tier picks the latest model of that tier (Opus is Opus 4.8 today)."
+            >
+              <option value="">default model</option>
+              <option value="opus">Opus</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="haiku">Haiku</option>
+            </select>
+            <!-- Effort options are rebuilt per model in main.ts (levels are model-dependent;
+                 ultracode is Opus-only). Only the default stays static here. -->
+            <select id="set-effort" class="settings-select" aria-label="Reasoning effort">
+              <option value="">default effort</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">mic</span>
+          <div class="hud-group settings-col">
+            <div class="hud-group settings-row">
+              <button id="mic-btn">talk</button>
+              <select id="set-mic" class="settings-select" aria-label="Microphone"><option value="">default mic</option></select>
+            </div>
+            <label class="settings-check">
+              <input id="set-bargein" type="checkbox" />
+              voice barge-in (speak to interrupt)
+            </label>
+            <label class="settings-check">
+              <input id="set-wakeword" type="checkbox" />
+              wake word (&quot;Oracle&quot;)
+            </label>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">voice</span>
+          <div class="hud-group settings-col">
+            <select id="set-voice" class="settings-select" aria-label="Voice"><option value="">Oracle default (Emma)</option></select>
+            <label class="settings-check">
+              <input id="set-engine" type="checkbox" />
+              neural voice (Kokoro)
+            </label>
+            <div class="settings-slider-row">
+              <span class="settings-slider-label">speed</span>
+              <input id="set-rate" type="range" min="-10" max="10" value="0" class="settings-range" aria-label="Voice speed" />
+              <span id="set-rate-val" class="settings-slider-val">0</span>
+            </div>
+            <div class="settings-slider-row">
+              <span class="settings-slider-label">pitch</span>
+              <input id="set-pitch" type="range" min="-10" max="10" value="0" class="settings-range" aria-label="Voice pitch" />
+              <span id="set-pitch-val" class="settings-slider-val">0</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">vad</span>
+          <div class="hud-group settings-col">
+            <div class="settings-slider-row">
+              <span class="settings-slider-label">pause</span>
+              <input id="set-vad" type="range" min="300" max="2000" step="30" value="810" class="settings-range" aria-label="Pause before send, milliseconds" />
+              <span id="set-vad-val" class="settings-slider-val">810ms</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">session</span>
+          <div class="hud-group settings-col">
+            <label class="settings-check">
+              <input id="set-reconnect" type="checkbox" />
+              auto-reconnect a dropped claude session
+            </label>
+            <label class="settings-check">
+              <input id="set-notify" type="checkbox" />
+              notify when a turn ends in the background
+            </label>
+            <div class="settings-slider-row">
+              <span class="settings-slider-label">snap</span>
+              <input id="set-snap" type="range" min="0" max="40" step="1" value="12" class="settings-range" aria-label="Window snap distance, pixels" />
+              <span id="set-snap-val" class="settings-slider-val">12px</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label">theme</span>
+          <div class="hud-group settings-row">
+            <button class="theme-btn" data-theme="cyan">cyan</button>
+            <button class="theme-btn active" data-theme="aurora">aurora</button>
+            <button class="theme-btn" data-theme="ember">ember</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FUI stage: a three-column tactical layout beneath the HUD. Left/right
+         columns hold floating telemetry panels; the center cell mounts the
+         holographic orb; the footer carries the TAP TO TALK mic. -->
+    <main class="stage">
+      <aside class="col col-left" aria-label="Transcript panel">
+        <!-- Top-left: live conversation transcript (you <-> Oracle) -->
+        <section class="panel panel-transcript">
+          <header class="panel-head">
+            <span class="led"></span><span class="led"></span><span class="led"></span>
+            <span class="panel-title">Transcript</span>
+          </header>
+          <div id="hud-transcript" class="transcript" aria-live="polite">
+            <div class="t-empty">awaiting voice input&hellip;</div>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Center column is intentionally empty: the full-window orb shows through
+           here, with the side panels floating over its glow. -->
+      <div class="col-center" aria-hidden="true"></div>
+
+      <aside class="col col-right" aria-label="Telemetry panels">
+
+      </aside>
+
+      <!-- Footer: circular TAP TO TALK mic. Proxies the same listening logic as
+           #mic-btn (wired together in main.ts). -->
+      <footer class="stage-footer">
+        <button id="mic-fab" class="mic-button" type="button" aria-label="Tap to talk">
+          <svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"
+            />
+            <path class="mic-stem" d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" />
+          </svg>
+          <span class="mic-label">TAP TO TALK</span>
+        </button>
+        <!-- Live mic oscilloscope, docked under the talk control (telemetry draws the line). -->
+        <svg id="hud-wave" class="mic-wave" viewBox="0 0 240 64" preserveAspectRatio="none" aria-hidden="true">
+          <line class="wave-axis" x1="0" y1="61" x2="240" y2="61" />
+        </svg>
+      </footer>
+    </main>
+
+    <!-- Terminal layer: floating draggable/resizable terminal windows -->
+    <div id="terminal-layer" class="terminal-layer"></div>
+
+    <!-- Diff viewer layer: floating panel showing file diffs from Claude -->
+    <div id="diff-layer" class="terminal-layer"></div>
+
+    <!-- Spoken reply caption: keeps replies READABLE even when audio is off.
+         Mood markers are stripped before they reach here. -->
+    <div id="caption" class="caption" aria-live="polite"></div>
+
+    <!-- Current state label (also reflected onto body[data-state]). -->
+    <div id="status" class="status"></div>
+
+    <script type="module" src="/src/app/main.ts"></script>
+  </body>
+</html>
