@@ -25,6 +25,7 @@
     "express": "^5.2.1",
     "nanoid": "^5.1.6",
     "node-edge-tts": "^1.2.12",
+    "onnxruntime-node": "^1.31.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {

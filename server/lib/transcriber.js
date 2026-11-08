@@ -1,4 +1,5 @@
 import { buildWavBase64FromPcmChunks, transcribeTurn } from './stt.js';
+import { speechVerdict } from './silero.js';
 import { getSttProvider } from './settings.js';
 import { cleanTranscript, getShortError } from './text.js';
 
@@ -84,25 +85,38 @@ export class CaptureTranscriberRuntime {
       return;
     }
     this.busy = true;
+    void this.processTurn(chunks, hint);
+  }
 
-    const wavBase64 = chunks.length > 0 ? buildWavBase64FromPcmChunks(chunks) : '';
-    if (wavBase64 && getSttProvider() !== 'browser') {
-      this.callbacks.emit({ type: 'audio_transcription_status', message: 'Transcribiendo…' });
-    }
-
-    void transcribeTurn({ wavBase64, hint })
-      .then(({ text, source }) => {
+  async processTurn(chunks, hint) {
+    try {
+      // Compuerta Silero: sin habla real no se gasta STT (ahorra 1-2s y
+      // evita alucinaciones). Null = Silero no disponible: seguir normal.
+      const verdict = await speechVerdict(chunks);
+      if (verdict && !verdict.speech) {
+        this.callbacks.emit({
+          type: 'audio_transcription_empty',
+          message: 'Solo ruido de fondo; seguí hablando nomás.',
+          silero: { maxProb: verdict.maxProb, ratio: verdict.speechRatio }
+        });
+        return;
+      }
+      const wavBase64 = chunks.length > 0 ? buildWavBase64FromPcmChunks(chunks) : '';
+      if (wavBase64 && getSttProvider() !== 'browser') {
+        this.callbacks.emit({ type: 'audio_transcription_status', message: 'Transcribiendo…' });
+      }
+      try {
+        const { text, source } = await transcribeTurn({ wavBase64, hint });
         this.finalize(text, source);
-      })
-      .catch((error) => {
+      } catch (error) {
         this.callbacks.emit({
           type: 'audio_transcription_empty',
           message: `No pude transcribir el turno (${getShortError(error)}); probá de nuevo o escribí.`
         });
-      })
-      .finally(() => {
-        this.busy = false;
-      });
+      }
+    } finally {
+      this.busy = false;
+    }
   }
 
   finalize(text, source) {
