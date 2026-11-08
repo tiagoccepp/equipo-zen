@@ -3,6 +3,7 @@ import { renderSkillsSection } from './skills.js';
 import { getDeepgramKey, getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
+import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripTaskTags } from './text.js';
@@ -377,11 +378,22 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  // TTS de una oración vía Supertonic local: devuelve las partes de audio
-  // (no emite chunks; el gate decide cuándo salen).
+  // TTS de una oración, locales primero: Piper (25-300ms) → Supertonic
+  // (si está arriba). Devuelve las partes de audio (no emite chunks; el
+  // gate decide cuándo salen). Si ningún local responde, [] y speakSentence
+  // cae a Deepgram → Edge → voz del navegador.
   async generateAudioParts(text, emit, signal) {
     if (!text?.trim() || signal?.aborted) {
       return [];
+    }
+
+    try {
+      const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
+      if (piperParts.length > 0) {
+        return piperParts;
+      }
+    } catch {
+      // Sidecar caído: cae a Supertonic.
     }
 
     try {
