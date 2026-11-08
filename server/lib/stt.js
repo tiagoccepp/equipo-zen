@@ -1,10 +1,12 @@
-import { GROQ_STT_MODEL, WHISPER_URL, getGroqKey, getSttLanguage, getSttProvider, getWhisperModel } from './settings.js';
+import { GROQ_STT_MODEL, WHISPER_URL, getDeepgramKey, getGroqKey, getSttLanguage, getSttProvider, getWhisperModel } from './settings.js';
+import { transcribeDeepgram } from './deepgram.js';
 
 // STT del usuario. Proveedores:
 //  - local  (default): Parakeet-TDT-0.6B-v3 vía sherpa-onnx
 //              (server/stt/parakeet_server.py, :7790, ~0.4s en CPU),
 //              con fallback a Whisper faster-whisper (:7789).
 //  - groq   : Whisper hosteado por Groq (API OpenAI-compatible, rapidísimo).
+//  - deepgram: Nova-3 cloud (smart_format + keyterms; ~2.3s desde UY).
 //  - browser: SpeechRecognition del navegador (solo el hint del cliente).
 
 const STT_TIMEOUT_MS = 20000;
@@ -104,9 +106,10 @@ async function transcribeGroq(wavBase64) {
 }
 
 // Cadena de transcripción (inyectable para tests): proveedor elegido →
-// Groq automático si hay clave (cubre Brave/Firefox sin hint) → hint del
-// navegador → error. Devuelve { text, source } o lanza.
-export async function transcribeWithFallback({ wavBase64, hint = '', provider = 'local', groqKey = '', localFn, groqFn }) {
+// Groq automático si hay clave (cubre Brave/Firefox sin hint) → Deepgram
+// automático si hay clave → hint del navegador → error.
+// Devuelve { text, source } o lanza.
+export async function transcribeWithFallback({ wavBase64, hint = '', provider = 'local', groqKey = '', deepgramKey = '', localFn, groqFn, deepgramFn }) {
   if (provider === 'browser' || !wavBase64) {
     if (hint) {
       return { text: hint, source: 'client' };
@@ -117,11 +120,21 @@ export async function transcribeWithFallback({ wavBase64, hint = '', provider = 
         return { text, source: 'groq' };
       }
     }
+    if (deepgramKey && wavBase64 && deepgramFn) {
+      const text = await deepgramFn(wavBase64);
+      if (text) {
+        return { text, source: 'deepgram' };
+      }
+    }
     throw new Error('Sin transcripción del navegador.');
   }
 
   try {
-    const text = provider === 'groq' ? await groqFn(wavBase64) : await localFn(wavBase64);
+    const text = provider === 'groq'
+      ? await groqFn(wavBase64)
+      : provider === 'deepgram' && deepgramFn
+        ? await deepgramFn(wavBase64)
+        : await localFn(wavBase64);
     if (text) {
       return { text, source: provider };
     }
@@ -132,6 +145,16 @@ export async function transcribeWithFallback({ wavBase64, hint = '', provider = 
         const text = await groqFn(wavBase64);
         if (text) {
           return { text, source: 'groq' };
+        }
+      } catch {
+        // Sigue a Deepgram / hint.
+      }
+    }
+    if (provider !== 'deepgram' && deepgramKey && deepgramFn) {
+      try {
+        const text = await deepgramFn(wavBase64);
+        if (text) {
+          return { text, source: 'deepgram' };
         }
       } catch {
         // Cae al hint del navegador.
@@ -150,7 +173,9 @@ export async function transcribeTurn({ wavBase64, hint = '' }) {
     hint,
     provider: getSttProvider(),
     groqKey: getGroqKey(),
+    deepgramKey: getDeepgramKey(),
     localFn: transcribeLocal,
-    groqFn: transcribeGroq
+    groqFn: transcribeGroq,
+    deepgramFn: transcribeDeepgram
   });
 }

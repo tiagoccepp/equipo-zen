@@ -1,9 +1,10 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getMinimaxModels } from './settings.js';
+import { getDeepgramKey, getMinimaxModels } from './settings.js';
 import { streamChat } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
+import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripTaskTags } from './text.js';
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
@@ -70,8 +71,27 @@ export class LiveAgentRuntime {
         return;
       }
       if (parts.length === 0) {
-        // Sin Supertonic: Edge TTS (nube, sin clave) → un MP3 por oración.
-        // Si Edge falla, el cliente habla por speechSynthesis (timeout).
+        // Sin Supertonic: Deepgram Aura (nube con clave, voces ES) → Edge
+        // TTS (nube sin clave) → speechSynthesis del cliente.
+        if (getDeepgramKey()) {
+          try {
+            const dgParts = await synthesizeDeepgram(spoken, this.agent?.voice || 'M1');
+            if (dgParts.length > 0 && !signal?.aborted) {
+              const dgToken = await ensureGateToken(16000);
+              if (!signal?.aborted) {
+                for (const part of dgParts) {
+                  if (signal?.aborted) {
+                    return;
+                  }
+                  gate.sendChunk(dgToken, part.data, part.mimeType);
+                }
+                return;
+              }
+            }
+          } catch {
+            // Cae a Edge.
+          }
+        }
         try {
           const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
           if (signal?.aborted) {

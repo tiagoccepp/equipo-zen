@@ -22,7 +22,7 @@ export const MINIMAX_MODEL_OPTIONS = LLM_MODEL_OPTIONS.minimax;
 export const DEEPSEEK_MODEL_OPTIONS = LLM_MODEL_OPTIONS.deepseek;
 export const OPENCODE_MODEL_OPTIONS = LLM_MODEL_OPTIONS.opencode;
 export const WHISPER_MODEL_OPTIONS = ['base', 'small', 'medium', 'large-v3-turbo'];
-export const STT_PROVIDERS = ['local', 'groq', 'browser'];
+export const STT_PROVIDERS = ['local', 'groq', 'deepgram', 'browser'];
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 export const WHISPER_URL = process.env.WHISPER_URL || 'http://127.0.0.1:7789';
 
@@ -94,6 +94,10 @@ export function getGroqKey() {
   return dbValue('stt.groqKey') || process.env.GROQ_API_KEY || '';
 }
 
+export function getDeepgramKey() {
+  return dbValue('stt.deepgramKey') || process.env.DEEPGRAM_API_KEY || '';
+}
+
 export function getSttLanguage() {
   return dbValue('stt.language') || 'es';
 }
@@ -120,11 +124,12 @@ const EDITABLE_KEYS = new Set([
   'stt.provider',
   'stt.whisperModel',
   'stt.groqKey',
+  'stt.deepgramKey',
   'stt.language',
   'tts.language'
 ]);
 
-const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey']);
+const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
 
 function mask(value) {
   if (!value) {
@@ -157,6 +162,8 @@ export function publicSettings() {
       whisperModelOptions: WHISPER_MODEL_OPTIONS,
       groqKeySet: Boolean(getGroqKey()),
       groqKeyMasked: mask(getGroqKey()),
+      deepgramKeySet: Boolean(getDeepgramKey()),
+      deepgramKeyMasked: mask(getDeepgramKey()),
       language: getSttLanguage()
     },
     tts: {
