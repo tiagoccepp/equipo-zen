@@ -13,6 +13,7 @@
 // - fetch solo http/https, con timeout y tope de bytes.
 // - Salidas truncadas: nada de volcar archivos enteros al prompt.
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -377,6 +378,315 @@ registerTool({
 });
 
 // ---------------------------------------------------------------------------
+// 2B. Computer: manos que tocan la compu (open_url / window_list / screenshot)
+// ---------------------------------------------------------------------------
+//
+// El servidor apunta a correr en la compu de Tito (rama desktop-tauri): estas
+// tools abren URLs, listan ventanas y capturan pantalla. En un box sin X
+// (DISPLAY vacío) fallan con error claro, no rompen el turno.
+//
+// Sin shell: los comandos se lanzan con spawn(argv) para que el target del
+// modelo nunca pase por /bin/sh (run_cmd sí usa shell y por eso NO sirve
+// para abrir URLs con ? y & sin escaparse).
+//
+// Tests: NO abren ventanas reales. Toda la interacción con el SO pasa por
+// `computer` (which/run/display), que los tests reemplazan con fakes vía
+// _setComputer(). Mismo precedente que _resetMcpCache.
+
+const COMPUTER_RUN_TIMEOUT_MS = 15000;
+const WINDOW_LIST_MAX = 50;
+const OPEN_URL_MAX_CHARS = 500;
+
+function spawnSinShell(cmd, args, { timeoutMs = COMPUTER_RUN_TIMEOUT_MS, cwd = undefined } = {}) {
+  return new Promise((resolve) => {
+    let hijo;
+    try {
+      hijo = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      resolve({ ok: false, codigo: -1, salida: '', error: errorClaro(error) });
+      return;
+    }
+    let out = '';
+    let err = '';
+    hijo.stdout.on('data', (d) => { if (out.length < 8000) out += String(d); });
+    hijo.stderr.on('data', (d) => { if (err.length < 8000) err += String(d); });
+    const reloj = setTimeout(() => {
+      hijo.kill('SIGKILL');
+      resolve({ ok: false, codigo: -1, expiro: true, salida: out, error: `timeout ${Math.round(timeoutMs / 1000)}s` });
+    }, timeoutMs);
+    hijo.on('error', (e) => {
+      clearTimeout(reloj);
+      resolve({ ok: false, codigo: -1, salida: out, error: errorClaro(e) });
+    });
+    hijo.on('close', (codigo) => {
+      clearTimeout(reloj);
+      resolve({ ok: codigo === 0, codigo, salida: out, error: err });
+    });
+  });
+}
+
+// which sin shell: recorre el PATH buscando un ejecutable. Los candidatos son
+// constantes del código, nunca input del modelo.
+async function cualHay(candidatos) {
+  const dirs = String(process.env.PATH || '/usr/bin:/bin').split(':');
+  for (const c of candidatos) {
+    for (const dir of dirs) {
+      if (!dir) continue;
+      try {
+        await fs.access(path.join(dir, c), fs.constants.X_OK);
+        return c;
+      } catch {
+        // Sigue buscando.
+      }
+    }
+  }
+  return null;
+}
+
+const computerDefaults = {
+  which: (candidatos) => cualHay(candidatos),
+  run: (cmd, args, opts) => spawnSinShell(cmd, args, opts),
+  hayDisplay: () => Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
+  display: () => process.env.DISPLAY || ':0',
+  esWayland: () => Boolean(process.env.WAYLAND_DISPLAY && !process.env.DISPLAY)
+};
+
+export const computer = { ...computerDefaults };
+export function _setComputer(over) { Object.assign(computer, over || {}); }
+export function _resetComputer() { Object.assign(computer, computerDefaults); }
+
+// Secreto = RUTA a credencial (archivos), no query strings: si Tito pide
+// abrir una URL con ?token=, el pedido explícito manda.
+const TARGET_SECRETO = [
+  /\.env(\b|$)/i, /\.ssh\b/i, /id_rsa/i, /credentials?/i, /\.pem(\b|$)/i, /\bpasswd\b|\bshadow\b/i
+];
+
+registerTool({
+  name: 'open_url',
+  description: 'Abre una URL o archivo en la compu (navegador/app). Solo se niega si parece secreto/credencial.',
+  parameters: {
+    type: 'object',
+    properties: { target: { type: 'string', description: 'URL o ruta, ej. "https://google.com"' } },
+    required: ['target']
+  },
+  execute: async (args, ctx) => {
+    const { companyId, slug } = ctxWorkspace(ctx);
+    const target = String(args.target || '').trim();
+    if (!target) {
+      return { ok: false, output: '', error: 'target vacío: pasá una URL o ruta' };
+    }
+    if (target.length > OPEN_URL_MAX_CHARS) {
+      return { ok: false, output: '', error: `target demasiado largo (máx ${OPEN_URL_MAX_CHARS} chars)` };
+    }
+    const pelado = target.replace(/^file:\/\//i, '');
+    if (TARGET_SECRETO.some((p) => p.test(pelado))) {
+      return { ok: false, output: '', error: `negado en vivo: ${target.slice(0, 80)} parece secreto/credencial` };
+    }
+    const opener = await computer.which(['xdg-open']);
+    if (!opener) {
+      return { ok: false, output: '', error: 'sin xdg-open: no sé abrir URLs en esta compu (instalá xdg-utils)' };
+    }
+    // DISPLAY heredado (spawn hereda process.env): en el desktop de Tito abre
+    // de verdad; en el gateway headless xdg-open falla y se reporta.
+    const r = await computer.run(opener, [target], { timeoutMs: COMPUTER_RUN_TIMEOUT_MS, cwd: projectDir(companyId, slug) });
+    if (r.expiro) {
+      // xdg-open a veces espera a la app: si lanzó y no confirmó, avisar es
+      // más honesto que decir que falló (la pestaña suele quedar abierta).
+      return { ok: true, output: `abierto ${target.slice(0, 200)} (sin confirmación: timeout 15s, la app puede haber quedado abierta)` };
+    }
+    if (!r.ok) {
+      const motivo = String(r.error || r.salida || 'falló').slice(0, 200);
+      const pista = computer.hayDisplay() ? '' : ' (sin DISPLAY: esta compu no tiene pantalla gráfica)';
+      return { ok: false, output: '', error: `no pude abrir ${target.slice(0, 100)}: ${motivo}${pista}` };
+    }
+    return { ok: true, output: `abierto ${target.slice(0, 200)}` };
+  }
+});
+
+function formatearVentanas(ventanas) {
+  if (ventanas.length === 0) {
+    return '(sin ventanas visibles)';
+  }
+  const pagina = ventanas.slice(0, WINDOW_LIST_MAX);
+  const lineas = pagina.map((v) => `- ${v.titulo}${v.app ? ` (${v.app})` : ''}`);
+  const resto = ventanas.length - pagina.length;
+  return `${ventanas.length} ventana(s):\n${lineas.join('\n')}${resto > 0 ? `\n…[${resto} más, tope ${WINDOW_LIST_MAX}]` : ''}`;
+}
+
+// wmctrl -l -x: ID ESCRITORIO CLASE HOST TÍTULO (título con espacios al final).
+async function ventanasWmctrl() {
+  const r = await computer.run('wmctrl', ['-l', '-x'], {});
+  if (!r.ok) {
+    throw new Error(String(r.error || r.salida || 'wmctrl falló').slice(0, 200));
+  }
+  const ventanas = [];
+  for (const linea of String(r.salida || '').split('\n')) {
+    const m = linea.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/);
+    if (!m) continue;
+    const titulo = (m[5] || '').trim();
+    if (!titulo) continue;
+    ventanas.push({ titulo: titulo.slice(0, 160), app: String(m[3] || '').split('.')[0].slice(0, 60) || null });
+  }
+  return { ok: true, output: formatearVentanas(ventanas) };
+}
+
+// xdotool: search da IDs, getwindowname da títulos (un run por ventana, con tope).
+async function ventanasXdotool() {
+  const r = await computer.run('xdotool', ['search', '--onlyvisible', '--name', '.'], {});
+  if (!r.ok) {
+    throw new Error(String(r.error || r.salida || 'xdotool falló').slice(0, 200));
+  }
+  const ids = String(r.salida || '').split('\n').map((s) => s.trim()).filter(Boolean).slice(0, WINDOW_LIST_MAX);
+  const ventanas = [];
+  for (const id of ids) {
+    if (!/^\d+$/.test(id)) continue;
+    const n = await computer.run('xdotool', ['getwindowname', id], {});
+    const titulo = String(n.salida || '').trim();
+    if (n.ok && titulo) {
+      ventanas.push({ titulo: titulo.slice(0, 160), app: null });
+    }
+  }
+  return { ok: true, output: formatearVentanas(ventanas) };
+}
+
+// xwininfo -root -tree: las hijas directas del root (indentación corta) son
+// las ventanas top-level. Línea típica:
+// `     0x400001 "Terminal": ("gnome-terminal" "Gnome-terminal") ...`
+async function ventanasXwininfo() {
+  const r = await computer.run('xwininfo', ['-root', '-tree'], {});
+  if (!r.ok) {
+    throw new Error(String(r.error || r.salida || 'xwininfo falló').slice(0, 200));
+  }
+  const ventanas = [];
+  for (const linea of String(r.salida || '').split('\n')) {
+    const m = linea.match(/^(\s*)(0x[0-9a-fA-F]+)\s+"([^"]*)"/);
+    if (!m || m[1].length > 5 || !m[3] || m[3] === '(has no name)') continue;
+    const clase = linea.match(/\(\s*"[^"]+"\s+"([^"]+)"\s*\)/);
+    ventanas.push({ titulo: m[3].slice(0, 160), app: clase ? clase[1].slice(0, 60) : null });
+  }
+  return { ok: true, output: formatearVentanas(ventanas) };
+}
+
+registerTool({
+  name: 'window_list',
+  description: 'Lista ventanas visibles (título + app). Necesita wmctrl, xdotool o xwininfo + X.',
+  parameters: { type: 'object', properties: {} },
+  execute: async () => {
+    if (!computer.hayDisplay()) {
+      return { ok: false, output: '', error: 'sin sesión gráfica (DISPLAY vacío): esta compu no muestra ventanas' };
+    }
+    const backend = await computer.which(['wmctrl', 'xdotool', 'xwininfo']);
+    if (!backend) {
+      return { ok: false, output: '', error: 'sin wmctrl/xdotool/xwininfo: instalá uno (ej. sudo apt install wmctrl) para listar ventanas' };
+    }
+    try {
+      if (backend === 'wmctrl') return await ventanasWmctrl();
+      if (backend === 'xdotool') return await ventanasXdotool();
+      return await ventanasXwininfo();
+    } catch (error) {
+      return { ok: false, output: '', error: `no pude listar ventanas (${backend}): ${errorClaro(error)}` };
+    }
+  }
+});
+
+// Dimensiones del IHDR PNG sin dependencias: firma(8) + len(4) + 'IHDR'(4) +
+// ancho(4 BE) + alto(4 BE). Si no parsea, null (se reporta sin tamaño).
+async function leerDimsPng(ruta) {
+  let fd = null;
+  try {
+    fd = await fs.open(ruta, 'r');
+    const buf = Buffer.alloc(26);
+    const { bytesRead } = await fd.read(buf, 0, 26, 0);
+    if (bytesRead < 26) return null;
+    if (buf.readUInt32BE(0) !== 0x89504e47 || buf.readUInt32BE(4) !== 0x0d0a1a0a) return null;
+    if (buf.toString('latin1', 12, 16) !== 'IHDR') return null;
+    return { ancho: buf.readUInt32BE(16), alto: buf.readUInt32BE(20) };
+  } catch {
+    return null;
+  } finally {
+    try { await fd?.close(); } catch { /* ya está */ }
+  }
+}
+
+const SHOT_DIR = 'shots';
+
+async function intentarCaptura(backend, destino) {
+  if (backend === 'scrot') {
+    return computer.run('scrot', [destino], {});
+  }
+  if (backend === 'gnome-screenshot') {
+    return computer.run('gnome-screenshot', ['-f', destino], {});
+  }
+  if (backend === 'grim') {
+    return computer.run('grim', [destino], {});
+  }
+  if (backend === 'ffmpeg') {
+    return computer.run('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'x11grab', '-i', computer.display(), '-frames:v', '1', destino], {});
+  }
+  if (backend === 'xwd') {
+    // xwd escribe .xwd; ffmpeg lo convierte a PNG. Necesita ambos.
+    if (!await computer.which(['ffmpeg'])) {
+      return { ok: false, codigo: -1, salida: '', error: 'xwd necesita ffmpeg para convertir a PNG' };
+    }
+    const tmp = `${destino}.xwd`;
+    const a = await computer.run('xwd', ['-root', '-silent', '-out', tmp], {});
+    if (!a.ok) {
+      return a;
+    }
+    try {
+      return await computer.run('ffmpeg', ['-y', '-loglevel', 'error', '-i', tmp, destino], {});
+    } finally {
+      try { await fs.unlink(tmp); } catch { /* best-effort */ }
+    }
+  }
+  return { ok: false, codigo: -1, salida: '', error: `backend desconocido: ${backend}` };
+}
+
+registerTool({
+  name: 'screenshot',
+  description: 'Saca captura de pantalla a shots/<ts>.png (path + tamaño). Es entregable: el modelo no la ve.',
+  parameters: { type: 'object', properties: {} },
+  execute: async (args, ctx) => {
+    const { companyId, slug } = ctxWorkspace(ctx);
+    if (!computer.hayDisplay()) {
+      return { ok: false, output: '', error: 'sin sesión gráfica (DISPLAY vacío): no hay pantalla que capturar' };
+    }
+    const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+    const rel = `${SHOT_DIR}/${ts}.png`;
+    let destino;
+    try {
+      destino = safeWorkspacePath(companyId, slug, rel);
+    } catch (error) {
+      return { ok: false, output: '', error: `no pude preparar la captura: ${errorClaro(error)}` };
+    }
+    await fs.mkdir(path.dirname(destino), { recursive: true });
+    // grim es wayland, scrot es X: el orden depende del entorno, pero se
+    // intentan TODOS los instalados hasta que uno funcione (un binario
+    // presente no garantiza que ande en esta sesión).
+    const orden = computer.esWayland()
+      ? ['grim', 'gnome-screenshot', 'ffmpeg', 'xwd']
+      : ['scrot', 'gnome-screenshot', 'grim', 'ffmpeg', 'xwd'];
+    let ultimoError = '';
+    let intentoAlguno = false;
+    for (const cand of orden) {
+      if (!await computer.which([cand])) continue;
+      intentoAlguno = true;
+      const r = await intentarCaptura(cand, destino);
+      if (r.ok) {
+        const dims = await leerDimsPng(destino);
+        const tam = dims ? `${dims.ancho}x${dims.alto}` : 'tamaño desconocido';
+        return { ok: true, output: `captura ${rel} (${tam})` };
+      }
+      ultimoError = String(r.error || r.salida || 'falló').slice(0, 160);
+    }
+    if (!intentoAlguno) {
+      return { ok: false, output: '', error: 'sin capturador (scrot/gnome-screenshot/grim/ffmpeg/xwd): instalá uno (ej. sudo apt install scrot)' };
+    }
+    return { ok: false, output: '', error: `captura fallida (${ultimoError || 'sin motivo'})` };
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 3. Formato v1: JSON-en-texto  ```tool:NOMBRE {json}
 // ---------------------------------------------------------------------------
 
@@ -472,7 +782,12 @@ const GATE_PATTERNS = [
   /\bbusc[ao]\w*\b/, /\bbuscá\b/, /\bfetch\b/, /\btrae\b/, /\btraé\b/,
   /\bqu[eé] hora\b/, /\bqu[eé] d[ií]a\b/, /\bfecha\b/, /\bwhat time\b/, /\btoday'?s date\b/,
   /\bfijate\b/, /\brevis[ao]\w*\b/, /\bmir[ao]\b/, /\bcheck\b/, /\blook at\b/,
-  /\blista\w*\b/, /\bque archivos\b/, /\bwhat files\b/ // list_files ('listo' a propósito NO matchea: es muletilla rioplatense)
+  /\blista\w*\b/, /\bque archivos\b/, /\bwhat files\b/, // list_files ('listo' a propósito NO matchea: es muletilla rioplatense)
+  // Computer (09/11): abrir/navegar + pantalla/ventanas. Ojo 'abril': NO usar
+  // abr* suelto. 'open' ya estaba arriba (abrí el readme).
+  /\babre\b/, /\babrir\b/, /\bnaveg\w*\b/, /\bpantalla\w*\b/, /\bcaptura\w*\b/,
+  /\bscreenshot\w*\b/, /\bventana\w*\b/,
+  /\bnavigat\w*\b/, /\bbrowse\b/, /\bwindow\w*\b/, /\bscreen\w*\b/, /\bcaptur\w*\b/
 ];
 
 function normalizarGate(texto) {

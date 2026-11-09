@@ -149,6 +149,8 @@ test('dieta D7: prompt manos voz corto, texto full, ambos listan list_files', ()
   assert.ok(voz.includes('list_files') && full.includes('list_files'), 'docs incluyen list_files');
   assert.ok(voz.length < full.length, `voz ${voz.length} no < full ${full.length}`);
   assert.ok(voz.length <= 900, `voz ${voz.length}ch > 900`);
-  assert.ok(full.length <= 1350, `full ${full.length}ch > 1350`);
+  // 09/11 computer tools (open_url/window_list/screenshot): full 1223→~1560ch.
+  // Tope 1650; voz sigue ≤900 (las 3 tools entran en 1 línea c/u).
+  assert.ok(full.length <= 1650, `full ${full.length}ch > 1650`);
   assert.ok(voz.includes('tool:'), 'voz muestra formato');
 });
