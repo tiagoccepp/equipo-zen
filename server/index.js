@@ -105,6 +105,10 @@ import { Workforce } from './lib/workforce.js';
 import { attachMeetingServer } from './lib/ws.js';
 
 const store = new Store(DB_PATH);
+if (process.env.EQUIPO_EPHEMERAL_MEETINGS === '1') {
+  const n = store.clearEphemeral();
+  console.log(`Modo test: reuniones efímeras (${n} filas limpiadas).`);
+}
 const seededCompany = store.ensureCompanies(companyTemplates, LEGACY_VOICE_MAP);
 if (seededCompany) {
   console.log(`Empresa inicial creada: ${seededCompany.name}.`);

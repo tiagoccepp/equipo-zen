@@ -83,6 +83,21 @@ export class Store {
     this.db.close();
   }
 
+  // Modo test (Tito 09/11): con EQUIPO_EPHEMERAL_MEETINGS=1 el arranque
+  // borra reuniones + turnos + telemetría. Settings/agentes/empresas se
+  // conservan (las keys viven en settings). Retorna filas borradas.
+  clearEphemeral() {
+    let deleted = 0;
+    for (const t of ['telemetry_events', 'turns', 'meeting_agents', 'tasks', 'tasks_nuevo', 'session_summaries', 'router_suggestions', 'meetings']) {
+      try {
+        deleted += this.db.prepare(`DELETE FROM ${t}`).run().changes;
+      } catch {
+        // Tabla ausente en DB viejas: seguir con las demás.
+      }
+    }
+    return deleted;
+  }
+
   // ── Agentes ────────────────────────────────────────────────────────────
 
   // Primer arranque: crea la Distribuidora Norte desde la plantilla.
