@@ -154,7 +154,7 @@ export function createApp({ store }) {
     const current = publicSettings();
     res.json({
       llm: { configured: getLlmKeys().length > 0, provider: getLlmProvider(), model: current.llm.model },
-      tts: { engine: 'supertonic', healthy: tts, deepgramConfigured: current.stt.deepgramKeySet },
+      tts: { engine: current.tts.engine, healthy: tts, deepgramConfigured: current.stt.deepgramKeySet },
       stt: {
         provider: current.stt.provider,
         localHealthy: whisper,

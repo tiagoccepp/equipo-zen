@@ -258,7 +258,7 @@ export type ServerMessage =
   | { type: 'audio_listening_start' }
   | { type: 'audio_listening_stop' }
   | { type: 'user_audio_transcript_delta'; delta: string; text: string }
-  | { type: 'user_audio_turn_final'; text: string; source: 'local' | 'groq' | 'client' | 'live' | 'fallback' }
+  | { type: 'user_audio_turn_final'; text: string; source: 'local' | 'parakeet' | 'whisper' | 'groq' | 'deepgram' | 'client' | 'live' | 'fallback' }
   | { type: 'audio_transcription_status'; message: string }
   | { type: 'audio_transcription_empty'; message: string }
   | { type: 'api_rotation_start'; scope: string; message: string; turnId?: string; agentId?: string }

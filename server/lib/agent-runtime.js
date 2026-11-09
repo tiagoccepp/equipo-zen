@@ -1,6 +1,6 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsLanguage } from './settings.js';
+import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsEngine, getTtsLanguage, ttsLocalOrder } from './settings.js';
 import { completeChat, streamChat, withTimeout } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
@@ -623,10 +623,11 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  // TTS de una oración: Deepgram Aura primero (la elegida: javier-es M /
-  // selena-es F), luego locales (Piper → Supertonic). Devuelve las partes
-  // de audio (no emite chunks; el gate decide cuándo salen). Si nada
-  // responde, [] y speakSentence cae a Edge → voz del navegador.
+  // TTS de una oración: Deepgram Aura primero si hay key (la elegida:
+  // javier-es M / selena-es F), luego locales en el orden de Ajustes →
+  // tts.engine (auto = Piper → Supertonic). Devuelve las partes de audio
+  // (no emite chunks; el gate decide cuándo salen). Si nada responde, []
+  // y speakSentence cae a Edge → voz del navegador.
   async generateAudioParts(text, emit, signal) {
     if (!text?.trim() || signal?.aborted) {
       return [];
@@ -643,32 +644,36 @@ export class LiveAgentRuntime {
       }
     }
 
-    // Piper va primero en AMBOS idiomas: ya tiene voces inglesas (jenny F
-    // / lessac M) y mapVoiceToPiper elige según tts.language. Cada oración
-    // en inglés evita así los ~2.4s de la nube Deepgram. Cadena en ambos
-    // idiomas: Deepgram → Piper → Supertonic → (Edge downstream).
-    try {
-      const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
-      if (piperParts.length > 0) {
-        return piperParts;
+    // Locales en el orden del setting (auto/piper = Piper → Supertonic;
+    // supertonic = Supertonic → Piper). Piper primero en AMBOS idiomas por
+    // default: tiene voces inglesas (jenny F / lessac M) y cada oración en
+    // inglés evita los ~2.4s de la nube Deepgram. El segundo motor es
+    // respaldo del primero: el orden elige preferencia, no exclusividad.
+    const voice = this.agent?.voice || 'M1';
+    const localSynths = {
+      piper: () => synthesizePiper(text, voice, { signal }),
+      supertonic: () => synthesize(text, voice, { signal })
+    };
+    let lastError = null;
+    for (const engine of ttsLocalOrder(getTtsEngine())) {
+      try {
+        const parts = await localSynths[engine]();
+        if (parts.length > 0) {
+          return parts;
+        }
+      } catch (error) {
+        lastError = error;
       }
-    } catch {
-      // Sidecar caído: cae a Supertonic.
     }
-
-    try {
-      return await synthesize(text, this.agent.voice || 'M1', { signal });
-    } catch (error) {
-      if (!signal?.aborted) {
-        emit({
-          type: 'api_rotation_failed',
-          scope: `${this.name} voz local`,
-          agentId: this.id,
-          message: getShortError(error)
-        });
-      }
-      return [];
+    if (lastError && !signal?.aborted) {
+      emit({
+        type: 'api_rotation_failed',
+        scope: `${this.name} voz local`,
+        agentId: this.id,
+        message: getShortError(lastError)
+      });
     }
+    return [];
   }
 
   reset() {}

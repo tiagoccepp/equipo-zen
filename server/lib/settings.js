@@ -21,8 +21,17 @@ export const LLM_MODEL_OPTIONS = Object.fromEntries(
 export const MINIMAX_MODEL_OPTIONS = LLM_MODEL_OPTIONS.minimax;
 export const DEEPSEEK_MODEL_OPTIONS = LLM_MODEL_OPTIONS.deepseek;
 export const OPENCODE_MODEL_OPTIONS = LLM_MODEL_OPTIONS.opencode;
-export const WHISPER_MODEL_OPTIONS = ['base', 'small', 'medium', 'large-v3-turbo'];
+export const WHISPER_MODEL_OPTIONS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo'];
+// Motor TTS local preferido: 'auto' = cadena actual (Piper → Supertonic),
+// 'piper'/'supertonic' fuerzan el orden (el otro queda de respaldo). El Deepgram
+// con key siempre va primero (override cloud, ver agent-runtime).
+export const TTS_ENGINE_OPTIONS = ['auto', 'piper', 'supertonic'];
 export const STT_PROVIDERS = ['local', 'groq', 'deepgram', 'browser'];
+// Motores direccionables por stt.order (la cadena STT se recorre en ese
+// orden; local = parakeet+whisper partible). El hint del navegador es
+// red final implícita, no un motor.
+export const STT_ENGINES = ['parakeet', 'whisper', 'groq', 'deepgram'];
+export const DEFAULT_STT_ORDER = 'parakeet,groq,deepgram';
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 export const WHISPER_URL = process.env.WHISPER_URL || 'http://127.0.0.1:7789';
 
@@ -87,7 +96,10 @@ export function getSttProvider() {
 
 export function getWhisperModel() {
   const value = dbValue('stt.whisperModel');
-  return WHISPER_MODEL_OPTIONS.includes(value) ? value : (process.env.WHISPER_MODEL || 'small');
+  // 09/11: default tiny (era small). Whisper es el último fallback local y el
+  // box vive al 96% de RAM: tiny-int8 (~200M cargado) transcribe igual y no
+  // swapea; small/base/medium siguen elegibles en Ajustes.
+  return WHISPER_MODEL_OPTIONS.includes(value) ? value : (process.env.WHISPER_MODEL || 'tiny');
 }
 
 export function getGroqKey() {
@@ -102,10 +114,58 @@ export function getSttLanguage() {
   return dbValue('stt.language') || 'auto';
 }
 
+// Orden de la cadena STT (CSV de motores, ej. 'parakeet,groq,deepgram'):
+// define en qué secuencia se intentan los motores con fallbacks.
+// Sin override, respeta el legacy stt.provider (groq/deepgram/browser
+// fijan cabeza); provider=local (default) → DEFAULT_STT_ORDER.
+export function getSttOrder() {
+  const raw = dbValue('stt.order');
+  if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+    const parsed = parseSttOrder(String(raw));
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+  const provider = getSttProvider();
+  if (provider === 'groq') {
+    return ['groq', 'deepgram'];
+  }
+  if (provider === 'deepgram') {
+    return ['deepgram', 'groq']; // Legacy: deepgram caído probaba groq.
+  }
+  if (provider === 'browser') {
+    return [];
+  }
+  return parseSttOrder(DEFAULT_STT_ORDER);
+}
+
+// ¿Hay override explícito de stt.order en DB? (transcribeTurn lo usa
+// para decidir legacy-browser vs order.)
+export function isSttOrderSet() {
+  const raw = dbValue('stt.order');
+  return raw !== null && raw !== undefined && String(raw).trim() !== '';
+}
+
+export function parseSttOrder(csv) {
+  const seen = new Set();
+  const out = [];
+  for (const token of String(csv || '').split(',')) {
+    const engine = token.trim().toLowerCase();
+    // Alias legacy: 'local' = los dos motores locales en orden clásico.
+    const expanded = engine === 'local' ? ['parakeet', 'whisper'] : [engine];
+    for (const e of expanded) {
+      if (STT_ENGINES.includes(e) && !seen.has(e)) {
+        seen.add(e);
+        out.push(e);
+      }
+    }
+  }
+  return out;
+}
+
 // Umbral de confianza STT (0..1, default 0.55): debajo de min(setting,
 // 0.4) con turno corto y key de Deepgram, stt.js reintenta una vez en
-// la nube (§2e mínimo). stt.order NO existe: orden fijo local→groq→
-// deepgram→hint (ver transcribeWithFallback).
+// la nube (§2e mínimo).
 export function getSttMinConfidence() {
   const raw = dbValue('stt.minConfidence');
   if (raw === null || raw === undefined || raw === '') {
@@ -119,6 +179,22 @@ export function getSttMinConfidence() {
 
 export function getTtsLanguage() {
   return dbValue('tts.language') || SUPERTONIC_LANGUAGE;
+}
+
+export function getTtsEngine() {
+  const value = dbValue('tts.engine');
+  if (TTS_ENGINE_OPTIONS.includes(value)) {
+    return value;
+  }
+  const fromEnv = String(process.env.TTS_ENGINE || '').trim().toLowerCase();
+  return TTS_ENGINE_OPTIONS.includes(fromEnv) ? fromEnv : 'auto';
+}
+
+// Orden de los motores LOCALES según tts.engine. Pura (testeable sin red
+// ni settings): 'supertonic' invierte el default, el resto mantiene
+// Piper → Supertonic.
+export function ttsLocalOrder(engine = 'auto') {
+  return engine === 'supertonic' ? ['supertonic', 'piper'] : ['piper', 'supertonic'];
 }
 
 export function getTtsUrl() {
@@ -172,6 +248,56 @@ export function getSalaTimeoutMs() {
   return (Number.isFinite(value) && value >= 1000 && value <= 60000) ? value : 15000;
 }
 
+// ── Sala v2: discusión ordenada (rondas + síntesis) ────────────────────────
+// Flag default OFF: con v2 off el comportamiento es v1 byte a byte.
+// SOP: texto editable vía PATCH /api/settings; sala.js lo parsea (knobs) y
+// lo inyecta como reglas a los especialistas.
+
+export const DEFAULT_SOP = [
+  'S1 una sola voz: solo Pablo habla con Tito; especialistas escriben en sala.',
+  'S2 gate antes de sala: default Pablo solo; sala solo con trade-off, multi-oficio u objecion abierta.',
+  'S3 encuadre: pregunta + criterio de exito antes de R1; pedido difuso -> 1 pregunta a Tito.',
+  'S4 orden fijo: R1 por score desc, R2 inverso; 1 mensaje por voz por ronda; formato APORTE/DISENSO.',
+  'S5 SILENCIO es valido; SILENCIO con [TAREA_*] igual crea la tarea.',
+  'S6 disenso con propuesta: objetar sin alternativa se descarta.',
+  'S7 Pablo decide: sin consenso en 2 rondas, voto de calidad; no vuelve a Tito salvo irreversible.',
+  'S8 un dueno por tarea.',
+  'S9 irreversibles a Tito: borrar/enviar/gastar/publicar/credenciales -> esperar el si.',
+  'S10 topes: max 2 rondas, especialista caido >20s = ausente, se sigue; la sala jamas cuelga el turno.',
+  'S11 acta minima: pregunta, decision, duenos, riesgo.',
+  'S12 verbosidad de Tito manda (quiet/normal/verbose).',
+  'order: score-desc',
+  'max_rounds: 2',
+  'agent_timeout_ms: 20000',
+  'r2: on-disagreement'
+].join('\n');
+
+export function getSalaV2() {
+  const raw = dbValue('sala.v2');
+  if (raw === null || raw === undefined || raw === '') {
+    return false;
+  }
+  const value = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value);
+}
+
+export function getSalaSop() {
+  const raw = dbValue('sala.sop');
+  if (raw === null || raw === undefined || raw === '') {
+    return DEFAULT_SOP;
+  }
+  return String(raw);
+}
+
+export function getSalaAgentTimeoutMs() {
+  const raw = dbValue('sala.agentTimeoutMs');
+  if (raw === null || raw === undefined || raw === '') {
+    return 20000;
+  }
+  const value = Number(raw);
+  return (Number.isFinite(value) && value >= 1000 && value <= 60000) ? value : 20000;
+}
+
 // ── Lectura/escritura desde la UI ───────────────────────────────────────
 
 const EDITABLE_KEYS = new Set([
@@ -182,16 +308,21 @@ const EDITABLE_KEYS = new Set([
   'llm.groqKey',
   'llm.model',
   'stt.provider',
+  'stt.order',
   'stt.whisperModel',
   'stt.groqKey',
   'stt.deepgramKey',
   'stt.language',
   'stt.minConfidence',
   'tts.language',
+  'tts.engine',
   'manos.enabled',
   'manos.maxTurns',
   'sala.v1',
-  'sala.timeoutMs'
+  'sala.timeoutMs',
+  'sala.v2',
+  'sala.sop',
+  'sala.agentTimeoutMs'
 ]);
 
 const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
@@ -223,6 +354,8 @@ export function publicSettings() {
     stt: {
       provider: getSttProvider(),
       providerOptions: STT_PROVIDERS,
+      order: getSttOrder().join(','),
+      orderDefault: DEFAULT_STT_ORDER,
       whisperModel: getWhisperModel(),
       whisperModelOptions: WHISPER_MODEL_OPTIONS,
       groqKeySet: Boolean(getGroqKey()),
@@ -233,7 +366,8 @@ export function publicSettings() {
       minConfidence: getSttMinConfidence()
     },
     tts: {
-      engine: 'supertonic',
+      engine: getTtsEngine(),
+      engineOptions: TTS_ENGINE_OPTIONS,
       language: getTtsLanguage(),
       url: getTtsUrl()
     },
@@ -243,7 +377,10 @@ export function publicSettings() {
     },
     sala: {
       v1: getSalaV1(),
-      timeoutMs: getSalaTimeoutMs()
+      timeoutMs: getSalaTimeoutMs(),
+      v2: getSalaV2(),
+      sop: getSalaSop(),
+      agentTimeoutMs: getSalaAgentTimeoutMs()
     }
   };
 }
@@ -269,7 +406,13 @@ export function applySettings(patch) {
     if (key === 'stt.provider' && value && !STT_PROVIDERS.includes(value)) {
       continue;
     }
+    if (key === 'stt.order' && value && parseSttOrder(value).length === 0) {
+      continue;
+    }
     if (key === 'stt.whisperModel' && value && !WHISPER_MODEL_OPTIONS.includes(value)) {
+      continue;
+    }
+    if (key === 'tts.engine' && value && !TTS_ENGINE_OPTIONS.includes(value)) {
       continue;
     }
     if (key === 'stt.minConfidence' && value) {
@@ -293,6 +436,19 @@ export function applySettings(patch) {
       continue;
     }
     if (key === 'sala.timeoutMs' && value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 1000 || n > 60000) {
+        continue;
+      }
+    }
+    // Sala v2: flag booleano; sop texto libre (max 8k); timeout 1000..60000.
+    if (key === 'sala.v2' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'sala.sop' && value.length > 8000) {
+      continue;
+    }
+    if (key === 'sala.agentTimeoutMs' && value) {
       const n = Number(value);
       if (!Number.isFinite(n) || n < 1000 || n > 60000) {
         continue;

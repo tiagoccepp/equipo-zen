@@ -54,8 +54,11 @@ Sin instalar nada, la app habla y escucha con la voz del navegador. Solo si
 querés mejor calidad (voces propias por empleado + Whisper local):
 
 ```bash
-python3 -m venv .venv-tts
-.venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn
+# Venvs dedicados (uno por motor, fuera del repo):
+python3 -m venv ~/.local/share/equipo/supertonic-venv
+~/.local/share/equipo/supertonic-venv/bin/pip install 'supertonic[serve]'
+python3 -m venv ~/.local/share/equipo/whisper-venv
+~/.local/share/equipo/whisper-venv/bin/pip install faster-whisper fastapi uvicorn
 ```
 
 ## Las organizaciones

@@ -1276,12 +1276,13 @@ export class MeetingSession {
       return;
     }
 
-    // Team v1 (sala): 1 consulta silenciosa a especialista tras flag sala.v1.
-    // Todo fallo/timeout/flag-off degrada a turno normal (maybeConsultSala
-    // nunca lanza). El NOTE se anexa solo al texto que ve el modelo.
+    // Team v1/v2 (sala): consulta silenciosa tras flag sala.v1 (v1: 1 voz;
+    // v2: rondas + síntesis si sala.v2 on). Todo fallo/timeout/flag-off
+    // degrada a turno normal (maybeConsultSala nunca lanza). El NOTE se
+    // anexa solo al texto que ve el modelo. signal corta las rondas v2.
     let teamNote = '';
     try {
-      teamNote = await maybeConsultSala({ text, route, deps: { completeChat, keyRing: this.keyRing, onTelemetry: (t, p) => this.logTelemetry(t, p, turnId) } }) || '';
+      teamNote = await maybeConsultSala({ text, route, deps: { completeChat, keyRing: this.keyRing, signal, onTelemetry: (t, p) => this.logTelemetry(t, p, turnId) } }) || '';
     } catch {
       teamNote = '';
     }

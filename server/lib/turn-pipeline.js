@@ -1,6 +1,7 @@
 import { withTimeout } from './llm.js';
 import { beginUserTurn, endUserTurn } from './priority.js';
-import { consult as salaConsult } from './sala.js';
+import { consult as salaConsult, runSalaV2 } from './sala.js';
+import { getSalaV2 } from './settings.js';
 
 // ── SpeakerGate ─────────────────────────────────────────────────────────
 // Garantiza que UN solo agente emite audio a la vez, a nivel servidor.
@@ -223,6 +224,13 @@ export class CancellableTurnQueue {
 // posterior; este helper es el punto de gate testeable y documentado.
 export async function maybeConsultSala({ text, route = null, deps = {} } = {}) {
   try {
+    // v2 ON → rondas ordenadas + síntesis; devuelve el NOTE o null.
+    // v2 OFF → consult v1, comportamiento intacto.
+    const v2On = deps.flagV2 !== undefined ? deps.flagV2 : getSalaV2();
+    if (v2On) {
+      const sala = await runSalaV2({ text, route, deps });
+      return sala ? sala.note : null;
+    }
     return await salaConsult({ text, route, deps });
   } catch {
     return null;

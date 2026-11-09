@@ -1,22 +1,21 @@
-import { GROQ_STT_MODEL, WHISPER_URL, getDeepgramKey, getGroqKey, getSttLanguage, getSttMinConfidence, getSttProvider, getWhisperModel } from './settings.js';
+import { GROQ_STT_MODEL, WHISPER_URL, getDeepgramKey, getGroqKey, getSttLanguage, getSttMinConfidence, getSttOrder, getSttProvider, getWhisperModel, isSttOrderSet } from './settings.js';
 import { transcribeDeepgram } from './deepgram.js';
 import { telemetry } from './telemetry.js';
 
 // STT del usuario. Proveedores:
 //  - local  (default): Parakeet-TDT-0.6B-v3 vía sherpa-onnx
 //              (server/stt/parakeet_server.py, :7790, ~0.4s en CPU),
-//              con respaldo OPORTUNISTA a Whisper faster-whisper (:7789).
+//              con respaldo local a Whisper-tiny-lazy (:7789, venv dedicado).
 //  - groq   : Whisper hosteado por Groq (API OpenAI-compatible, rapidísimo).
 //  - deepgram: Nova-3 cloud (smart_format + keyterms; ~2.3s desde UY).
 //  - browser: SpeechRecognition del navegador (solo el hint del cliente).
 //
-// DECISIÓN 09/11 (auditoría SKIP/flaky): Parakeet-único-local + fallback
-// cloud. faster-whisper NO está instalado en esta máquina (sin .venv-tts,
-// `import faster_whisper` falla) y nada lo levanta: Whisper es un respaldo
-// oportunista —si algún día responde en :7789 se usa, si no, el
+// DECISIÓN 09/11 (auditoría SKIP/flaky), actualizada mismo día: Parakeet
+// primero + Whisper-tiny-lazy de respaldo local (:7789, venv dedicado,
+// ~53M en idle) + fallback cloud. Si Whisper está caído, el
 // connection-refused falla en ~1ms SIN reintentos ni sleep (ver
 // transcribeLocal + test 'ambos caídos … <500ms'). La cadena real es:
-// Parakeet → Whisper(oportunista) → Groq(key) → Deepgram(key) → hint.
+// Parakeet → Whisper(local) → Groq(key) → Deepgram(key) → hint.
 
 const STT_TIMEOUT_MS = 20000;
 // Parakeet mide ~398ms de mediana; 8s = colgado, caer a Whisper ya.
@@ -143,22 +142,61 @@ export async function postTranscribe(url, wavBase64, { withModel = false, timeou
   return { text: String(body.text || '').trim(), confidence };
 }
 
-export async function transcribeLocal(wavBase64, { parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
-  // Parakeet primero (rápido); Whisper de respaldo OPORTUNISTA (casi nunca
-  // está: sin faster-whisper instalado el puerto está cerrado y el fetch
-  // rechaza en ~1ms, SIN reintentos ni sleeps — el skip es gratis). Si el
-  // health dice caído, se salta directo a Whisper sin pagar el intento.
-  if (await isParakeetAvailable(parakeetUrl)) {
-    try {
-      const res = await postTranscribe(parakeetUrl, wavBase64, { timeoutMs: parakeetTimeoutMs });
-      if (res.text) {
-        return res;
-      }
-    } catch {
-      // Caído o lento: sigue Whisper.
-    }
+// Motores locales por separado (direccionables por stt.order). Parakeet:
+// si el health dice caído se skipea sin pagar el intento.
+export async function transcribeParakeet(wavBase64, { parakeetUrl = PARAKEET_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS } = {}) {
+  if (!(await isParakeetAvailable(parakeetUrl))) {
+    throw new Error('Parakeet down (health).');
   }
+  return postTranscribe(parakeetUrl, wavBase64, { timeoutMs: parakeetTimeoutMs });
+}
+
+// Whisper-tiny-lazy: respaldo local (:7789, venv dedicado, ~53M en idle).
+// Si está caído, el puerto cerrado rechaza en ~1ms SIN reintentos ni
+// sleeps — el skip es gratis.
+export async function transcribeWhisper(wavBase64, { whisperUrl = WHISPER_URL, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
   return postTranscribe(whisperUrl, wavBase64, { withModel: true, timeoutMs: whisperTimeoutMs });
+}
+
+export async function transcribeLocal(wavBase64, { parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
+  // Wrapper legacy: Parakeet → Whisper. Los tests viejos y el path sin
+  // order lo siguen usando; el path order llama a cada motor directo.
+  try {
+    const res = await transcribeParakeet(wavBase64, { parakeetUrl, parakeetTimeoutMs });
+    if (res.text) {
+      return res;
+    }
+  } catch {
+    // Caído o lento: sigue Whisper.
+  }
+  return transcribeWhisper(wavBase64, { whisperUrl, whisperTimeoutMs });
+}
+
+// Parcial de streaming (transcriber.js): SOLO motor local rápido, NUNCA
+// tira — cualquier error o vacío devuelve ''. Los parciales son best-
+// effort: el turno final no los espera ni depende de ellos.
+export async function transcribePartial(wavBase64, { engine = null, parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL } = {}) {
+  try {
+    const want = engine || firstLocalEngine();
+    const res = want === 'whisper'
+      ? await transcribeWhisper(wavBase64, { whisperUrl, whisperTimeoutMs: PARAKEET_TIMEOUT_MS })
+      : await transcribeParakeet(wavBase64, { parakeetUrl });
+    return resultText(res);
+  } catch {
+    return '';
+  }
+}
+
+// Primer motor local del order (parakeet salvo que el usuario lo haya
+// sacado o puesto a whisper primero).
+function firstLocalEngine() {
+  try {
+    const order = getSttOrder();
+    const local = order.find((e) => e === 'parakeet' || e === 'whisper');
+    return local || 'parakeet';
+  } catch {
+    return 'parakeet';
+  }
 }
 
 async function transcribeGroq(wavBase64) {
@@ -192,14 +230,83 @@ async function transcribeGroq(wavBase64) {
   return String(body.text || '').trim();
 }
 
+// Cadena ordenada por stt.order (inyectable para tests): recorre los
+// motores en secuencia; cloud sin key se salta; error o vacío pasa al
+// siguiente; al agotar → hint → lanza el primer error. Si un motor local
+// devuelve confianza MUY baja (< min(0.4, setting)) en turno corto con
+// key de Deepgram aún no intentado, reintenta UNA vez con Deepgram.
+// Devuelve { text, source } (source = motor que ganó) o lanza.
+async function transcribeOrdered({ wavBase64, hint = '', order, groqKey = '', deepgramKey = '', minConfidence, parakeetFn = transcribeParakeet, whisperFn = transcribeWhisper, groqFn = transcribeGroq, deepgramFn = transcribeDeepgram }) {
+  const retryThreshold = Math.min(Number(minConfidence) || 0, LOW_CONFIDENCE_RETRY_MAX);
+  const shortTurn = wavSecondsEstimate(wavBase64) < CONFIDENCE_RETRY_MAX_SECS;
+  const runners = {
+    parakeet: { fn: parakeetFn, key: 'x', local: true },
+    whisper: { fn: whisperFn, key: 'x', local: true },
+    groq: { fn: groqFn, key: groqKey, local: false },
+    deepgram: { fn: deepgramFn, key: deepgramKey, local: false }
+  };
+  let firstError = null;
+  let deepgramTried = false;
+  for (const engine of order || []) {
+    const runner = runners[engine];
+    if (!runner || typeof runner.fn !== 'function') {
+      continue;
+    }
+    if (!runner.local && !runner.key) {
+      continue; // Cloud sin key: ni se intenta.
+    }
+    if (engine === 'deepgram' && deepgramTried) {
+      continue; // Ya se probó vía retry de baja confianza.
+    }
+    if (engine === 'deepgram') {
+      deepgramTried = true;
+    }
+    try {
+      const res = await runner.fn(wavBase64);
+      const text = resultText(res);
+      if (!text) {
+        continue;
+      }
+      const confidence = runner.local ? resultConfidence(res) : null;
+      if (confidence !== null && confidence < retryThreshold && shortTurn && deepgramKey && deepgramFn && !deepgramTried) {
+        deepgramTried = true;
+        try {
+          const retry = await deepgramFn(wavBase64);
+          const retryText = resultText(retry);
+          telemetry.add({ type: 'stt_retry', payload: { from: engine, confidence, retried: Boolean(retryText) } });
+          if (retryText) {
+            return { text: retryText, source: 'deepgram' };
+          }
+        } catch (error) {
+          telemetry.add({ type: 'stt_retry', payload: { from: engine, confidence, retried: false, error: String(error?.message || error).slice(0, 120) } });
+        }
+      }
+      return { text, source: engine };
+    } catch (error) {
+      if (!firstError) {
+        firstError = error;
+      }
+    }
+  }
+  if (hint) {
+    return { text: hint, source: 'client' };
+  }
+  throw firstError || new Error('Empty transcription.');
+}
+
 // Cadena de transcripción (inyectable para tests): proveedor elegido →
 // Groq automático si hay clave (cubre Brave/Firefox sin hint) → Deepgram
 // automático si hay clave → hint del navegador → error.
 // Si el resultado local trae confianza MUY baja (< min(0.4, setting)) y el
 // turno es corto (<10s) con key de Deepgram, reintenta UNA vez con
 // Deepgram; si ese reintento falla o sale vacío, vale el texto original.
+// Con `order` (array de motores) usa el path ordenado; sin `order` el
+// path legacy por provider (compat con callers viejos).
 // Devuelve { text, source } o lanza.
-export async function transcribeWithFallback({ wavBase64, hint = '', provider = 'local', groqKey = '', deepgramKey = '', minConfidence = getSttMinConfidence(), localFn, groqFn, deepgramFn }) {
+export async function transcribeWithFallback({ wavBase64, hint = '', provider = 'local', groqKey = '', deepgramKey = '', minConfidence = getSttMinConfidence(), localFn, groqFn, deepgramFn, order = undefined, parakeetFn, whisperFn }) {
+  if (order !== undefined) {
+    return transcribeOrdered({ wavBase64, hint, order, groqKey, deepgramKey, minConfidence, parakeetFn, whisperFn, groqFn, deepgramFn });
+  }
   const retryThreshold = Math.min(Number(minConfidence) || 0, LOW_CONFIDENCE_RETRY_MAX);
 
   // Reintento por baja confianza: solo en el path local con confianza
@@ -293,14 +400,21 @@ export async function transcribeWithFallback({ wavBase64, hint = '', provider = 
 }
 
 export async function transcribeTurn({ wavBase64, hint = '' }) {
-  return transcribeWithFallback({
+  const provider = getSttProvider();
+  const base = {
     wavBase64,
     hint,
-    provider: getSttProvider(),
+    provider,
     groqKey: getGroqKey(),
     deepgramKey: getDeepgramKey(),
     localFn: transcribeLocal,
     groqFn: transcribeGroq,
     deepgramFn: transcribeDeepgram
-  });
+  };
+  // Legacy browser sin order explícito: hint primero (path viejo). Con
+  // stt.order seteado, el order manda siempre.
+  if (provider === 'browser' && !isSttOrderSet()) {
+    return transcribeWithFallback(base);
+  }
+  return transcribeWithFallback({ ...base, order: getSttOrder() });
 }

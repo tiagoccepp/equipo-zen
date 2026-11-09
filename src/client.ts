@@ -132,6 +132,8 @@ export interface PublicSettings {
   stt: {
     provider: string;
     providerOptions: string[];
+    order: string;
+    orderDefault: string;
     whisperModel: string;
     whisperModelOptions: string[];
     groqKeySet: boolean;
@@ -141,7 +143,7 @@ export interface PublicSettings {
     language: string;
     minConfidence: number;
   };
-  tts: { engine: string; language: string; url: string };
+  tts: { engine: string; engineOptions: string[]; language: string; url: string };
 }
 
 export async function getSettings(): Promise<PublicSettings> {

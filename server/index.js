@@ -132,7 +132,7 @@ server.listen(PORT, HOST, () => {
   // caídos. Fuera de tests (ahí los sidecars son fakes inyectados).
   if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
     startSidecarWatchdog();
-    console.log('Watchdog de sidecars: activo (parakeet/piper/whisper cada 20s).');
+    console.log('Watchdog de sidecars: activo (parakeet/piper/whisper/supertonic cada 20s).');
   }
   setTimeout(() => {
     void ttsAvailable().then((ok) => {
@@ -143,7 +143,7 @@ server.listen(PORT, HOST, () => {
     void whisperHealthy().then((ok) => {
       console.log(ok
         ? 'Whisper local: OK (tu voz se transcribe en la máquina).'
-        : 'Whisper local caído (no instalado): STT = Parakeet → Groq/Deepgram si hay keys → hint del navegador.');
+        : 'Whisper local caído: STT = Parakeet → Groq/Deepgram si hay keys → hint del navegador.');
     });
     // Prewarm: calentar TTS/STT en fondo para que el primer turno no pague
     // la carga del modelo (Parakeet frío 3.4s → tibio 0.4s).

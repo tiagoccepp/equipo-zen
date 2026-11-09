@@ -1,10 +1,20 @@
-import { buildWavBase64FromPcmChunks, transcribeTurn } from './stt.js';
+import { buildWavBase64FromPcmChunks, transcribePartial, transcribeTurn } from './stt.js';
 import { speechVerdict } from './silero.js';
 import { telemetry } from './telemetry.js';
 import { getSttProvider } from './settings.js';
 import { cleanTranscript, getShortError } from './text.js';
 
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+
+// Parciales de streaming: cada PARTIAL minBytes acumulados (y pasado
+// minIntervalMs) se retranscribe lo capturado hasta ahí con el motor
+// local rápido y se emite user_audio_transcript_delta. Best-effort:
+// nunca tiran, nunca demoran el final. Mutable para tests.
+export const PARTIAL_CONFIG = { minBytes: 48000, minIntervalMs: 2500 };
+let partialFnOverride = null;
+export function __setPartialFn(fn) {
+  partialFnOverride = typeof fn === 'function' ? fn : null;
+}
 
 // Alucinaciones típicas de Whisper/Parakeet sobre ruido (teclado, ventilador,
 // silencio): si la transcripción es SOLO esto, no fue un turno, fue ruido.
@@ -59,6 +69,10 @@ export class CaptureTranscriberRuntime {
     this.capturedBytes = 0;
     this.lastFinalized = '';
     this.busy = false;
+    this.partialInFlight = false;
+    this.partialBytes = 0;
+    this.lastPartialAt = 0;
+    this.partials = 0;
   }
 
   async prepareListening() {
@@ -68,6 +82,8 @@ export class CaptureTranscriberRuntime {
   async startListening() {
     this.chunks = [];
     this.capturedBytes = 0;
+    this.partialBytes = 0;
+    this.partials = 0;
     this.callbacks.emit({ type: 'audio_listening_start' });
   }
 
@@ -81,6 +97,41 @@ export class CaptureTranscriberRuntime {
     }
     this.chunks.push(data);
     this.capturedBytes += bytes;
+    this.partialBytes += bytes;
+    void this.maybePartial();
+  }
+
+  async maybePartial() {
+    if (this.partialInFlight) {
+      return;
+    }
+    if (this.partialBytes < PARTIAL_CONFIG.minBytes) {
+      return;
+    }
+    if (Date.now() - this.lastPartialAt < PARTIAL_CONFIG.minIntervalMs) {
+      return;
+    }
+    const snapshot = this.chunks.slice();
+    if (snapshot.length === 0) {
+      return;
+    }
+    this.partialInFlight = true;
+    this.partialBytes = 0;
+    this.lastPartialAt = Date.now();
+    try {
+      const wavBase64 = buildWavBase64FromPcmChunks(snapshot);
+      const decode = partialFnOverride || transcribePartial;
+      const text = cleanTranscript(await decode(wavBase64));
+      // Junk filtrado: un parcial "thank you" parpadeando es peor que nada.
+      if (text && !isJunkTranscript(text)) {
+        this.partials += 1;
+        this.callbacks.emit({ type: 'user_audio_transcript_delta', delta: text, text });
+      }
+    } catch {
+      // Los parciales nunca rompen el turno.
+    } finally {
+      this.partialInFlight = false;
+    }
   }
 
   endAudio({ transcriptHint = '' } = {}) {
@@ -88,6 +139,7 @@ export class CaptureTranscriberRuntime {
     const chunks = this.chunks;
     this.chunks = [];
     this.capturedBytes = 0;
+    this.partialBytes = 0;
     // Cada audio_end es un veredicto nuevo: el dedup cross-turn tragaba en
     // silencio las repeticiones legítimas ("dale"... "dale"). Dentro del
     // turno no hay doble finalize (busy + chunks consumidos), así que resetear
@@ -106,7 +158,9 @@ export class CaptureTranscriberRuntime {
     // Duración aprox del turno en segundos (desde bytes PCM16 16k mono).
     // Clave 'secs' (no 'audioSecs'): el sanitizador omite claves con 'audio'.
     const secs = Math.round((chunks.reduce((n, c) => n + Math.ceil(String(c || '').length * 3 / 4), 0) / 32000) * 100) / 100;
-    const turnEvent = (extra) => telemetry.add({ type: 'audio_turn_stt', payload: { secs, ...extra } });
+    const partials = this.partials;
+    this.partials = 0;
+    const turnEvent = (extra) => telemetry.add({ type: 'audio_turn_stt', payload: { secs, partials, ...extra } });
     try {
       // Compuerta Silero: sin habla real no se gasta STT (ahorra 1-2s y
       // evita alucinaciones). Null = Silero no disponible: seguir normal.
@@ -175,6 +229,8 @@ export class CaptureTranscriberRuntime {
     this.chunks = [];
     this.capturedBytes = 0;
     this.lastFinalized = '';
+    this.partialBytes = 0;
+    this.partials = 0;
   }
 
   close() {}

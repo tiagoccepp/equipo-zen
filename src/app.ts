@@ -954,6 +954,17 @@ async function renderSettings(): Promise<void> {
   sttSel.addEventListener('change', () => save({ 'stt.provider': sttSel.value }));
   box.appendChild(settingRow('👂 Transcription', sttSel));
 
+  // Orden de la cadena STT (stt.order): CSV de motores, aplica en caliente.
+  // Vacío = default según provider. Motores: parakeet, whisper, groq, deepgram.
+  const orderInput = document.createElement('input');
+  orderInput.type = 'text';
+  orderInput.value = s.stt.order || '';
+  orderInput.placeholder = s.stt.orderDefault || 'parakeet,groq,deepgram';
+  orderInput.setAttribute('aria-label', 'STT engine order');
+  orderInput.spellcheck = false;
+  orderInput.addEventListener('change', () => save({ 'stt.order': orderInput.value.trim() }));
+  box.appendChild(settingRow('🔀 STT order', orderInput));
+
   const wSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
   wSel.setAttribute('aria-label', 'Local Whisper model');
   wSel.addEventListener('change', () => save({ 'stt.whisperModel': wSel.value }));
@@ -1008,6 +1019,12 @@ async function renderSettings(): Promise<void> {
   ttsSel.setAttribute('aria-label', 'Voice language');
   ttsSel.addEventListener('change', () => save({ 'tts.language': ttsSel.value }));
   box.appendChild(settingRow('🗣️ Voice language', ttsSel));
+
+  // Motor TTS local preferido (auto = Piper → Supertonic; el 2º respalda).
+  const engSel = settingSelect(s.tts.engineOptions || ['auto', 'piper', 'supertonic'], s.tts.engine || 'auto');
+  engSel.setAttribute('aria-label', 'TTS engine');
+  engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
+  box.appendChild(settingRow('🔊 TTS engine', engSel));
 
   // Sidecars: estado del watchdog STT/TTS (GET directo, sin WS).
   box.appendChild(settingGroup('Sidecars'));

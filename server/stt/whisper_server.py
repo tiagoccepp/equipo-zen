@@ -2,7 +2,7 @@
 
 Corre 100% en la máquina; descarga el modelo de Hugging Face en el primer
 arranque. API:
-  GET  /health                → {"ok": true, "model": "small"}
+  GET  /health                → {"ok": true, "model": "tiny", "loaded": false}
   POST /v1/transcribe         → {"text": "...", "language": "es", "durationMs": 1234, "confidence": 0.87}
        body JSON: {"audio_base64": "<wav>", "language": "es"|null}
 
@@ -37,9 +37,14 @@ try:
 except ImportError:
     pass
 
-MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")
+MODEL_NAME = os.environ.get("WHISPER_MODEL", "tiny")
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")
+# WHISPER_PRELOAD=0: carga lazy (el modelo se carga en el primer
+# /v1/transcribe, no al arrancar). El watchdog spawnea con 0: Whisper es el
+# último fallback local y con el box al 96% de RAM no puede ocupar memoria
+# en idle. Default 1 = precarga (conducta histórica si se corre a mano).
+PRELOAD = os.environ.get("WHISPER_PRELOAD", "1") != "0"
 
 app = FastAPI(title="Whisper local")
 _model = None
@@ -63,7 +68,7 @@ class TranscribeRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": _loaded_name or MODEL_NAME}
+    return {"ok": True, "model": _loaded_name or MODEL_NAME, "loaded": _loaded_name is not None}
 
 
 @app.post("/v1/transcribe")
@@ -99,6 +104,8 @@ def transcribe(request: TranscribeRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    # Precarga para que el primer turno no pague la carga del modelo.
-    get_model()
+    # Precarga para que el primer turno no pague la carga del modelo, salvo
+    # WHISPER_PRELOAD=0 (lazy: el watchdog lo usa, ver arriba).
+    if PRELOAD:
+        get_model()
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("WHISPER_PORT", "7789")), log_level="warning")

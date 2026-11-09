@@ -18,6 +18,7 @@
 // agregá RAM — ningún keepalive compensa un box sin memoria libre.
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,11 +26,14 @@ import { telemetry } from './telemetry.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// whisper es monitor-only (spawn: null): whisper_server.py importa
-// faster_whisper, que NO está en el python3 del sistema (verificado
-// 08/11: `import faster_whisper` y `import whisper` fallan) y no existe
-// ningún .venv-tts en el repo. Hasta que alguien provea el venv o instale
-// faster-whisper, el watchdog lo vigila pero no intenta levantarlo.
+// Venvs dedicados (09/11: revivir respaldo local). Supertonic y Whisper
+// corren en sus propios venvs bajo ~/.local/share/equipo — NUNCA en el
+// python3 del sistema (ahí solo viven parakeet/piper). Paths con homedir,
+// sin hardcodear /home/tito.
+const EQUIPO_SHARE = path.join(os.homedir(), '.local', 'share', 'equipo');
+const SUPERTONIC_BIN = path.join(EQUIPO_SHARE, 'supertonic-venv', 'bin', 'supertonic');
+const WHISPER_PYTHON = path.join(EQUIPO_SHARE, 'whisper-venv', 'bin', 'python');
+
 export const SIDECARS = [
   {
     name: 'parakeet',
@@ -46,11 +50,38 @@ export const SIDECARS = [
     spawn: { cmd: 'python3', args: ['server/tts/piper_server.py'] }
   },
   {
+    // Respaldo STT local (09/11): tiny + lazy (PRELOAD=0: ~53M idle, el
+    // modelo carga en el primer transcribe). HF_HUB_OFFLINE=1: los modelos
+    // están cacheados y el proxy del gateway devuelve 403 — el sidecar
+    // jamás debe depender de red en runtime (ese 403 era el HTTP 500).
     name: 'whisper',
     health: process.env.WHISPER_URL
       ? `${process.env.WHISPER_URL}/health`
       : 'http://127.0.0.1:7789/health',
-    spawn: null
+    spawn: {
+      cmd: WHISPER_PYTHON,
+      args: ['server/stt/whisper_server.py'],
+      env: {
+        WHISPER_MODEL: process.env.WHISPER_MODEL || 'tiny',
+        WHISPER_PRELOAD: process.env.WHISPER_PRELOAD || '0',
+        WHISPER_PORT: process.env.WHISPER_PORT || '7789',
+        HF_HUB_OFFLINE: '1'
+      }
+    }
+  },
+  {
+    // Respaldo TTS local (09/11): supertonic-3 (~520M RSS, 44.1kHz, 10
+    // voces M1-M5/F1-F5). Health en /v1/health (no /health). Modelos en
+    // ~/.cache/supertonic3, offline igual que whisper.
+    name: 'supertonic',
+    health: process.env.SUPERTONIC_URL
+      ? `${process.env.SUPERTONIC_URL}/v1/health`
+      : 'http://127.0.0.1:7788/v1/health',
+    spawn: {
+      cmd: SUPERTONIC_BIN,
+      args: ['serve', '--host', '127.0.0.1', '--port', '7788', '--model', 'supertonic-3', '--log-level', 'warning'],
+      env: { HF_HUB_OFFLINE: '1' }
+    }
   }
 ];
 
@@ -273,12 +304,14 @@ async function defaultCheck(url) {
   }
 }
 
-// Lanza el sidecar detached (sobrevive al server), cwd = repo.
+// Lanza el sidecar detached (sobrevive al server), cwd = repo. Si el spec
+// trae `env`, se mergea sobre process.env (para venvs y flags offline).
 function defaultSpawnFn(spec) {
   const child = spawn(spec.spawn.cmd, spec.spawn.args, {
     cwd: REPO_ROOT,
     detached: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    env: { ...process.env, ...(spec.spawn.env || {}) }
   });
   child.unref();
   return { pid: child.pid ?? null };
