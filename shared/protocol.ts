@@ -151,6 +151,9 @@ export type ClientMessage =
   | { type: 'audio_end'; transcriptHint?: string }
   | { type: 'audio_cancel'; reason?: string; speechMs?: number }
   | { type: 'audio_stop' }
+  // Telemetría de voz del cliente (VAD/barge por turno): sin este case el
+  // servidor respondía error en cada turno de voz.
+  | { type: 'client_stats'; stats: Record<string, number> }
   // El cliente declara si QUIERE voz. Fuera del modo llamada no la quiere: sin
   // esto el servidor sintetizaba en todos los turnos igual, gastaba Supertonic
   // y serializaba las respuestas por el SpeakerGate para un audio que nadie oía.
@@ -473,6 +476,29 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         return { ok: false, error: 'transcriptHint demasiado largo.' };
       }
       return { ok: true, message: { type: 'audio_end', transcriptHint } };
+    }
+
+    case 'client_stats': {
+      // Telemetría VAD del cliente: record chico de números finitos.
+      if (!isRecord(value.stats)) {
+        return { ok: false, error: 'client_stats requiere stats.' };
+      }
+      const keys = Object.keys(value.stats);
+      if (keys.length > 20) {
+        return { ok: false, error: 'client_stats con demasiadas claves.' };
+      }
+      const stats: Record<string, number> = {};
+      for (const key of keys) {
+        if (cappedString(key, 64) === null) {
+          return { ok: false, error: 'client_stats con clave inválida.' };
+        }
+        const num = (value.stats as Record<string, unknown>)[key];
+        if (typeof num !== 'number' || !Number.isFinite(num)) {
+          return { ok: false, error: 'client_stats solo acepta números finitos.' };
+        }
+        stats[key] = num;
+      }
+      return { ok: true, message: { type: 'client_stats', stats } };
     }
 
     case 'audio_cancel': {

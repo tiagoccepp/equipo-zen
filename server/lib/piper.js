@@ -1,18 +1,23 @@
 // Adaptador del TTS local Piper (sidecar server/tts/piper_server.py :7791).
 // 25-300ms por oración en CPU (ver .audit/piper/PIPER-EVAL.md): va PRIMERO
-// en la cadena de voz porque latencia 0 manda. F* → daniela (femenina
-// rioplatense), M* → sharvard (masculina). Si el sidecar no responde,
-// la cadena sigue con Supertonic → Deepgram → Edge como siempre.
+// en la cadena de voz porque latencia 0 manda. Español: F* → daniela
+// (femenina rioplatense), M* → sharvard (masculina). Inglés: F* → jenny,
+// M* → lessac (voces en_US). Si el sidecar no responde, la cadena sigue
+// con Supertonic → Deepgram → Edge como siempre.
 import { TTS_TIMEOUT_MS } from './config.js';
+import { getTtsLanguage } from './settings.js';
 
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:7791';
 
 export function mapVoiceToPiper(voice) {
   const v = String(voice || '').trim().toUpperCase();
+  // El idioma sigue a la VOZ (tts.language), igual que el prompt: con 'en'
+  // van las voces inglesas, si no las españolas de siempre.
+  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
   if (v.startsWith('F')) {
-    return 'daniela';
+    return en ? 'jenny' : 'daniela';
   }
-  return 'sharvard';
+  return en ? 'lessac' : 'sharvard';
 }
 
 let availability = { checked: 0, ok: false };

@@ -437,18 +437,17 @@ export class LiveAgentRuntime {
       }
     }
 
-    // En inglés se SALTEA Piper: sus voces (daniela/sharvard) son solo
-    // español rioplatense y destrozarían la pronunciación inglesa. Cadena
-    // en inglés: Deepgram → Supertonic → (Edge downstream).
-    if (!String(getTtsLanguage() || 'es').toLowerCase().startsWith('en')) {
-      try {
-        const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
-        if (piperParts.length > 0) {
-          return piperParts;
-        }
-      } catch {
-        // Sidecar caído: cae a Supertonic.
+    // Piper va primero en AMBOS idiomas: ya tiene voces inglesas (jenny F
+    // / lessac M) y mapVoiceToPiper elige según tts.language. Cada oración
+    // en inglés evita así los ~2.4s de la nube Deepgram. Cadena en ambos
+    // idiomas: Deepgram → Piper → Supertonic → (Edge downstream).
+    try {
+      const piperParts = await synthesizePiper(text, this.agent.voice || 'M1', { signal });
+      if (piperParts.length > 0) {
+        return piperParts;
       }
+    } catch {
+      // Sidecar caído: cae a Supertonic.
     }
 
     try {

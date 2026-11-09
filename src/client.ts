@@ -12,7 +12,8 @@ export interface Agent {
 
 export interface ClientEvents {
   onReady: (agents: Agent[], meetingId?: string) => void;
-  onUserText: (text: string) => void;
+  // source distingue texto normal de avisos del sistema ('X has joined').
+  onUserText: (text: string, source?: string) => void;
   onRoute: (names: string[]) => void;
   onAgentStart: (agentId: string, turnId?: string) => void;
   onSpeakStart: (agentId: string) => void;
@@ -188,7 +189,7 @@ export class Client {
           this.ev.onReady((m.agents || []) as Agent[]);
           break;
         case 'user_turn_received':
-          if (m.text) this.ev.onUserText(String(m.text));
+          if (m.text) this.ev.onUserText(String(m.text), typeof m.source === 'string' ? m.source : undefined);
           break;
         case 'route_decision':
           this.ev.onRoute(((m.route?.targets || []) as Array<{ name?: string }>).map((t) => t.name || ''));

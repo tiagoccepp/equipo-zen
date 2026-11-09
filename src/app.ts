@@ -375,7 +375,13 @@ const client = new Client({
     setConn('live');
     layoutOrbs();
   },
-  onUserText: (text) => {
+  onUserText: (text, source) => {
+    // Los avisos del sistema (ej. spawn_agent) llegaban como burbuja YOU:
+    // se pintan como sys sin tocar el estado de trabajo.
+    if (source === 'system') {
+      addMsg('system', text, 'sys');
+      return;
+    }
     addMsg('you', text, 'me');
     setStatus('Working on it…');
   },

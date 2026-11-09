@@ -1011,7 +1011,11 @@ export class MeetingSession {
     const fragmentId = nanoid(8);
     // Cada fragmento se muestra al instante en el chat…
     this.memory.add('user', 'You', text, null, fragmentId);
-    this.send({ type: 'user_turn_received', turnId: fragmentId, text, source });
+    // Los turnos de voz ya pintan su burbuja (YOU·VOICE) vía
+    // user_audio_turn_final: mandar user_turn_received acá duplicaba.
+    if (source !== 'audio') {
+      this.send({ type: 'user_turn_received', turnId: fragmentId, text, source });
+    }
     logEvent('mensaje_usuario', {
       meetingId: this.meeting?.id,
       companyId: this.company?.id,
