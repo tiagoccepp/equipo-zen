@@ -193,21 +193,39 @@ export interface LiveMicOptions {
 export interface MicTuning {
   sensitivity: number;
   endSilenceMs: number;
+  // Puerta de descarte: bajo esto y sin hint el turno se tira como ruido.
+  // 250 ms porque una sílaba ("sí", "no", "dale": 200-400 ms acústicos)
+  // menos el onset (4 frames × 30 ms = 120 ms) cuenta 150-300 ms; con 600
+  // el desktop (sin Web Speech API → sin hint) era sordo a toda respuesta
+  // corta. El juez real del ruido es Silero en el servidor (~12 ms medidos),
+  // esto solo evita viajes inútiles. NO confundir con CONFIRM_SPEECH_MS.
   minSpeechMs: number;
 }
 
-export const MIC_NORMAL: MicTuning = { sensitivity: 55, endSilenceMs: 800, minSpeechMs: 600 };
+export const MIC_NORMAL: MicTuning = { sensitivity: 55, endSilenceMs: 800, minSpeechMs: 250 };
+
+// Habla sostenida para confirmar (cortar al agente / dar el turno por real).
+// Queda en 600: una tos (150-250 ms) jamás debe interrumpir. Desacoplado de
+// minSpeechMs (09/11: descarte 600→250) para no abrir cortes fantasma.
+export const CONFIRM_SPEECH_MS = 600;
 
 // ── Endpointing adaptativo (§3a) ────────────────────────────────────
 // Decisión pura y testeable: cuánto silencio cierra el habla y cuánta
 // gracia espera después, según lo que se lleva escuchado del turno.
-// Defaults idénticos a los históricos (800/1200); solo se mueve el
-// umbral cuando la señal es clara. Ante la duda, no cortar.
+// Base 800/1000 (endSilence histórico; gracia recortada de 1200 el 09/11
+// tras medir que la espera VAD+gracia era el 85% del stop→transcript).
+// Solo se mueve el umbral cuando la señal es clara. Ante la duda, no cortar.
 
 export const END_SILENCE_BASE_MS = 800;
 export const END_SILENCE_FAST_MS = 575;
-export const END_SILENCE_SLOW_MS = 1100;
-export const GRACE_BASE_MS = 1200;
+// Lento 1100→900 (09/11): la gracia con reapertura ya protege los cortes,
+// y 900+1000=1900 ms de pausa tolerada sigue 3× sobre la pausa fluida
+// (<600 ms). Ahorra 200 ms en cada turno corto, que es el caso común.
+export const END_SILENCE_SLOW_MS = 900;
+// Gracia 1200→1000 (09/11): mismo argumento (medido: 85% del stop→transcript
+// era espera VAD+gracia, no STT). app.ts la consume vía computeEndpointing;
+// su fallback local GRACE_MS quedó alineado a 1000 en el ship.
+export const GRACE_BASE_MS = 1000;
 export const GRACE_FAST_MS = 600;
 
 // Habla clara para acortar: RMS muy por encima del piso y con nivel mínimo.
@@ -577,10 +595,10 @@ export class LiveMic {
     this.opts.onChunk(data);
     this.speechMs += durationMs;
     if (rms > this.turnMaxRms) this.turnMaxRms = rms;
-    // Habla sostenida: el turno ya es real (minSpeechMs no lo va a
-    // descartar) — avisar una vez para que el interrupt corte acá y no
-    // con cualquier tos que apenas abre el VAD.
-    if (!this.confirmed && this.speechMs >= this.tuning.minSpeechMs) {
+    // Habla sostenida: el turno ya es real (CONFIRM no lo va a frenar y
+    // minSpeechMs no lo va a descartar) — avisar una vez para que el
+    // interrupt corte acá y no con cualquier tos que apenas abre el VAD.
+    if (!this.confirmed && this.speechMs >= CONFIRM_SPEECH_MS) {
       this.confirmed = true;
       this.opts.onSpeechConfirmed(Math.round(this.speechMs));
     }
@@ -624,6 +642,8 @@ export class LiveMic {
       floor: Math.round(this.floor * 10000) / 10000,
       startEff: Math.round(this.turnStartEff * 10000) / 10000
     });
+    // Descarte: sin hint y bajo minSpeechMs (250) es un ruidito (clicks mueren
+    // en el onset; toses cortas acá). Lo más largo va al servidor y decide Silero.
     if (!hint && speechMs < this.tuning.minSpeechMs) {
       this.opts.resetHint();
       this.opts.onDiscarded();

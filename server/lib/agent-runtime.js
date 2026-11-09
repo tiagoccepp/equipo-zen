@@ -1,12 +1,190 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getDeepgramKey, getMinimaxModels, getSttLanguage, getTtsLanguage } from './settings.js';
-import { streamChat } from './llm.js';
+import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsLanguage } from './settings.js';
+import { completeChat, streamChat, withTimeout } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
+
+// ── Manos v1: fase tools (two-phase) ───────────────────────────────────
+//
+// El turno en vivo corre en dos fases cuando hay intención de usar
+// herramientas: (1) fase tools con completeChat (no habla, no stream),
+// (2) fase habla con streamChat normal que DICE el resultado.
+//
+// Contrato con manos.js (módulo paralelo, puede NO existir):
+//   shouldUseTools(text) -> bool — gate barato de intención
+//   renderManosPrompt() -> string — sección de formato tools para el loop
+//   runToolLoop({system,messages,completeChat,source,emit,maxTurns,
+//     deadlineMs}) -> {toolSummary, toolTurns}
+// Se carga con import dinámico + try/catch: si falla, el turno sigue
+// EXACTO como hoy (cero cambio de comportamiento).
+//
+// Decisión de inyección: el resumen se ANEXA al contenido del último
+// mensaje user ("\n\nTOOLS RESULT..."), NO como mensaje system adicional.
+// Motivo: un solo system evita rarezas de proveedores que esperan un único
+// bloque system; el user-append es compatible con completeChat y streamChat
+// sin tocar firmas ni orden de roles. La sección renderManosPrompt() va SOLO
+// al system que ve el loop tools, nunca al prompt hablado (con gate false el
+// streamChat recibe byte-por-byte los mismos messages que hoy).
+//
+// Extras que se pasan al loop además del contrato (inofensivos: el loop
+// destructura lo que quiere): signal (barge-in), turnId y agentId para que
+// sus emits salgan con identidad sin adivinarla, y companyId/slug para que
+// las tools sepan en qué proyecto operan (el loop los usa como fallback
+// cuando source es el string 'text'/'audio').
+
+export const MANOS_VOICE_DEADLINE_MS = 45000;
+export const MANOS_TEXT_DEADLINE_MS = 120000;
+export const MANOS_TOOLS_MARKER = 'TOOLS RESULT (do not narrate, use it):';
+
+// Loader inyectable: default = import dinámico real. Los tests inyectan un
+// fake con setManosLoader(async () => ({ shouldUseTools, renderManosPrompt,
+// runToolLoop })); con null/undefined se restaura el default.
+const defaultManosLoader = () => import('./manos.js');
+let manosLoader = defaultManosLoader;
+
+export function setManosLoader(fn) {
+  manosLoader = typeof fn === 'function' ? fn : defaultManosLoader;
+}
+
+async function loadManos() {
+  try {
+    return await manosLoader();
+  } catch {
+    return null;
+  }
+}
+
+// completeChat pre-ligado al keyRing del turno: el loop lo llama como
+// completeChat({messages, ...}) sin conocer el ring. Si el loop lo llama con
+// la firma de dos args (keyRing, opts), también funciona.
+function bindManosCompleteChat(keyRing) {
+  return (...args) => (args.length >= 2
+    ? completeChat(args[0], args[1])
+    : completeChat(keyRing, args[0]));
+}
+
+// emit con identidad: el loop emite {type, ...} y sale con turnId/agentId.
+// Si el loop ya trae los suyos, los suyos ganan. Además traduce eventos
+// legacy {summary} al shape de protocolo {argsPreview/outputPreview, ms}:
+// el core actual ya emite protocolo, pero un fake o una tool vieja que
+// mande summary igual llega válida al cliente.
+function bindManosEmit(emit, turnId, agentId) {
+  if (typeof emit !== 'function') {
+    return () => {};
+  }
+  return (message = {}) => {
+    const out = { turnId, agentId, ...message };
+    if (out.type === 'agent_tool_call' && out.argsPreview === undefined && typeof out.summary === 'string') {
+      out.argsPreview = out.summary.slice(0, 200);
+    }
+    if (out.type === 'agent_tool_done') {
+      if (out.outputPreview === undefined) {
+        if (typeof out.summary === 'string') {
+          out.outputPreview = out.summary.slice(0, 200);
+        } else if (typeof out.error === 'string') {
+          out.outputPreview = out.error.slice(0, 200);
+        }
+      }
+      if (typeof out.ms !== 'number' || !Number.isFinite(out.ms) || out.ms < 0) {
+        out.ms = 0;
+      }
+    }
+    return emit(out);
+  };
+}
+
+// Corre la fase tools si corresponde. Devuelve:
+//   { userContent, toolSummary, toolTurns, ran }
+// - ran=false → userContent es el MISMO string recibido (fallback idéntico).
+// - ran=true + resumen → userContent trae el resumen anexado con el marker.
+// Nunca lanza: cualquier fallo (loader, gate, loop, deadline) degrada a
+// ran=false y el habla sigue su curso normal.
+export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, emit, source, turnId, agentId, signal, companyId = null, slug = null }) {
+  const fallback = { userContent, toolSummary: '', toolTurns: 0, ran: false };
+  if (signal?.aborted || !getManosEnabled()) {
+    return fallback;
+  }
+  const manos = await loadManos();
+  if (!manos) {
+    return fallback;
+  }
+  let gate = false;
+  try {
+    gate = manos.shouldUseTools?.(turn?.text || '') === true;
+  } catch {
+    return fallback;
+  }
+  if (!gate) {
+    return fallback;
+  }
+  let toolSystem = system;
+  try {
+    const section = manos.renderManosPrompt?.() || '';
+    if (section) {
+      toolSystem = `${system}\n\n${section}`;
+    }
+  } catch {
+    return fallback;
+  }
+  const voice = source === 'audio';
+  const deadlineMs = voice ? MANOS_VOICE_DEADLINE_MS : MANOS_TEXT_DEADLINE_MS;
+  const maxTurns = getManosMaxTurns();
+  const loopEmit = bindManosEmit(emit, turnId, agentId);
+  try {
+    loopEmit({ type: 'agent_progress', text: 'Using tools…' });
+  } catch {
+    // Emit caído: las tools igual corren; el habla no depende del aviso.
+  }
+  let outcome = null;
+  try {
+    // El loop respeta deadlineMs; el margen local es red de seguridad por si
+    // una implementación lo ignora: el turno habla igual, sin resumen.
+    outcome = await withTimeout(
+      manos.runToolLoop({
+        system: toolSystem,
+        messages: [
+          { role: 'system', content: toolSystem },
+          { role: 'user', content: userContent }
+        ],
+        completeChat: bindManosCompleteChat(keyRing),
+        source,
+        emit: loopEmit,
+        maxTurns,
+        deadlineMs,
+        signal,
+        turnId,
+        agentId,
+        // Workspace real: sin esto las tools de archivo/comando no saben
+        // en qué proyecto están (el loop los lee como fallback top-level).
+        companyId,
+        slug: slug || 'general'
+      }),
+      deadlineMs + 1000,
+      'Manos: deadline de fase tools'
+    );
+  } catch {
+    return fallback;
+  }
+  const toolSummary = String(outcome?.toolSummary || '');
+  // El core devuelve toolTurns como ARRAY de turnos; los fakes viejos como
+  // número. Aceptar ambos: lo que importa es cuántos turnos corrieron.
+  const toolTurns = Array.isArray(outcome?.toolTurns)
+    ? outcome.toolTurns.length
+    : Number(outcome?.toolTurns || 0);
+  if (!toolSummary) {
+    return { userContent, toolSummary: '', toolTurns, ran: true };
+  }
+  return {
+    userContent: `${userContent}\n\n${MANOS_TOOLS_MARKER}\n${toolSummary}`,
+    toolSummary,
+    toolTurns,
+    ran: true
+  };
+}
 
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
@@ -222,6 +400,26 @@ export class LiveAgentRuntime {
     };
 
     let result;
+    // Fase tools (Manos v1, two-phase): si hay intención, corre ANTES del
+    // habla y su resumen llega anexado al user. Con gate false, loader caído,
+    // tools deshabilitadas o deadline, phase.userContent es idéntico al de
+    // hoy y el stream de abajo no cambia ni un byte.
+    const systemContent = buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {});
+    const phase = await maybeRunToolsPhase({
+      turn,
+      system: systemContent,
+      userContent: this.buildTurnPrompt(turn),
+      keyRing: this.keyRing,
+      emit,
+      source: turn.source,
+      turnId,
+      agentId: this.id,
+      signal,
+      // Workspace del turno: empresa + proyecto en vivo (Manos opera acá).
+      companyId: this.meetingSession?.company?.id || null,
+      slug: this.meetingSession?.project?.slug || 'general'
+    });
+    const userContent = phase.userContent;
     try {
       result = await streamChat(this.keyRing, {
         models: getMinimaxModels(),
@@ -234,8 +432,8 @@ export class LiveAgentRuntime {
         maxTokens: voiceFast ? 1000 : 3000,
         temperature: 0.5,
         messages: [
-          { role: 'system', content: buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {}) },
-          { role: 'user', content: this.buildTurnPrompt(turn) }
+          { role: 'system', content: systemContent },
+          { role: 'user', content: userContent }
         ]
       }, handleDelta);
     } catch (error) {
@@ -505,7 +703,7 @@ function languageRules() {
 }
 
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
-//            workSection?: string, learningsSection?: string } — desacoplado de MeetingSession
+//            workSection?: string, memorySection?: string, learningsSection?: string } — desacoplado de MeetingSession
 // para que el preview HTTP arme exactamente el mismo prompt.
 export function buildSystemInstruction(agent, context = {}) {
   const agentsList = context.agents && context.agents.length > 0 ? context.agents : [agent];
@@ -557,6 +755,12 @@ export function buildSystemInstruction(agent, context = {}) {
        T('No ofrezcas otra cosa: es lo único que el equipo produce.', "Don't offer anything else: it is the only thing the team produces."), '']
     : [];
 
+  // Memoria Pablo (identidad + directivas + hechos + hoy): ANTES que los
+  // learnings — quién es y qué quiere Tito precede a lo episódico.
+  const memoryBlock = context.memorySection
+    ? [context.memorySection, '']
+    : [];
+
   const learningsBlock = context.learningsSection
     ? [context.learningsSection, '']
     : [];
@@ -579,7 +783,13 @@ export function buildSystemInstruction(agent, context = {}) {
     ...(agent.knowledge
       ? [T('LO QUE SABÉS (conocimiento propio de tu puesto):', 'WHAT YOU KNOW (knowledge of your own role):'), agent.knowledge, '']
       : []),
+    // Oficio: el criterio con el que hace bien su trabajo. Estaba en la DB
+    // y en workforce pero el prompt de charla jamás lo veía (09/11 ship).
+    ...(agent.craft
+      ? [T('TU OFICIO (cómo hacés bien tu trabajo):', 'YOUR CRAFT (how you do your job well):'), agent.craft, '']
+      : []),
     ...boundariesBlock,
+    ...memoryBlock,
     ...learningsBlock,
     '---',
     '',

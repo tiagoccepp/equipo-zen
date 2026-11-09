@@ -49,9 +49,10 @@ function setConn(state: 'connecting' | 'live' | 'offline'): void {
   connTextEl.textContent = state === 'live' ? 'Live' : state === 'offline' ? 'Offline' : 'Connecting';
 }
 
-function addMsg(who: string, text: string, cls = ''): void {
+function addMsg(who: string, text: string, cls = '', title = ''): void {
   const div = document.createElement('div');
   div.className = `msg ${cls}`.trim();
+  if (title) div.title = title;
   const b = document.createElement('b');
   b.textContent = who;
   div.appendChild(b);
@@ -130,8 +131,10 @@ function isInterruptedTurn(turnId: string | undefined): boolean {
   return !!turnId && interruptedTurns.has(turnId);
 }
 
-// Gracia de endpointing: una mini-pausa no cierra el turno.
-const GRACE_MS = 1200;
+// Gracia de endpointing: una mini-pausa no cierra el turno. 1000 ms,
+// alineada con GRACE_BASE_MS de voice.ts (09/11: la espera VAD+gracia era
+// el 85% del stop→transcript; 1200 sobraba).
+const GRACE_MS = 1000;
 let graceTimer: number | null = null;
 let graceHint = '';
 let audioEndSent = false;
@@ -447,6 +450,17 @@ const client = new Client({
   onProgress: (_agentId, text) => {
     // Avance del modelo: se ve, no se habla. Estado transitorio.
     setStatus(`…${text.slice(0, 80)}`);
+  },
+  // Actividad de tools: 1 línea compacta por evento en el feed (sys),
+  // nunca en el chat principal. El preview completo va en title.
+  onToolCall: (_agentId, tool, argsPreview) => {
+    const args = argsPreview ? ` ${argsPreview.slice(0, 120)}` : '';
+    addMsg('tools', `🔧 ${tool}${args}`, 'sys', argsPreview || tool);
+  },
+  onToolDone: (_agentId, tool, ok, ms, outputPreview) => {
+    const out = outputPreview ? `: ${outputPreview.slice(0, 120)}` : '';
+    const line = ok ? `✅ ${tool} done in ${Math.round(ms)}ms${out}` : `❌ ${tool} failed${out}`;
+    addMsg('tools', line, 'sys', outputPreview || tool);
   },
   onDelta: (agentId, delta) => {
     turnText.set(agentId, (turnText.get(agentId) || '') + delta);

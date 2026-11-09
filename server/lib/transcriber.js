@@ -1,5 +1,6 @@
 import { buildWavBase64FromPcmChunks, transcribeTurn } from './stt.js';
 import { speechVerdict } from './silero.js';
+import { telemetry } from './telemetry.js';
 import { getSttProvider } from './settings.js';
 import { cleanTranscript, getShortError } from './text.js';
 
@@ -16,6 +17,11 @@ const JUNK_PHRASES = [
   'transcribe', 'transcripción', 'inaudible'
 ];
 
+// Afirmaciones y acks: repetirlos es énfasis rioplatense ("sí, sí", "dale
+// dale"), no alucinación. Exentas de la regla de palabra-repetida (09/11:
+// el filtro viejo las marcaba junk y el usuario tenía que repetir).
+const REPEAT_OK = new Set(['si', 'no', 'dale', 'ok', 'ya', 'bien', 'claro', 'bueno', 'gracias', 'chau', 'vale']);
+// Gruñidos: una sola de estas palabras (o solo estas repetidas) es ruido.
 function normalizeJunk(text) {
   return String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -28,11 +34,13 @@ export function isJunkTranscript(text) {
   if (norm.length < 2) {
     return true;
   }
-  // Gruñidos ("mmm", "eh eh") = ruido; pero "sí"/"no" solos son válidos.
-  const GRUNTS = new Set(['mmm', 'eh', 'ah', 'oh', 'shh', 'hmm', 'mmm', 'ehem']);
+  const GRUNTS = new Set(['mmm', 'eh', 'ah', 'oh', 'shh', 'hmm', 'ehem']);
   const words = norm.split(' ');
-  if (words.length > 1 && words.length <= 3 && new Set(words).size === 1) {
-    return true;
+  const uniq = new Set(words);
+  // Una sola palabra repetida N veces ("mmm mmm", "you you you"): loop de
+  // ruido o alucinación — salvo afirmaciones, que se repiten para enfatizar.
+  if (words.length > 1 && uniq.size === 1) {
+    return !REPEAT_OK.has(words[0]);
   }
   if (words.length === 1 && GRUNTS.has(words[0])) {
     return true;
@@ -80,6 +88,11 @@ export class CaptureTranscriberRuntime {
     const chunks = this.chunks;
     this.chunks = [];
     this.capturedBytes = 0;
+    // Cada audio_end es un veredicto nuevo: el dedup cross-turn tragaba en
+    // silencio las repeticiones legítimas ("dale"... "dale"). Dentro del
+    // turno no hay doble finalize (busy + chunks consumidos), así que resetear
+    // acá no pierde protección (09/11).
+    this.lastFinalized = '';
 
     if (this.busy) {
       return;
@@ -89,11 +102,17 @@ export class CaptureTranscriberRuntime {
   }
 
   async processTurn(chunks, hint) {
+    const t0 = Date.now();
+    // Duración aprox del turno en segundos (desde bytes PCM16 16k mono).
+    // Clave 'secs' (no 'audioSecs'): el sanitizador omite claves con 'audio'.
+    const secs = Math.round((chunks.reduce((n, c) => n + Math.ceil(String(c || '').length * 3 / 4), 0) / 32000) * 100) / 100;
+    const turnEvent = (extra) => telemetry.add({ type: 'audio_turn_stt', payload: { secs, ...extra } });
     try {
       // Compuerta Silero: sin habla real no se gasta STT (ahorra 1-2s y
       // evita alucinaciones). Null = Silero no disponible: seguir normal.
       const verdict = await speechVerdict(chunks);
       if (verdict && !verdict.speech) {
+        turnEvent({ empty: true, reason: 'silero_no_speech', silero: { maxProb: verdict.maxProb, ratio: verdict.speechRatio }, sttMs: Date.now() - t0 });
         this.callbacks.emit({
           type: 'audio_transcription_empty',
           message: 'Just background noise; keep talking.',
@@ -106,9 +125,12 @@ export class CaptureTranscriberRuntime {
         this.callbacks.emit({ type: 'audio_transcription_status', message: 'Transcribing…' });
       }
       try {
+        const t1 = Date.now();
         const { text, source } = await transcribeTurn({ wavBase64, hint });
+        turnEvent({ empty: !cleanTranscript(text), source, sttMs: Date.now() - t1, silero: verdict ? { maxProb: verdict.maxProb, ratio: verdict.speechRatio } : null });
         this.finalize(text, source);
       } catch (error) {
+        turnEvent({ empty: true, reason: 'stt_error', sttMs: Date.now() - t0 });
         this.callbacks.emit({
           type: 'audio_transcription_empty',
           message: `Couldn't transcribe that turn (${getShortError(error)}); try again or type it.`
@@ -121,6 +143,8 @@ export class CaptureTranscriberRuntime {
 
   finalize(text, source) {
     const finalText = cleanTranscript(text);
+    // Dedup intra-turno (endAudio resetea lastFinalized cada turno: repetir la
+    // misma frase en turnos distintos es legítimo y debe salir).
     if (!finalText || finalText === this.lastFinalized) {
       return;
     }

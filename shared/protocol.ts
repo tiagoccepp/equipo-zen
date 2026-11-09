@@ -30,6 +30,9 @@ export const LIMITS = {
   taskText: 300,
   audioChunkBase64: 262144,
   transcriptHint: 2000,
+  // Previews de actividad de tools: ya llegan recortadas del server.
+  toolPreview: 200,
+  toolName: 80,
   maxAgents: 8
 } as const;
 
@@ -228,6 +231,10 @@ export type ServerMessage =
   | { type: 'agent_turn_start'; turnId: string; agentId: string }
   | { type: 'agent_speak_start'; turnId: string; agentId: string }
   | { type: 'agent_progress'; turnId: string; agentId: string; text: string }
+  // Actividad de tools en vivo: el server los emite vía emit() y el forward
+  // genérico de meeting-session les agrega turnId/agentId (igual que progress).
+  | { type: 'agent_tool_call'; turnId: string; agentId: string; tool: string; argsPreview?: string }
+  | { type: 'agent_tool_done'; turnId: string; agentId: string; tool: string; ok: boolean; ms: number; outputPreview?: string }
   | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string; seq?: number }
   | { type: 'agent_audio_chunk'; turnId: string; agentId: string; data: string; mimeType?: string; seq?: number }
   | { type: 'agent_audio_mp3'; turnId: string; agentId: string; data: string; mimeType?: string }
@@ -630,4 +637,45 @@ export function parseServerMessage(raw: unknown): (ServerMessage & Record<string
     return null;
   }
   return value as ServerMessage & Record<string, unknown>;
+}
+
+// Validador estricto de los eventos de tools (los previews ya llegan
+// recortados a LIMITS.toolPreview desde el server; acá solo se verifica
+// forma y topes con los helpers del archivo).
+export type AgentToolEvent = Extract<ServerMessage, { type: 'agent_tool_call' | 'agent_tool_done' }>;
+
+export function parseAgentToolEvent(raw: unknown): ParseResult<AgentToolEvent> {
+  let value: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return { ok: false, error: 'JSON inválido.' };
+    }
+  }
+  if (!isRecord(value) || (value.type !== 'agent_tool_call' && value.type !== 'agent_tool_done')) {
+    return { ok: false, error: 'No es un evento de tool.' };
+  }
+  const turnId = cappedString(value.turnId, 40);
+  const agentId = cappedString(value.agentId, 80);
+  const tool = cappedString(value.tool, LIMITS.toolName);
+  if (!turnId || !agentId || !tool) {
+    return { ok: false, error: 'Evento de tool sin turnId, agentId o tool.' };
+  }
+  const previewKey = value.type === 'agent_tool_call' ? 'argsPreview' : 'outputPreview';
+  const preview = optionalCappedString(value[previewKey], LIMITS.toolPreview);
+  if (preview === null) {
+    return { ok: false, error: `Preview mayor a ${LIMITS.toolPreview} caracteres.` };
+  }
+  if (value.type === 'agent_tool_call') {
+    return { ok: true, message: { type: 'agent_tool_call', turnId, agentId, tool, argsPreview: preview } };
+  }
+  if (typeof value.ok !== 'boolean') {
+    return { ok: false, error: 'agent_tool_done requiere ok booleano.' };
+  }
+  const ms = value.ms;
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) {
+    return { ok: false, error: 'agent_tool_done requiere ms numérico ≥ 0.' };
+  }
+  return { ok: true, message: { type: 'agent_tool_done', turnId, agentId, tool, ok: value.ok, ms, outputPreview: preview } };
 }

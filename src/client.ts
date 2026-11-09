@@ -18,6 +18,9 @@ export interface ClientEvents {
   onAgentStart: (agentId: string, turnId?: string) => void;
   onSpeakStart: (agentId: string) => void;
   onProgress: (agentId: string, text: string) => void;
+  // Actividad de tools en vivo: feed compacto, no chat principal.
+  onToolCall: (agentId: string, tool: string, argsPreview: string, turnId?: string) => void;
+  onToolDone: (agentId: string, tool: string, ok: boolean, ms: number, outputPreview: string, turnId?: string) => void;
   onDelta: (agentId: string, delta: string) => void;
   onAgentEnd: (agentId: string, text: string, turnId?: string) => void;
   onMp3: (base64: string, turnId?: string) => void;
@@ -203,6 +206,19 @@ export class Client {
           break;
         case 'agent_progress':
           this.ev.onProgress(String(m.agentId || ''), String(m.text || ''));
+          break;
+        case 'agent_tool_call':
+          this.ev.onToolCall(String(m.agentId || ''), String(m.tool || ''), String(m.argsPreview || ''), optStr(m.turnId));
+          break;
+        case 'agent_tool_done':
+          this.ev.onToolDone(
+            String(m.agentId || ''),
+            String(m.tool || ''),
+            Boolean(m.ok),
+            Number(m.ms) || 0,
+            String(m.outputPreview || ''),
+            optStr(m.turnId)
+          );
           break;
         case 'agent_transcript_delta':
           this.ev.onDelta(String(m.agentId || ''), String(m.delta || ''));

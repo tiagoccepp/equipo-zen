@@ -125,6 +125,32 @@ export function getTtsUrl() {
   return dbValue('tts.url') || SUPERTONIC_URL;
 }
 
+// ── Manos (tools en vivo, two-phase) ─────────────────────────────────────
+// Sin UI en v1: las claves se ajustan vía PATCH /api/settings directo o
+// defaults. Se exponen en publicSettings/EDITABLE_KEYS para que la API y
+// futuros controles las vean sin tocar este módulo.
+
+export function getManosEnabled() {
+  const raw = dbValue('manos.enabled');
+  if (raw === null || raw === undefined || raw === '') {
+    return true;
+  }
+  const value = String(raw).trim().toLowerCase();
+  if (['0', 'false', 'no', 'off'].includes(value)) {
+    return false;
+  }
+  return true;
+}
+
+export function getManosMaxTurns() {
+  const raw = dbValue('manos.maxTurns');
+  if (raw === null || raw === undefined || raw === '') {
+    return 6;
+  }
+  const value = Number(raw);
+  return (Number.isInteger(value) && value >= 1 && value <= 12) ? value : 6;
+}
+
 // ── Lectura/escritura desde la UI ───────────────────────────────────────
 
 const EDITABLE_KEYS = new Set([
@@ -140,7 +166,9 @@ const EDITABLE_KEYS = new Set([
   'stt.deepgramKey',
   'stt.language',
   'stt.minConfidence',
-  'tts.language'
+  'tts.language',
+  'manos.enabled',
+  'manos.maxTurns'
 ]);
 
 const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
@@ -185,6 +213,10 @@ export function publicSettings() {
       engine: 'supertonic',
       language: getTtsLanguage(),
       url: getTtsUrl()
+    },
+    manos: {
+      enabled: getManosEnabled(),
+      maxTurns: getManosMaxTurns()
     }
   };
 }
@@ -216,6 +248,16 @@ export function applySettings(patch) {
     if (key === 'stt.minConfidence' && value) {
       const n = Number(value);
       if (!Number.isFinite(n) || n < 0 || n > 1) {
+        continue;
+      }
+    }
+    // Manos: enabled acepta booleanos en texto; maxTurns entero 1..12.
+    if (key === 'manos.enabled' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'manos.maxTurns' && value) {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 12) {
         continue;
       }
     }

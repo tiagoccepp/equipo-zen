@@ -11,6 +11,7 @@ import { LiveAgentRuntime } from './agent-runtime.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
+import { renderMemorySection } from './pablo-memory.js';
 import { ReflectionRunner } from './reflection.js';
 import { registerSession, unregisterSession } from './priority.js';
 import { logEvent } from './session-log.js';
@@ -31,13 +32,18 @@ const USER_TURN_SETTLE_EXTENDED_MS = Number(process.env.USER_TURN_SETTLE_EXTENDE
 const USER_TURN_SETTLE_VOICE_MS = Number(process.env.USER_TURN_SETTLE_VOICE_MS || 200);
 
 // Tipos de telemetría que alimentan el auto-ajuste del router: se persisten
-// en SQLite además del ring en RAM.
+// en SQLite además del ring en RAM. client_voice y audio_turn_stt también se
+// persisten (09/11: afinar VAD/STT con datos reales en vez de adivinar).
+// OJO: audio_turn_stt lo emite el transcriber directo al ring (no tiene
+// sesión); esta entrada vale cuando el evento pasa por logTelemetry.
 const PERSISTED_TELEMETRY_TYPES = new Set([
   'route_decision',
   'contextual_route_decision',
   'no_agent_response',
   'ai_route_planned',
-  'turn_error'
+  'turn_error',
+  'client_voice',
+  'audio_turn_stt'
 ]);
 
 // Una sola sesión WS viva por reunión (single-writer): una segunda pestaña
@@ -264,7 +270,9 @@ export class MeetingSession {
       workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
       // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
       stack: this.project?.stack || this.company?.stack || null,
-      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
+      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
+      // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 1200 })
     };
   }
 
@@ -303,7 +311,9 @@ export class MeetingSession {
       workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
       // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
       stack: this.project?.stack || this.company?.stack || null,
-      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : ''
+      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
+      // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 1200 })
     };
   }
 

@@ -55,7 +55,22 @@ const PROHIBIDO = [
   [/\bhistory\b|\.ssh\b|\.env\b|id_rsa|credentials/, 'no reading credentials or secrets']
 ];
 
-export function clasificarComando(comando) {
+// En VIVO (turno de voz/texto con Manos) no hay ida y vuelta para pedir
+// justificación: lo riesgoso se NIEGA en vez de pedir el "porque".
+// Lista que se niega en vivo (además de PROHIBIDO, que niega siempre):
+// - `rm -rf` y cualquier rm/mv (borrado o movimiento, aunque sea relativo)
+// - `dd`, `chmod`, `chown` (disco y permisos)
+// - `git push --force` / reset / clean / checkout -- (reescritura)
+// - `npm publish`, `kill`, `brew uninstall/remove` (publicar, matar, desinstalar)
+// - `chmod -R 777` (permisos abiertos de par en par)
+// - fork bomb `:(){ :|:& };:` (no está en RIESGOSOS: patrón propio acá)
+// Ya negados SIEMPRE por PROHIBIDO (figuran igual para que la lista sea
+// completa): mkfs, shutdown/reboot, curl|wget pipeado a shell, git push.
+const RIESGOSO_SOLO_VIVO = [
+  [/:\(\)\s*\{/, 'fork bomb']
+];
+
+export function clasificarComando(comando, { voice = false } = {}) {
   const texto = String(comando || '').trim();
   if (!texto) {
     return { permitido: false, motivo: 'empty command' };
@@ -68,7 +83,12 @@ export function clasificarComando(comando) {
       return { permitido: false, motivo };
     }
   }
-  return { permitido: true, riesgoso: RIESGOSOS.some((p) => p.test(texto)) };
+  const riesgoso = RIESGOSOS.some((p) => p.test(texto))
+    || RIESGOSO_SOLO_VIVO.some(([p]) => p.test(texto));
+  if (voice && riesgoso) {
+    return { permitido: false, riesgoso: true, motivo: 'risky command denied live — ask me as project work and I will do it there' };
+  }
+  return { permitido: true, riesgoso };
 }
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';

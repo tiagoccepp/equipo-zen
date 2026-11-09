@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseClientMessage, parseServerMessage } from '../shared/protocol.ts';
+import { parseAgentToolEvent, parseClientMessage, parseServerMessage } from '../shared/protocol.ts';
 
 test('user_turn válido pasa; texto gigante se rechaza', () => {
   const ok = parseClientMessage(JSON.stringify({ type: 'user_turn', text: 'hola' }));
@@ -55,6 +55,45 @@ test('parseServerMessage: pasa tipos desconocidos y rechaza basura', () => {
   assert.equal(parseServerMessage('{"type":"mensaje_nuevo","x":1}').type, 'mensaje_nuevo');
   assert.equal(parseServerMessage('no es json'), null);
   assert.equal(parseServerMessage('{"sinTipo":true}'), null);
+});
+
+test('agent_tool_call válido pasa; preview gigante o sin tool se rechaza', () => {
+  const ok = parseAgentToolEvent(JSON.stringify({
+    type: 'agent_tool_call', turnId: 't1', agentId: 'bruno', tool: 'read', argsPreview: '{"path":"a.ts"}'
+  }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.message.type, 'agent_tool_call');
+  assert.equal(ok.message.tool, 'read');
+
+  const grande = parseAgentToolEvent(JSON.stringify({
+    type: 'agent_tool_call', turnId: 't1', agentId: 'bruno', tool: 'read', argsPreview: 'x'.repeat(201)
+  }));
+  assert.equal(grande.ok, false);
+
+  const sinTool = parseAgentToolEvent(JSON.stringify({ type: 'agent_tool_call', turnId: 't1', agentId: 'bruno' }));
+  assert.equal(sinTool.ok, false);
+
+  const otroTipo = parseAgentToolEvent(JSON.stringify({ type: 'agent_progress', turnId: 't1', agentId: 'b', text: 'x' }));
+  assert.equal(otroTipo.ok, false);
+});
+
+test('agent_tool_done válido pasa; ok/ms inválidos se rechazan', () => {
+  const ok = parseAgentToolEvent(JSON.stringify({
+    type: 'agent_tool_done', turnId: 't1', agentId: 'bruno', tool: 'read', ok: true, ms: 42, outputPreview: 'contenido…'
+  }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.message.type, 'agent_tool_done');
+  assert.equal(ok.message.ms, 42);
+
+  const sinOk = parseAgentToolEvent(JSON.stringify({
+    type: 'agent_tool_done', turnId: 't1', agentId: 'bruno', tool: 'read', ms: 42
+  }));
+  assert.equal(sinOk.ok, false);
+
+  const msMalo = parseAgentToolEvent(JSON.stringify({
+    type: 'agent_tool_done', turnId: 't1', agentId: 'bruno', tool: 'read', ok: false, ms: -5
+  }));
+  assert.equal(msMalo.ok, false);
 });
 
 test('el cuerpo del pedido usa el nombre de tope de tokens de cada proveedor', async () => {

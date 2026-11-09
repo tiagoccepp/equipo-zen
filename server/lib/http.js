@@ -13,6 +13,7 @@ import { buildSystemInstruction } from './agent-runtime.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
 import { renderLearningsSection } from './learning.js';
 import { isMeetingLive } from './meeting-session.js';
+import { renderMemorySection } from './pablo-memory.js';
 import { applySuggestion } from './reflection.js';
 import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
 import { applySettings, getLlmKeys, getLlmModels, getLlmProvider, getLlmProviderConfig, publicSettings } from './settings.js';
@@ -340,6 +341,7 @@ export function createApp({ store }) {
       agents: store.listAgents({ companyId: agent.companyId }),
       scenario,
       workSection: renderWorkSection(store, agent.companyId),
+      memorySection: renderMemorySection(agent.companyId || 'pablo', { maxChars: 1200 }),
       learningsSection: renderLearningsSection(store, agent.id)
     });
     res.json({ agentId: agent.id, companyId: agent.companyId, systemInstruction: instruction });
