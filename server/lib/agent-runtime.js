@@ -110,7 +110,7 @@ function bindManosEmit(emit, turnId, agentId) {
 // - ran=true + resumen → userContent trae el resumen anexado con el marker.
 // Nunca lanza: cualquier fallo (loader, gate, loop, deadline) degrada a
 // ran=false y el habla sigue su curso normal.
-export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, emit, source, turnId, agentId, signal, companyId = null, slug = null }) {
+export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, emit, source, turnId, agentId, signal, companyId = null, slug = null, agentRole = null }) {
   const fallback = { userContent, toolSummary: '', toolTurns: 0, ran: false };
   if (signal?.aborted || !getManosEnabled()) {
     return fallback;
@@ -128,11 +128,31 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   if (!gate) {
     return fallback;
   }
+  // Track C: MCP visibles en el prompt desde el turno 1. Antes loadMcpTools
+  // corría DENTRO del loop (después del render) → las mcp_* no se listaban.
+  // Best-effort: si falla, el turno sigue con las builtins.
+  try {
+    await manos.loadMcpTools?.();
+  } catch {
+    // MCP roto no rompe el turno.
+  }
+  // Track C: allow-list por rol. Sin rol (o capabilities ausente) → null =
+  // todo permitido, conducta histórica intacta.
+  let allow = null;
+  if (agentRole) {
+    try {
+      const caps = await import('./capabilities.js');
+      const mcpTools = typeof manos.listTools === 'function' ? manos.listTools() : [];
+      allow = caps.toolsForRole?.(agentRole, { mcpTools }) ?? null;
+    } catch {
+      allow = null;
+    }
+  }
   let toolSystem = system;
   try {
     // Versión source-aware (voz corta, texto full): el loop la recibe lista
     // y NO la vuelve a anexar (ver runToolLoop) — evita el 2× (~2400ch).
-    const section = manos.renderManosPrompt?.(source) || '';
+    const section = manos.renderManosPrompt?.(source, { allow }) || '';
     if (section) {
       toolSystem = `${system}\n\n${section}`;
     }
@@ -170,7 +190,14 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
         // Workspace real: sin esto las tools de archivo/comando no saben
         // en qué proyecto están (el loop los lee como fallback top-level).
         companyId,
-        slug: slug || 'general'
+        slug: slug || 'general',
+        allow,
+        // Integración manos 09/11: el gate de outreach baja del turno (los
+        // jobs lo setean vía runAgentJobTurn; chat normal → null → false).
+        aprobadoOutreach: turn?.aprobadoOutreach ?? null,
+        // Integración manos 09/11: el gate de outreach baja del turno (los
+        // jobs lo setean vía runAgentJobTurn; chat normal → null → false).
+        aprobadoOutreach: turn?.aprobadoOutreach ?? null
       }),
       deadlineMs + 1000,
       'Manos: deadline de fase tools'
@@ -426,7 +453,8 @@ export class LiveAgentRuntime {
       signal,
       // Workspace del turno: empresa + proyecto en vivo (Manos opera acá).
       companyId: this.meetingSession?.company?.id || null,
-      slug: this.meetingSession?.project?.slug || 'general'
+      slug: this.meetingSession?.project?.slug || 'general',
+      agentRole: this.agent?.role || null
     });
     const userContent = phase.userContent;
     try {

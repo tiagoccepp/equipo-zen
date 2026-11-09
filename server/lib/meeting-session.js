@@ -1629,7 +1629,7 @@ export class MeetingSession {
 
   // Driver autónomo: corre UN turno real del agente (modelo + tools manos)
   // y devuelve el resultado. Los turnos de voz normales no tocan esto.
-  async runAgentJobTurn(agentId, taskText, { timeoutMs = 120000, signal } = {}) {
+  async runAgentJobTurn(agentId, taskText, { timeoutMs = 120000, signal, aprobadoOutreach = false } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`runAgentJobTurn: ${agentId} sin runtime en la reunión`);
     const turnId = `job-${Date.now().toString(36)}-${agentId}`;
@@ -1637,7 +1637,7 @@ export class MeetingSession {
     const t0 = Date.now();
     const response = await withTimeout(
       agent.respond(
-        { speaker: 'Orquestador', text: String(taskText || ''), route: { source: 'job' } },
+        { speaker: 'Orquestador', text: String(taskText || ''), route: { source: 'job' }, aprobadoOutreach: aprobadoOutreach === true },
         (event) => {
           if (event?.type === 'agent_tool_done') {
             toolCalls.push({ tool: event.tool, ok: event.ok !== false });

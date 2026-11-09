@@ -2,7 +2,7 @@
 name: copy-ventas
 description: Escribir textos que venden: titulares, beneficios, llamados a la acción.
 keywords: copy, titular, titulares, venta, ventas, vender, persuasivo, cta, llamado a la acción, beneficio, landing texto, headline
-scope: chat, role:worker
+scope: chat, role:copy, role:marketing, role:ventas
 ---
 
 Cuando el turno pide textos para vender (landing, anuncio, pitch):

@@ -3,7 +3,8 @@
 
 import './app.css';
 import type { OrbAgent, OrbSlot } from './lib/call-orbs.ts';
-import { OrbMorph } from './fx/orb-morph.ts';
+import { OrbMorph, type AgentVisualState } from './fx/orb-morph.ts';
+import { createOrb3D, probeWebGL2, type Orb3D } from './fx/orb3d.ts';
 import { mountMissionControl } from './mission/view.ts';
 import './mission/mission.css';
 import './fx/motion.css';
@@ -59,6 +60,8 @@ function setConn(state: 'connecting' | 'live' | 'offline'): void {
 }
 
 function addMsg(who: string, text: string, cls = '', title = ''): void {
+  // Primer mensaje real: fuera el empty-state honesto del HTML.
+  document.getElementById('stream-empty')?.remove();
   const div = document.createElement('div');
   div.className = `msg ${cls}`.trim();
   if (title) div.title = title;
@@ -375,11 +378,28 @@ function callEnergy(): number {
   return 0.28 + 0.22 * Math.sin(performance.now() / 210);
 }
 
-const field = new OrbMorph(canvas, { energy: callEnergy });
+// Renderer de orbes: OrbMorph (2D) pinta ya; si hay WebGL2 se sube a Orb3D.
+// Misma API en ambos; `visualStates` es la fuente de verdad para re-aplicar
+// figuras tras el swap.
+type OrbRenderer = OrbMorph | Orb3D;
+let field: OrbRenderer = new OrbMorph(canvas, { energy: callEnergy });
 field.setTheme('dark');
+let orbMode: 'morph' | 'webgl' = 'morph';
+const visualStates = new Map<string, AgentVisualState>();
 
 const agents = new Map<string, Agent>();
 const working = new Set<string>();
+
+function restState(agentId: string): AgentVisualState {
+  if (working.has(agentId)) return 'trabajando';
+  if (voiceSession) return 'escuchando';
+  return 'idle';
+}
+
+function setVisual(agentId: string, state: AgentVisualState): void {
+  visualStates.set(agentId, state);
+  field.setAgentState(agentId, state);
+}
 
 // Wrapper único de speaking: orbe + glow + figura (fx). Todo cambio de
 // "quién habla" pasa por acá para que nada quede prendido a medias.
@@ -394,9 +414,9 @@ function setSpeaking(agentId: string): void {
   field.setSpeaking(agentId);
   glowSpeaking(agentId);
   if (lastSpeaking && lastSpeaking !== agentId) {
-    field.setAgentState(lastSpeaking, working.has(lastSpeaking) ? 'trabajando' : 'idle');
+    setVisual(lastSpeaking, restState(lastSpeaking));
   }
-  if (agentId) field.setAgentState(agentId, 'hablando');
+  if (agentId) setVisual(agentId, 'hablando');
   lastSpeaking = agentId;
 }
 
@@ -439,6 +459,35 @@ function layoutOrbs(): void {
 
 window.addEventListener('resize', layoutOrbs);
 
+// ── 3D vivo: si hay WebGL2, el canvas 2D se reemplaza por uno fresco con
+// Orb3D (mismo slot, misma energía, mismas figuras por estado). Si algo
+// falla, OrbMorph sigue (fallback silencioso + log).
+async function upgradeTo3D(): Promise<void> {
+  const probe = probeWebGL2();
+  if (!probe.ok) {
+    console.info(`[orb] morph 2D: sin WebGL2 (${probe.error})`);
+    return;
+  }
+  try {
+    const replacement = document.createElement('canvas');
+    replacement.id = canvas.id;
+    canvas.replaceWith(replacement);
+    const orb3d = await createOrb3D(replacement, { energy: callEnergy });
+    field.stop();
+    orb3d.setTheme('dark');
+    field = orb3d;
+    orbMode = 'webgl';
+    layoutOrbs();
+    glowSpeaking(lastSpeaking);
+    if (lastSpeaking) field.setSpeaking(lastSpeaking);
+    field.setWorking([...working]);
+    for (const [id, state] of visualStates) field.setAgentState(id, state);
+    console.info(`[orb] webgl 3D: ${probe.renderer || 'renderer desconocido'}`);
+  } catch (err) {
+    console.info(`[orb] morph 2D: Orb3D no disponible (${String(err)})`);
+  }
+}
+
 // ── Cliente ─────────────────────────────────────────────────────────
 let lastSpeechEndAt = 0;
 const turnText = new Map<string, string>();
@@ -456,7 +505,10 @@ const client = new Client({
       }
     }
     const pablo = list.find((a) => a.role === 'ceo') || list[0];
-    greetEl.textContent = pablo ? `How can I help? — ${pablo.name}` : 'How can I help?';
+    const n = list.length;
+    greetEl.textContent = n === 0
+      ? 'Team console — no agents'
+      : `${pablo?.name || 'Team'} · ${n} agent${n === 1 ? '' : 's'} ready`;
     setStatus(voiceSession ? 'Listening…' : 'Ready');
     setConn('live');
     layoutOrbs();
@@ -478,6 +530,8 @@ const client = new Client({
   onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
     if (turnId) activeTurns.set(turnId, { agentId, at: Date.now() });
+    // Pensamiento silencioso: toro. Cuando rompa a hablar, setSpeaking pasa a onda.
+    if (agentId !== speakingAgent) setVisual(agentId, 'pensando');
   },
   onSpeakStart: (agentId) => {
     // Primera palabra audible del modelo: marca TTFV (voz) para telemetría.
@@ -485,9 +539,12 @@ const client = new Client({
     console.info(`[ttfv] ${agentName(agentId)} primera palabra a +${dt}ms del fin de habla`);
     (window as any).__lastTtfvMs = dt;
   },
-  onProgress: (_agentId, text) => {
+  onProgress: (agentId, text) => {
     // Avance del modelo: se ve, no se habla. Estado transitorio.
     setStatus(`…${text.slice(0, 80)}`);
+    if (agentId && agentId !== speakingAgent && !working.has(agentId)) {
+      setVisual(agentId, 'pensando');
+    }
   },
   // Actividad de tools: 1 línea compacta por evento en el feed (sys),
   // nunca en el chat principal. El preview completo va en title.
@@ -516,6 +573,9 @@ const client = new Client({
       setSpeaking('');
       if (!voiceSession) setStatus('Ready');
     }
+    // Fin del turno de texto: si no está hablando, vuelve al reposo real
+    // (saca el toro de "pensando" que puso onAgentStart).
+    if (agentId !== speakingAgent) setVisual(agentId, restState(agentId));
   },
   onMp3: (b64, turnId) => {
     if (!voiceOn || isInterruptedTurn(turnId)) return;
@@ -558,6 +618,7 @@ const client = new Client({
       speakingAgent = '';
       setSpeaking('');
     }
+    if (agentId) setVisual(agentId, restState(agentId));
     setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onWorkEvent: (kind, agentId, event) => {
@@ -565,12 +626,12 @@ const client = new Client({
     if (kind === 'task_started' || kind === 'task_queued' || kind === 'comando' || kind === 'file_written' || kind === 'web') {
       if (agentId) {
         working.add(agentId);
-        if (agentId !== speakingAgent) field.setAgentState(agentId, 'trabajando');
+        if (agentId !== speakingAgent) setVisual(agentId, 'trabajando');
       }
     } else if (kind === 'task_done' || kind === 'task_blocked') {
       if (agentId) {
         working.delete(agentId);
-        field.setAgentState(agentId, agentId === speakingAgent ? 'hablando' : 'idle');
+        if (agentId !== speakingAgent) setVisual(agentId, restState(agentId));
       }
     }
     field.setWorking([...working]);
@@ -648,6 +709,10 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     voiceGroup = false;
     micBtn.classList.remove('live');
     callBtn.classList.remove('live');
+    // Los que solo escuchaban vuelven a idle (los busy ya tienen su figura).
+    for (const [id, state] of visualStates) {
+      if (state === 'escuchando') setVisual(id, 'idle');
+    }
     setStatus('Ready');
     return;
   }
@@ -673,6 +738,11 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   voiceGroup = group;
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
+  // Mic abierto: anillo en los libres (hablando/trabajando conservan figura).
+  const ids = agents.size > 0 ? [...agents.keys()] : ['pablo'];
+  for (const id of ids) {
+    if (id !== speakingAgent && !working.has(id)) setVisual(id, 'escuchando');
+  }
   setStatus(group ? 'Everyone is listening — go ahead' : 'Listening…');
 }
 
@@ -1336,6 +1406,9 @@ mountPalette({
   },
   get voiceSession() {
     return voiceSession;
+  },
+  get orbMode() {
+    return orbMode;
   }
 };
 (window as unknown as { __pablo: object; __sofia?: object }).__sofia =
@@ -1343,6 +1416,7 @@ mountPalette({
 
 // ── Arranque ────────────────────────────────────────────────────────
 layoutOrbs();
+void upgradeTo3D();
 
 (async () => {
   try {

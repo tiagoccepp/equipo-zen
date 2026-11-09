@@ -21,6 +21,11 @@ import path from 'node:path';
 
 import { clasificarComando, ejecutar } from './herramientas.js';
 import { esCarpetaIgnorada, projectDir, safeWorkspacePath } from './workforce.js';
+// Manos extendidas (integración 09/11): los módulos solo definen; el registro
+// corre abajo, registry ya listo. Ciclo ESM seguro (sin top-level calls).
+import { registerBrowserTools } from './manos-browser.js';
+import { registerCanvasTools } from './manos-canvas.js';
+import { registerOutreachTools } from './manos-outreach.js';
 
 // ---------------------------------------------------------------------------
 // 1. Registry
@@ -706,6 +711,12 @@ registerTool({
   }
 });
 
+// Manos extendidas: browser (A) + canvas/outreach (D). Acá, no arriba: el
+// registry y los helpers (projectDir, truncado) ya existen en este punto.
+registerBrowserTools();
+registerCanvasTools();
+registerOutreachTools();
+
 // ---------------------------------------------------------------------------
 // 3. Formato v1: JSON-en-texto  ```tool:NOMBRE {json}
 // ---------------------------------------------------------------------------
@@ -750,8 +761,11 @@ export function parseToolCalls(texto) {
 // schemas: el loop tolera JSON simple); cualquier otro valor = FULL con
 // params compactos nombre:tipo (D7). Default full: compatible con los
 // llamados viejos sin argumento.
-export function renderManosPrompt(source = 'text') {
-  const tools = listTools();
+export function renderManosPrompt(source = 'text', { allow = null } = {}) {
+  const todas = listTools();
+  // Track C: allow-list por rol. allow=null (default) = todo, como siempre.
+  // Si es array, solo las listadas (aunque haya más registradas).
+  const tools = Array.isArray(allow) ? todas.filter((t) => allow.includes(t.name)) : todas;
   const head = 'Tenés MANOS: podés actuar en el proyecto con estas herramientas:';
   if (source === 'audio') {
     const lineas = tools.map((t) => {
@@ -807,7 +821,9 @@ const GATE_PATTERNS = [
   // abr* suelto. 'open' ya estaba arriba (abrí el readme).
   /\babre\b/, /\babrir\b/, /\bnaveg\w*\b/, /\bpantalla\w*\b/, /\bcaptura\w*\b/,
   /\bscreenshot\w*\b/, /\bventana\w*\b/,
-  /\bnavigat\w*\b/, /\bbrowse\b/, /\bwindow\w*\b/, /\bscreen\w*\b/, /\bcaptur\w*\b/
+  /\bnavigat\w*\b/, /\bbrowse\b/, /\bwindow\w*\b/, /\bscreen\w*\b/, /\bcaptur\w*\b/,
+  // Manos extendidas (09/11): clic (browser_click) + borrador (outreach_draft).
+  /\bclic\w*\b/, /\bborrador\w*\b/
 ];
 
 function normalizarGate(texto) {
@@ -862,7 +878,9 @@ export async function runToolLoop({
   slug = null,
   turnId = null,
   agentId = null,
-  signal = null
+  signal = null,
+  allow = null,
+  aprobadoOutreach = null
 } = {}) {
   if (typeof completeChat !== 'function') {
     throw new Error('runToolLoop necesita completeChat(messages)');
@@ -873,7 +891,13 @@ export async function runToolLoop({
   const srcObj = source && typeof source === 'object' ? source : {};
   const ctx = {
     companyId: srcObj.companyId ?? companyId ?? null,
-    slug: srcObj.slug ?? slug ?? 'general'
+    slug: srcObj.slug ?? slug ?? 'general',
+    // Track C: gate de outreach. srcObj gana, luego top-level, default false.
+    aprobadoOutreach: srcObj.aprobadoOutreach ?? aprobadoOutreach ?? false,
+    // Integración 09/11: identidad del turno para tools runtime (browser usa
+    // agentId para su sesión). base ya los tenía; ctx los hereda.
+    turnId: srcObj.turnId ?? turnId ?? null,
+    agentId: srcObj.agentId ?? agentId ?? null
   };
   const base = { turnId: srcObj.turnId ?? turnId, agentId: srcObj.agentId ?? agentId };
 
@@ -942,6 +966,9 @@ export async function runToolLoop({
       const t0 = Date.now();
       if (llamada.error) {
         resultado = { ok: false, output: '', error: llamada.error };
+      } else if (Array.isArray(allow) && !allow.includes(llamada.name)) {
+        // Track C: fuera de la allow-list del rol → rechazo claro, no ejecución.
+        resultado = { ok: false, output: '', error: `tool no permitida para tu rol: ${llamada.name}` };
       } else {
         const tool = getTool(llamada.name);
         if (!tool) {

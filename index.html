@@ -25,7 +25,7 @@
           <canvas id="orb-canvas"></canvas>
           <div class="orb-cells" id="orb-cells"></div>
         </div>
-        <h1 class="greet" id="greet">How can I help?</h1>
+        <h1 class="greet" id="greet">Team console</h1>
         <p class="status" id="status">Connecting…</p>
       </section>
 
@@ -33,29 +33,29 @@
         <textarea
           id="prompt"
           rows="2"
-          placeholder="Ask Pablo anything…"
-          aria-label="Ask Pablo anything"
+          placeholder="Type a message or instruction…"
+          aria-label="Type a message or instruction"
         ></textarea>
         <div class="composer-actions">
           <div class="left">
-            <button id="btn-mic" class="pill" type="button" aria-pressed="false" title="Talk to Pablo with your voice">🎤 Talk</button>
-            <button id="btn-call" class="pill" type="button" aria-pressed="false" title="Let the whole team listen">📞 Call all</button>
-            <button id="btn-voice" class="pill on" type="button" aria-pressed="true" title="Spoken replies on/off">🔊 Voice</button>
-            <button id="btn-autowork" class="pill on" type="button" aria-pressed="true" title="Agents keep working on the project on their own">⚙️ Auto</button>
+            <button id="btn-mic" class="pill" type="button" aria-pressed="false" title="Talk to Pablo with your voice"><span class="pill-dot" aria-hidden="true"></span><span>Talk</span></button>
+            <button id="btn-call" class="pill" type="button" aria-pressed="false" title="Let the whole team listen"><span class="pill-dot" aria-hidden="true"></span><span>Call all</span></button>
+            <button id="btn-voice" class="pill on" type="button" aria-pressed="true" title="Spoken replies on/off"><span class="pill-dot" aria-hidden="true"></span><span>Voice</span></button>
+            <button id="btn-autowork" class="pill on" type="button" aria-pressed="true" title="Agents keep working on the project on their own"><span class="pill-dot" aria-hidden="true"></span><span>Auto</span></button>
           </div>
-          <button id="btn-send" class="send" type="button" aria-label="Send">↑</button>
+          <button id="btn-send" class="send" type="button" aria-label="Send">Send</button>
         </div>
       </section>
 
       <section class="quick">
-        <button class="chip" type="button" data-say="Please introduce yourselves.">Meet the team</button>
-        <button class="chip" type="button" data-say="What is the team working on?">Status update</button>
-        <button class="chip" type="button" id="btn-test-voice">Test voice</button>
+        <button class="chip" type="button" data-say="Please introduce yourselves.">Introduce team</button>
+        <button class="chip" type="button" data-say="What is the team working on?">Work status</button>
+        <button class="chip" type="button" id="btn-test-voice">Voice check</button>
       </section>
 
       <section class="stream-wrap">
         <div class="stream-head" aria-hidden="true"><span>Activity</span></div>
-        <section class="stream" id="stream" aria-live="polite"></section>
+        <section class="stream" id="stream" aria-live="polite"><div class="stream-empty" id="stream-empty">No activity yet — messages and tool runs will appear here.</div></section>
       </section>
 
       <details class="companies">

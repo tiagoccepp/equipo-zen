@@ -12,11 +12,14 @@ import type {
   SidecarState,
   TelemetryAnalysis
 } from './types.ts';
+import { apiBase } from '../client.ts';
 import { pickCompany } from './format.ts';
 
 async function getJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(path, { headers: { Accept: 'application/json' } });
+    // apiBase() dinámico por llamada: en app empaquetada el backend vive en
+    // puerto efímero (sin esto todo fetch iba a tauri:// y cada tarjeta era —).
+    const res = await fetch(apiBase() + path, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       return null;
     }

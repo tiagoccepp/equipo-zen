@@ -4,6 +4,9 @@
 // Sin dependencias: solo builtins de node.
 
 import { McpClient, DEFAULT_TIMEOUT_MS } from './mcp.js';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // Largo máximo del output que devolvemos por tool (contrato: ≤2000).
 export const MAX_MCP_OUTPUT = 2000;
@@ -20,18 +23,16 @@ function timeoutMs() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_TIMEOUT_MS;
 }
 
-// Parsea PABLO_MCP_SERVERS = JSON [{name, cmd, args}].
-// Ausente o inválido -> [] (nunca throw). Entradas inválidas se saltean.
-export function readMcpConfig() {
-  const raw = process.env[ENV_SERVERS];
-  if (!raw) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
+// Path del config por archivo (fallback cuando PABLO_MCP_SERVERS ausente).
+// Usa $HOME primero para permitir override en tests.
+function configFilePath() {
+  const h = process.env.HOME || homedir();
+  return join(h, '.config', 'equipo-mcp.json');
+}
+
+// Valida/normaliza array [{name, cmd, args?, env?}]. Entradas inválidas se saltean.
+// `env` opcional: objeto plano string->string.
+function normalizeEntries(parsed) {
   const out = [];
   for (const e of parsed) {
     if (!e || typeof e !== 'object') continue;
@@ -39,13 +40,46 @@ export function readMcpConfig() {
     if (typeof e.cmd !== 'string' || !e.cmd.trim()) continue;
     const args = e.args === undefined ? [] : e.args;
     if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) continue;
-    out.push({ name: e.name.trim(), cmd: e.cmd.trim(), args });
+    let env;
+    if (e.env !== undefined) {
+      if (!e.env || typeof e.env !== 'object' || Array.isArray(e.env)) continue;
+      const kv = Object.entries(e.env);
+      if (!kv.every(([k, v]) => typeof k === 'string' && typeof v === 'string')) continue;
+      env = {};
+      for (const [k, v] of kv) env[k] = v;
+    }
+    out.push({ name: e.name.trim(), cmd: e.cmd.trim(), args, ...(env ? { env } : {}) });
   }
   return out;
 }
 
+// Parsea PABLO_MCP_SERVERS = JSON [{name, cmd, args?, env?}].
+// Si ausente (unset/vacío), fallback a ~/.config/equipo-mcp.json (mismo schema).
+// Ausente o inválido -> [] (nunca throw). Entradas inválidas se saltean.
+export function readMcpConfig() {
+  const raw = process.env[ENV_SERVERS];
+  if (raw) {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    return normalizeEntries(parsed);
+  }
+  try {
+    const content = readFileSync(configFilePath(), 'utf8');
+    const parsed = JSON.parse(content);
+    if (!Array.isArray(parsed)) return [];
+    return normalizeEntries(parsed);
+  } catch {
+    return [];
+  }
+}
+
 function entryKey(entry) {
-  return entry.cmd + '\n' + entry.args.join('\n');
+  return entry.cmd + '\n' + entry.args.join('\n') + '\n' + JSON.stringify(entry.env ?? {});
 }
 
 function ensureExitHook() {
@@ -71,7 +105,7 @@ async function getClient(entry) {
     slot = undefined;
   }
   if (!slot) {
-    const client = new McpClient({ cmd: entry.cmd, args: entry.args, timeoutMs: timeoutMs() });
+    const client = new McpClient({ cmd: entry.cmd, args: entry.args, timeoutMs: timeoutMs(), env: entry.env });
     slot = { key, client, starting: null };
     cache.set(entry.name, slot);
   }

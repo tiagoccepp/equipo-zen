@@ -2,7 +2,7 @@
 name: revision-codigo
 description: Revisar código como un compañero exigente: bugs, bordes, simplicidad.
 keywords: revisar, revisión, codigo, código, bug, refactor, tests, test, calidad, pull request, deuda técnica
-scope: chat, role:worker
+scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 
 Cuando el turno pide revisar código (propio o ajeno):

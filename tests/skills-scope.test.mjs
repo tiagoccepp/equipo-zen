@@ -56,17 +56,25 @@ test('entradas desconocidas se ignoran; legacy sin scopes usa scope', () => {
 
 // ── Directorio real ───────────────────────────────────────────────────
 
-test('las 3 skills ejemplo cargan con scope chat+rol', () => {
+test('las 3 skills ejemplo cargan con scope chat+roles reales', () => {
   __resetSkillsCache();
+  const ESPERADOS = {
+    'diseno-web': ['role:diseno', 'role:frontend'],
+    'copy-ventas': ['role:copy', 'role:marketing', 'role:ventas'],
+    'revision-codigo': ['role:backend', 'role:frontend', 'role:tester', 'role:data', 'role:devops']
+  };
   const names = listSkillNames();
-  for (const n of ['diseno-web', 'copy-ventas', 'revision-codigo']) {
+  for (const n of Object.keys(ESPERADOS)) {
     assert.ok(names.includes(n), `${n} cargada`);
   }
   const skills = loadSkills();
-  for (const n of ['diseno-web', 'copy-ventas', 'revision-codigo']) {
+  for (const [n, roles] of Object.entries(ESPERADOS)) {
     const s = skills.find((k) => k.name === n);
     assert.ok(s.scopes.includes('chat'), `${n}: funciona hoy (chat)`);
-    assert.ok(s.scopes.includes('role:worker'), `${n}: filtro por rol`);
+    for (const r of roles) {
+      assert.ok(s.scopes.includes(r), `${n}: filtro ${r}`);
+    }
+    assert.ok(!s.scopes.includes('role:worker'), `${n}: sin rol fantasma worker`);
     assert.ok(s.body.length <= 1500, `${n}: cuerpo ${s.body.length}ch ≤ 1500`);
   }
 });

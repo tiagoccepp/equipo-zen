@@ -1,10 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════
 // fx/mesh.ts — fondo mesh oscuro que RESPIRA con la energía del audio.
 //
-// Paleta de TOKENS.md (versión oscura): bubblegum #b517a0, flamingo
-// #b8004c, ocean #1e52f1/#4d91ff sobre depth #0a0a0a. Canvas 2D, tres
-// radiales que laten con `energy()` (0..1). Con prefers-reduced-motion se
-// pinta un frame estático y no hay loop.
+// Paleta consola: grises pizarra fríos a alfa baja. Textura que respira con
+// la energía del audio (funcional), no blobs decorativos de marca.
+// Con prefers-reduced-motion se pinta un frame estático y no hay loop.
 //
 // Hook del main (detrás del canvas de orbes, mismo tamaño):
 //
@@ -28,9 +27,9 @@ export type MeshHandle = {
 
 // [x, y, radioBase, color, velocidad, fase] — posiciones relativas.
 const BLOBS: Array<[number, number, number, string, number, number]> = [
-  [0.22, 0.3, 0.55, '#b517a0', 0.5, 0.0],
-  [0.8, 0.62, 0.6, '#1e52f1', 0.34, 2.1],
-  [0.55, 0.85, 0.45, '#b8004c', 0.42, 4.2]
+  [0.22, 0.3, 0.55, '#2b3542', 0.5, 0.0],
+  [0.8, 0.62, 0.6, '#1e3330', 0.34, 2.1],
+  [0.55, 0.85, 0.45, '#262c36', 0.42, 4.2]
 ];
 
 export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): MeshHandle {
@@ -47,14 +46,14 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
 
   function paint() {
     if (!ctx || w === 0 || h === 0) return;
-    ctx.fillStyle = '#0a0a0a';
+    ctx.fillStyle = '#0b0c0e';
     ctx.fillRect(0, 0, w, h);
     const dim = Math.min(w, h);
     for (const [bx, by, br, color, speed, phase] of BLOBS) {
       const breathe = 1 + 0.1 * Math.sin(clock * speed + phase) + level * 0.22;
       const r = br * dim * breathe;
       const grad = ctx.createRadialGradient(bx * w, by * h, 0, bx * w, by * h, r);
-      grad.addColorStop(0, color + '55'); // ~33% alfa, tenue
+      grad.addColorStop(0, color + '3d'); // ~24% alfa, tenue
       grad.addColorStop(1, color + '00');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);

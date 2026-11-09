@@ -9,7 +9,7 @@
   --fx-fast: 140ms;
   --fx-med: 200ms;
   --fx-reveal: 220ms;
-  --fx-glow: 0 0 0 2px rgba(181, 23, 160, .55), 0 0 24px rgba(181, 23, 160, .28);
+  --fx-glow: 0 0 0 2px rgba(95, 180, 156, .5), 0 0 22px rgba(95, 180, 156, .25);
 }
 
 /* ── Reveal de tarjetas: entran una vez, de abajo, leve ─────────────── */
@@ -46,7 +46,7 @@
   opacity: .45;
 }
 .fx-btn:focus-visible {
-  outline: 2px solid #4d91ff;
+  outline: 2px solid #5fb49c;
   outline-offset: 2px;
 }
 
@@ -69,7 +69,7 @@
   transform: none;
 }
 
-/* ── Celda del que habla: glow bubblegum ─────────────────────────────── */
+/* ── Celda del que habla: glow accent ─────────────────────────────── */
 [data-speaking="true"] {
   box-shadow: var(--fx-glow);
   transition: box-shadow var(--fx-med) var(--fx-ease);
@@ -135,7 +135,7 @@
   cursor: pointer;
 }
 .fx-palette li[aria-selected="true"] {
-  background: rgba(181, 23, 160, .22);
+  background: rgba(95, 180, 156, .16);
 }
 .fx-palette li .fx-kbd {
   margin-left: auto;

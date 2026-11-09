@@ -2,7 +2,7 @@
 name: diseno-web
 description: Diseñar páginas web que se ven bien y abren rápido.
 keywords: diseño, diseno, layout, paleta, colores, responsive, css, maquetar, landing visual, tipografía, hero
-scope: chat, role:worker
+scope: chat, role:diseno, role:frontend
 ---
 
 Cuando el turno pide diseño o aspecto visual de una web:

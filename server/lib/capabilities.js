@@ -54,31 +54,35 @@ export const CAPABILITY_SOURCES = {
   'crear-agentes': { tools: ['write_file'], skills: [], libs: ['agent-conventions.js'] },
   // Data / devops (roles base del plan maestro).
   datos: { tools: ['run_cmd', 'read_file'], skills: ['terminal'], libs: ['verify.js'] },
-  deploy: { tools: ['run_cmd', 'open_url'], skills: ['terminal'], libs: ['native-build.js'] }
+  deploy: { tools: ['run_cmd', 'open_url'], skills: ['terminal'], libs: ['native-build.js'] },
+  // Manos extendidas (integración 09/11). MCP: tools dinámicas (nombres
+  // mcp_<server>_<tool> solo conocidos con servers vivos) → tools: [] y
+  // needs mcp:X que toolsForRole expande contra el registry.
+  'navegador-auto': { tools: ['browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_eval', 'browser_shot', 'browser_close'], skills: [], libs: [], needs: ['chrome'] },
+  'canvas-real': { tools: ['canvas_abrir', 'canvas_tokens', 'canvas_codigo', 'canvas_cerrar'], skills: ['diseno-web'], libs: ['openpencil.js'], needs: ['openpencil'] },
+  'outreach-borrador': { tools: ['outreach_draft'], skills: ['ventas', 'marketing', 'copy-ventas'], libs: [] },
+  'outreach-envio': { tools: ['outreach_send'], skills: ['ventas'], libs: [], needs: ['tito-ok'] },
+  'mcp-memoria': { tools: [], skills: [], libs: ['manos-mcp.js'], needs: ['mcp:memoria'] },
+  'mcp-pensar': { tools: [], skills: [], libs: ['manos-mcp.js'], needs: ['mcp:pensar'] }
 };
 
 // GAPS: pedido que NO existe en el repo/box. Documentado acá para que nadie
 // lo cablee como si anduviera. Cada gap dice qué lo desbloquearía.
 export const GAPS = [
   {
-    pedido: 'browser-automation (click/type/DOM)',
-    realidad: 'no hay automation de navegador; lo más cercano es open_url + fetch_url + screenshot',
-    desbloquea: 'un driver CDP/playwright + tool manos (no existe en el repo)'
+    pedido: 'outreach envío real (email/linkedin/dm)',
+    realidad: 'outreach_draft + outreach_send con gate de Tito; send encola en outbox/*.ready.json, entrega manual v1',
+    desbloquea: 'Tito define canal + credenciales para un conector real'
   },
   {
-    pedido: 'mcp:* por rol',
-    realidad: 'cero MCP servers configurados (PABLO_MCP_SERVERS unset)',
-    desbloquea: 'configurar PABLO_MCP_SERVERS con servers reales y re-correr integrity'
+    pedido: 'búsqueda web vía MCP (brave)',
+    realidad: 'sin BRAVE_API_KEY; cubierto por fetch_url + skill investigacion-web',
+    desbloquea: 'Tito provee BRAVE_API_KEY y se suma server MCP de búsqueda'
   },
   {
-    pedido: 'canvas openpencil en este box',
-    realidad: 'lib openpencil.js real pero binarios op/openpencil-desktop no instalados',
-    desbloquea: 'scripts/instalar-openpencil.sh en el desktop'
-  },
-  {
-    pedido: 'outreach envío (email/linkedin/dm)',
-    realidad: 'no existe tool de envío; además prohibido sin OK de Tito',
-    desbloquea: 'definir canal + tool + aprobación explícita (decisión de Tito)'
+    pedido: 'sequential-thinking @latest',
+    realidad: 'pinneado a @2025.12.18: el latest (2026.8.31) llega roto (falta zod-to-json-schema)',
+    desbloquea: 'fix upstream, re-probar latest y des-pinnear'
   }
 ];
 
@@ -88,23 +92,24 @@ export const BASE_CAPABILITIES = [
   'web',
   'memoria',
   'voz',
-  'tiempo'
+  'tiempo',
+  'mcp-memoria'
 ];
 
 // Matriz rol -> capabilities propias (la base se suma siempre).
 export const ROLE_MATRIX = {
   pablo: [],
-  orquestador: ['research', 'dispatch', 'tracking'],
+  orquestador: ['research', 'dispatch', 'tracking', 'mcp-pensar'],
   spawner: ['crear-agentes'],
-  backend: ['exec', 'tests'],
-  frontend: ['exec', 'navegador', 'preview'],
-  diseno: ['canvas', 'assets'],
-  copy: ['estilos', 'copy'],
-  marketing: ['research', 'copy', 'outreach-lectura'],
-  ventas: ['research', 'copy', 'outreach-lectura'],
+  backend: ['exec', 'tests', 'navegador-auto'],
+  frontend: ['exec', 'navegador', 'preview', 'navegador-auto'],
+  diseno: ['canvas', 'assets', 'canvas-real'],
+  copy: ['estilos', 'copy', 'outreach-borrador'],
+  marketing: ['research', 'copy', 'outreach-lectura', 'outreach-borrador', 'outreach-envio'],
+  ventas: ['research', 'copy', 'outreach-lectura', 'outreach-borrador', 'outreach-envio'],
   data: ['datos'],
   devops: ['exec', 'deploy'],
-  tester: ['navegador-destructivo', 'screenshots', 'verificacion']
+  tester: ['navegador-destructivo', 'screenshots', 'verificacion', 'navegador-auto']
 };
 
 export function knownRoles() {
@@ -128,12 +133,34 @@ export function capabilitiesForRole(rol) {
 // Tools/skills concretas que un rol puede usar (para el prompt manos y la
 // inyección de skills). needs se reporta aparte, no filtra: el rol sabe qué
 // le puede fallar por entorno.
-export function toolsForRole(rol) {
+export function toolsForRole(rol, { mcpTools = null } = {}) {
   const out = [];
-  for (const cap of capabilitiesForRole(rol)) {
+  const caps = capabilitiesForRole(rol);
+  for (const cap of caps) {
     for (const t of CAPABILITY_SOURCES[cap]?.tools || []) {
       if (!out.includes(t)) {
         out.push(t);
+      }
+    }
+  }
+  // MCP dinámicas: cada need mcp:X suma las registradas con prefijo mcp_X_.
+  // Sin mcpTools (tests viejos, integrity) → solo estáticas, intacto.
+  if (Array.isArray(mcpTools)) {
+    const registered = mcpTools.map((t) => t?.name).filter((n) => typeof n === 'string');
+    const needs = new Set();
+    for (const cap of caps) {
+      for (const n of CAPABILITY_SOURCES[cap]?.needs || []) {
+        needs.add(n);
+      }
+    }
+    for (const n of needs) {
+      const m = /^mcp:(.+)$/.exec(n);
+      if (!m) continue;
+      const prefix = `mcp_${m[1]}_`;
+      for (const name of registered) {
+        if (name.startsWith(prefix) && !out.includes(name)) {
+          out.push(name);
+        }
       }
     }
   }

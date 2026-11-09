@@ -11,6 +11,23 @@ export const MCP_CLIENT_VERSION = '1.0';
 // Timeout por defecto de cada request (20s según contrato).
 export const DEFAULT_TIMEOUT_MS = 20000;
 
+// Construye env limpio para hijos MCP: strip 4 vars proxy + NODE_USE_ENV_PROXY=0,
+// mergeado con entry.env (solo valores string). entry.env gana si colisiona.
+export function buildMcpEnv(extraEnv) {
+  const env = { ...process.env };
+  delete env.http_proxy;
+  delete env.https_proxy;
+  delete env.HTTP_PROXY;
+  delete env.HTTPS_PROXY;
+  env.NODE_USE_ENV_PROXY = '0';
+  if (extraEnv && typeof extraEnv === 'object' && !Array.isArray(extraEnv)) {
+    for (const [k, v] of Object.entries(extraEnv)) {
+      if (typeof k === 'string' && typeof v === 'string') env[k] = v;
+    }
+  }
+  return env;
+}
+
 export class McpClient {
   #child = null;
   #nextId = 1;
@@ -19,11 +36,12 @@ export class McpClient {
   #started = false;
   #closed = false;
 
-  constructor({ cmd, args = [], timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  constructor({ cmd, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, env = undefined } = {}) {
     if (!cmd || typeof cmd !== 'string') throw new TypeError('McpClient: cmd requerido');
     this.cmd = cmd;
     this.args = Array.isArray(args) ? args : [];
     this.timeoutMs = timeoutMs;
+    this.extraEnv = (env && typeof env === 'object' && !Array.isArray(env)) ? env : {};
   }
 
   get started() { return this.#started; }
@@ -39,7 +57,7 @@ export class McpClient {
   async start() {
     if (this.#started) return;
     if (this.#closed) throw new Error('McpClient: cliente cerrado');
-    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'], env: buildMcpEnv(this.extraEnv) });
     this.#child = child;
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => this.#onData(chunk));

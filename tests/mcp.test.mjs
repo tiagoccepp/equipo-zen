@@ -57,6 +57,7 @@ rl.on('line', (line) => {
 let fixture;
 let savedServers;
 let savedTimeout;
+let savedHome;
 
 function setServers(entries) {
   process.env[ENV_SERVERS] = JSON.stringify(entries);
@@ -69,6 +70,10 @@ function fakeEntry(serverName, mode) {
 before(() => {
   savedServers = process.env[ENV_SERVERS];
   savedTimeout = process.env[ENV_TIMEOUT];
+  // Integración manos 09/11: readMcpConfig tiene fallback a
+  // ~/.config/equipo-mcp.json; HOME aislado para que 'ausente' sea ausente.
+  savedHome = process.env.HOME;
+  process.env.HOME = mkdtempSync(join(tmpdir(), 'mcp-sin-config-'));
   const dir = mkdtempSync(join(tmpdir(), 'mcp-test-'));
   fixture = join(dir, 'fake-mcp-server.mjs');
   writeFileSync(fixture, FAKE_SERVER);
@@ -79,6 +84,8 @@ after(async () => {
   else process.env[ENV_SERVERS] = savedServers;
   if (savedTimeout === undefined) delete process.env[ENV_TIMEOUT];
   else process.env[ENV_TIMEOUT] = savedTimeout;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
   await shutdown();
 });
 

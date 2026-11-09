@@ -391,7 +391,8 @@ async function resolverFases(prep, brief) {
   ].join('\n');
   const res = await prep.session.runAgentJobTurn(planner.id, prompt, {
     timeoutMs: prep.turnTimeoutMs,
-    signal: prep.controller?.signal
+    signal: prep.controller?.signal,
+    aprobadoOutreach: prep.entry?.briefClon?.aprobadoOutreach === true
   });
   checkVivo(prep);
   const fases = parsearFasesPlanning(res?.text);
@@ -414,7 +415,8 @@ async function resolverFases(prep, brief) {
 async function correrTurno(prep, agentId, prompt) {
   const res = await prep.session.runAgentJobTurn(agentId, prompt, {
     timeoutMs: prep.turnTimeoutMs,
-    signal: prep.controller?.signal
+    signal: prep.controller?.signal,
+    aprobadoOutreach: prep.entry?.briefClon?.aprobadoOutreach === true
   });
   checkVivo(prep);
   return res;
