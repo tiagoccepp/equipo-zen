@@ -1,5 +1,5 @@
 import { LEARNING_ENABLED } from './config.js';
-import { getMinimaxModels } from './settings.js';
+import { getMinimaxModels, getTtsLanguage } from './settings.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
@@ -202,6 +202,8 @@ export function renderLearningsSection(store, agentId) {
   if (!LEARNING_ENABLED) {
     return '';
   }
+  // El header viaja en el system prompt: en inglés si la voz es inglesa.
+  const enLearn = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
   const agent = store.getAgent(agentId);
   if (agent && agent.learningEnabled === false) {
     return '';
@@ -237,8 +239,8 @@ export function renderLearningsSection(store, agentId) {
   }
 
   return [
-    'MEMORIA APRENDIDA (de reuniones anteriores):',
+    enLearn ? 'LEARNED MEMORY (from past meetings):' : 'MEMORIA APRENDIDA (de reuniones anteriores):',
     ...lines,
-    'Aplicá esto con naturalidad; no lo recites ni lo menciones.'
+    enLearn ? 'Apply this naturally; do not recite or mention it.' : 'Aplicá esto con naturalidad; no lo recites ni lo menciones.'
   ].join('\n');
 }

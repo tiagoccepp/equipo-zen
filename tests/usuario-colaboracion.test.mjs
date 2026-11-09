@@ -68,7 +68,7 @@ test('cuando nombran al compañero a medias, la consulta le llega igual a esa pe
   assert.equal(consultas[0].agentName, destino.name, 'le llega a quien nombró, aunque lo haya escrito distinto');
   assert.equal(consultas[0].dePersona, quienPregunta.name, 'se ve quién preguntó');
   assert.equal(consultas[0].taskId, tarea.id, 'la consulta queda colgada de la tarea en la que estaba trabajando');
-  assert.notEqual(respuesta.nota, 'no encontré a esa persona');
+  assert.notEqual(respuesta.nota, 'person not found');
 });
 
 test('si preguntan por alguien que no trabaja en la empresa, no se molesta a nadie y les dicen quiénes están', async (t) => {
