@@ -7,7 +7,8 @@
 //
 // El morph es en CPU por frame (≤8 esferas × 720 pts: trivial) y se sube
 // como BufferAttribute; nada de shaders custom que depurar en la webview.
-// Misma matriz shape×estado y mismas constantes de movimiento que orb-morph.
+// V3 (09/11, modelo-manda): los ESTADOS ya no piden figuras (todo esfera);
+// solo modulan vibración. setGlyph intacto — única vía de figuras.
 // ═══════════════════════════════════════════════════════════════════════
 
 import {
@@ -26,12 +27,12 @@ import {
   generateShape,
   morphStep
 } from './morph.ts';
-import { AgentVisualState, STATE_SHAPE } from './orb-morph.ts';
+import { AgentVisualState, STATE_SHAPE, STATE_VIBRATION } from './orb-morph.ts';
 import { lookupGlyph } from './glyphs-a.ts';
 import type * as THREE from 'three';
 
 export type { AgentVisualState };
-export { STATE_SHAPE };
+export { STATE_SHAPE, STATE_VIBRATION };
 export type { MorphShape };
 
 export type Orb3DOptions = {
@@ -109,6 +110,7 @@ type Points3D = {
   energy: number;
   target: number;
   focus: number;
+  vibe: number; // V3: vibración por estado (0..1), nunca cambia figura
   points: THREE.Points | null;
   geometry: THREE.BufferGeometry | null;
   material: THREE.PointsMaterial | null;
@@ -217,6 +219,7 @@ export class Orb3D {
         energy: 0,
         target: 0,
         focus: 1,
+        vibe: 0,
         points: null,
         geometry: null,
         material: null
@@ -330,8 +333,32 @@ export class Orb3D {
     this.kick();
   }
 
+  // V3 modelo-manda: estado → vibración, NUNCA figura (espejo de OrbMorph).
+  // setShape limpia el glifo; setAgentState NO (el glifo del modelo intacto).
   setAgentState(agentId: string, state: AgentVisualState) {
-    this.setShape(STATE_SHAPE[state], agentId);
+    const vibe = STATE_VIBRATION[state] ?? 0;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    for (const orb of this.orbs) {
+      if (orb.id !== agentId) continue;
+      orb.vibe = vibe;
+      if (orb.shape !== 'sphere') {
+        if (orb.glyph === null && orb.count > 0) {
+          orb.shape = 'sphere';
+          orb.from = orb.current.slice();
+          orb.to = generateShape('sphere', orb.count, { seed: orb.phaseRot, phase: orb.wavePhase });
+          if (this.reduced) {
+            orb.current = orb.to.slice();
+            orb.from = orb.current.slice();
+            orb.morphT0 = -1;
+          } else {
+            orb.morphT0 = now;
+          }
+        } else {
+          orb.shape = 'sphere';
+        }
+      }
+    }
+    this.kick();
   }
 
   getShape(agentId: string): MorphShape | null {
@@ -339,8 +366,8 @@ export class Orb3D {
   }
 
   // ── Glifos (T2a: motor de gestos, espejo de OrbMorph) ─────────────────
-  // Mismo contrato: morph al glifo, fallback a figura de estado si el
-  // nombre no resuelve, nunca tira.
+  // Mismo contrato: morph al glifo, fallback a esfera si el nombre no
+  // resuelve, nunca tira. V3: setAgentState NO limpia el glifo.
   setGlyph(agentId: string, glyphName: string | null) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     const reduced = this.reduced;
@@ -504,8 +531,13 @@ export class Orb3D {
     if (!slot || !geometry) return;
     const reduced = this.reduced;
     const energy = orb.energy;
+    const vibe = orb.vibe ?? 0; // V3: vibración por estado
+    const drive = Math.max(energy, vibe * 0.8);
     const radius = slot.r * BASE_RADIUS_RATIO;
-    let zoom = reduced ? 1 : 1 + ZOOM_AMPLITUDE * energy;
+    let zoom = reduced ? 1 : 1 + ZOOM_AMPLITUDE * drive;
+    if (!reduced && vibe > 0) {
+      zoom *= 1 + vibe * 0.05 * Math.sin(this.clock * 9 + orb.phaseFloat);
+    }
     let spin = ROTATION_SPEED;
     let tilt = TILT;
     let zScale = 1;
@@ -527,8 +559,10 @@ export class Orb3D {
     const sinTilt = Math.sin(tilt);
     const cx = slot.cx + (reduced ? 0 : Math.sin(this.clock * DRIFT_SPEED + orb.phaseFloat * 1.3) * slot.r * DRIFT_AMPLITUDE);
     const cy = slot.cy + (reduced ? 0 : Math.sin(this.clock * FLOAT_SPEED + orb.phaseFloat) * slot.r * FLOAT_AMPLITUDE);
-    const jump = reduced ? 0 : JUMP_AMPLITUDE * energy;
+    const jump = reduced ? 0 : JUMP_AMPLITUDE * drive;
     const jumpClock = this.clock * JUMP_SPEED;
+    const jx = !reduced && vibe > 0 ? Math.sin(this.clock * 31 + orb.phaseFloat * 3) * slot.r * vibe * 0.012 : 0;
+    const jy = !reduced && vibe > 0 ? Math.cos(this.clock * 27 + orb.phaseFloat * 2) * slot.r * vibe * 0.012 : 0;
 
     const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
     const col = geometry.getAttribute('color') as THREE.BufferAttribute;
@@ -545,7 +579,7 @@ export class Orb3D {
       const w = jump > 0 ? jump * (0.55 + 0.45 * Math.sin(jumpClock + i * 0.7)) : 0;
       const scale = radius * (1 + w) * zoom;
       const depth = Math.min(1, Math.max(0, (z / 1.4 + 1) * 0.5));
-      pos.setXYZ(i, cx + x * scale, -(cy + y * scale), depth * 2 - 1);
+      pos.setXYZ(i, cx + jx + x * scale, -((cy + jy) + y * scale), depth * 2 - 1);
       // Buckets de profundidad 2D ≈ sombreado por vértice (4 escalones).
       const shade = [0.34, 0.52, 0.74, 1][Math.min(3, Math.floor(depth * 4))];
       col.setXYZ(i, base.r * shade, base.g * shade, base.b * shade);

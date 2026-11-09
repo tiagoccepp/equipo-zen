@@ -254,3 +254,56 @@ test('entradas inválidas se saltean (vía archivo)', async () => {
   const tools = await getMcpTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), ['mcp_buena-file_echo', 'mcp_buena-file_sumar']);
 });
+
+// ---- TM2 (09/11): repertorio MCP. Aditivo, fakes livianos, sin spawns reales. ----
+
+test('TM2 repertorio: N servers agregan tools con prefijo mcp_<server>_<tool>', async () => {
+  // Imita forma del repertorio (nombres reales, cmd fake): 5 keyless.
+  writeHomeConfig(['fs', 'fetch', 'git', 'hora', 'sqlite'].map((n) => fakeEntry(n)));
+  const cfg = readMcpConfig();
+  assert.equal(cfg.length, 5);
+  assert.deepEqual(cfg.map((e) => e.name).sort(), ['fetch', 'fs', 'git', 'hora', 'sqlite']);
+  const tools = await getMcpTools();
+  assert.equal(tools.length, 10); // 2 por fake server
+  const names = tools.map((t) => t.name).sort();
+  for (const n of ['fs', 'fetch', 'git', 'hora', 'sqlite']) {
+    assert.ok(names.includes(`mcp_${n}_echo`), `falta mcp_${n}_echo`);
+    assert.ok(names.includes(`mcp_${n}_sumar`), `falta mcp_${n}_sumar`);
+  }
+});
+
+test('TM2 con-key: placeholder PENDIENTE en env llega intacto al hijo', async () => {
+  // Los 6 con-key van configurados con placeholder obvio (decisión main).
+  writeHomeConfig([
+    fakeEntry('brave', { env: { BRAVE_API_KEY: 'PENDIENTE' } }),
+    fakeEntry('github', { env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'PENDIENTE' } }),
+  ]);
+  const cfg = readMcpConfig();
+  assert.equal(cfg.length, 2);
+  assert.deepEqual(cfg[0].env, { BRAVE_API_KEY: 'PENDIENTE' });
+  assert.deepEqual(cfg[1].env, { GITHUB_PERSONAL_ACCESS_TOKEN: 'PENDIENTE' });
+  // Y el placeholder fluye al proceso hijo sin redacción (valor fake, no secret).
+  const c = new McpClient({ cmd: NODE, args: [fixture], timeoutMs: 5000, env: { TEST_MCP_FOO: 'PENDIENTE' } });
+  await c.start();
+  try {
+    const res = await c.callTool('echo', { text: 'k' });
+    const text = res?.content?.[0]?.text ?? '';
+    assert.equal(parseEnvLine(text).TEST_MCP_FOO, 'PENDIENTE');
+  } finally {
+    await c.close();
+  }
+});
+
+test('TM2 gap: server caído se saltea sin romper el resto', async () => {
+  // 'false' existe en PATH y sale con code=1 inmediato (sin handshake).
+  writeHomeConfig([
+    { name: 'caido', cmd: 'false', args: [] },
+    fakeEntry('vivo'),
+  ]);
+  const cfg = readMcpConfig();
+  assert.equal(cfg.length, 2); // configurado igual (gap visible vía manager)
+  const tools = await getMcpTools();
+  assert.deepEqual(tools.map((t) => t.name).sort(), ['mcp_vivo_echo', 'mcp_vivo_sumar']);
+  const res = await callMcpTool('mcp_vivo_echo', { text: 'ok' });
+  assert.equal(res.ok, true);
+});

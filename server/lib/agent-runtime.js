@@ -7,7 +7,7 @@ import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
-import { parseGesto } from './gestos.js';
+import { GESTOS_A, GESTOS_B, parseGesto } from './gestos.js';
 
 // ── Manos v1: fase tools (two-phase) ───────────────────────────────────
 //
@@ -841,6 +841,12 @@ export function buildSystemInstruction(agent, context = {}) {
     ? [context.conventionsSection, '']
     : [];
 
+  // §GESTOS (V3 modelo-manda): lista viva de los 100 (A+B) desde gestos.js —
+  // el test cruza que los 100 estén en el system y que no haya tags de
+  // ejemplo válidos (el placeholder [[gesto:nombre]]/[[gesto:name]] no
+  // resuelve: parseGesto(system) debe dar null).
+  const gestosList = [...GESTOS_A, ...GESTOS_B].join(', ');
+
   return [
     T(`Sos ${agent.name}, ${agent.title}. Estás en una reunión de trabajo con el usuario y otros compañeros.`, `You are ${agent.name}, ${agent.title}. You are in a work meeting with the user and other teammates.`),
     '',
@@ -921,6 +927,14 @@ export function buildSystemInstruction(agent, context = {}) {
     '',
     T('Las etiquetas no se ven en pantalla: el usuario lee tu frase, el sistema lee', "Tags are not shown on screen: the user reads your sentence, the system reads"),
     T('la etiqueta. Las dos cosas tienen que decir lo mismo.', 'the tag. Both must say the same thing.'),
+    '',
+    '---',
+    '',
+    T('GESTOS VISUALES (§GESTOS):', 'VISUAL GESTURES (§GESTOS):'),
+    '',
+    T('Tu orbe es siempre un orbe (el estado solo lo hace vibrar). Si un gesto visual APORTA —énfasis, emoción, idea—, emitilo DONDE corresponda con [[gesto:nombre]] (máximo 1 por turno).', 'Your orb is always an orb (state only vibrates it). If a visual gesture ADDS —emphasis, emotion, idea— emit it WHERE it fits with [[gesto:name]] (at most 1 per turn).'),
+    T('Solo si aporta, nunca forzado: la mayoría de los turnos van SIN gesto. Nombres (100):', 'Only if it adds, never forced: most turns go WITHOUT gesture. Names (100):'),
+    gestosList,
     '',
     '---',
     '',

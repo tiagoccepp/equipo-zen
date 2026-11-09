@@ -466,8 +466,9 @@ function callEnergy(): number {
 }
 
 // Renderer de orbes: OrbMorph (2D) pinta ya; si hay WebGL2 se sube a Orb3D.
-// Misma API en ambos; `visualStates` es la fuente de verdad para re-aplicar
-// figuras tras el swap.
+// V3 modelo-manda: `visualStates` es la fuente de verdad para re-aplicar
+// VIBRACIÓN por estado tras el swap (orbe siempre orbe; figuras solo vía
+// setGlyph cuando el modelo emite [[gesto:X]]).
 type OrbRenderer = OrbMorph | Orb3D;
 let field: OrbRenderer = new OrbMorph(canvas, { energy: callEnergy });
 field.setTheme('dark');
@@ -484,11 +485,15 @@ function restState(agentId: string): AgentVisualState {
 }
 
 function setVisual(agentId: string, state: AgentVisualState): void {
+  // V3: el estado solo modula vibración/energía sutil, NUNCA la figura.
   visualStates.set(agentId, state);
   field.setAgentState(agentId, state);
 }
+// Debug V3 (auditoría visual, espejo de window.__pablo): permite forzar
+// estados desde consola/e2e para verificar orbe-siempre-orbe.
+(window as unknown as { __setVisual?: typeof setVisual }).__setVisual = setVisual;
 
-// Wrapper único de speaking: orbe + glow + figura (fx). Todo cambio de
+// Wrapper único de speaking: orbe + glow + vibración (fx). Todo cambio de
 // "quién habla" pasa por acá para que nada quede prendido a medias.
 let lastSpeaking = '';
 function glowSpeaking(agentId: string): void {
@@ -547,7 +552,7 @@ function layoutOrbs(): void {
 window.addEventListener('resize', layoutOrbs);
 
 // ── 3D vivo: si hay WebGL2, el canvas 2D se reemplaza por uno fresco con
-// Orb3D (mismo slot, misma energía, mismas figuras por estado). Si algo
+// Orb3D (mismo slot, misma energía, orbe siempre orbe + vibración). Si algo
 // falla, OrbMorph sigue (fallback silencioso + log).
 async function upgradeTo3D(): Promise<void> {
   const probe = probeWebGL2();
@@ -617,7 +622,8 @@ const client = new Client({
   onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
     if (turnId) activeTurns.set(turnId, { agentId, at: Date.now() });
-    // Pensamiento silencioso: toro. Cuando rompa a hablar, setSpeaking pasa a onda.
+    // Pensamiento silencioso: vibración leve. Cuando rompa a hablar,
+    // setSpeaking sube la vibración (orbe siempre orbe, V3).
     if (agentId !== speakingAgent) setVisual(agentId, 'pensando');
   },
   onSpeakStart: (agentId) => {
@@ -663,7 +669,7 @@ const client = new Client({
       if (!voiceSession) setStatus('Ready');
     }
     // Fin del turno de texto: si no está hablando, vuelve al reposo real
-    // (saca el toro de "pensando" que puso onAgentStart).
+    // (baja la vibración de "pensando" que puso onAgentStart).
     if (agentId !== speakingAgent) setVisual(agentId, restState(agentId));
   },
   onMp3: (b64, turnId) => {
@@ -807,7 +813,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     voiceGroup = false;
     micBtn.classList.remove('live');
     callBtn.classList.remove('live');
-    // Los que solo escuchaban vuelven a idle (los busy ya tienen su figura).
+    // Los que solo escuchaban vuelven a idle (los busy conservan su vibración).
     for (const [id, state] of visualStates) {
       if (state === 'escuchando') setVisual(id, 'idle');
     }
@@ -836,7 +842,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   voiceGroup = group;
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
-  // Mic abierto: anillo en los libres (hablando/trabajando conservan figura).
+  // Mic abierto: vibración de escucha en los libres (hablando/trabajando conservan la suya).
   const ids = agents.size > 0 ? [...agents.keys()] : ['pablo'];
   for (const id of ids) {
     if (id !== speakingAgent && !working.has(id)) setVisual(id, 'escuchando');
