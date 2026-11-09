@@ -10,9 +10,11 @@ import {
   rootDir
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
+import { applyAudioSettings, listDevices, playTestTone, setNodeMute, setNodeVolume } from './audio.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
 import { renderLearningsSection } from './learning.js';
 import { isMeetingLive } from './meeting-session.js';
+import { buildLiveSnapshot } from './mission.js';
 import { renderMemorySection } from './pablo-memory.js';
 import { applySuggestion } from './reflection.js';
 import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
@@ -138,9 +140,66 @@ export function createApp({ store }) {
     }
   });
 
-  app.put('/api/settings', (req, res) => {
+  app.put('/api/settings', async (req, res) => {
     const applied = applySettings(req.body?.settings || req.body || {});
-    res.json({ applied, settings: publicSettings() });
+    // Cambio de routing: mover streams vivos + set-default. Nunca rompe el
+    // guardado: el error de audio se informa, el setting ya quedó.
+    let audio = null;
+    if (applied.some((key) => key.startsWith('audio.'))) {
+      const current = publicSettings().audio;
+      audio = await applyAudioSettings(current);
+    }
+    res.json({ applied, settings: publicSettings(), audio });
+  });
+
+  // ── Audio: routing PipeWire (Ajustes → grupo Audio) ─────────────────
+  // Solo lectura + routing/volumen: no expone nada sensible.
+  app.get('/api/audio/devices', async (_req, res) => {
+    try {
+      res.json({ devices: await listDevices() });
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'audio unavailable' });
+    }
+  });
+
+  app.put('/api/audio/volume', async (req, res) => {
+    const { id, volume } = req.body || {};
+    if ((typeof id !== 'string' && typeof id !== 'number') || typeof volume !== 'number') {
+      return res.status(400).json({ error: 'id + numeric volume (0..1) required' });
+    }
+    try {
+      const node = await setNodeVolume(id, volume);
+      res.json({ ok: true, id: node.id, name: node.name });
+    } catch (err) {
+      res.status(err?.code === 'AUDIO_NO_DEVICE' ? 404 : 502).json({
+        error: err instanceof Error ? err.message : 'volume failed'
+      });
+    }
+  });
+
+  app.put('/api/audio/mute', async (req, res) => {
+    const { id, muted } = req.body || {};
+    if ((typeof id !== 'string' && typeof id !== 'number') || typeof muted !== 'boolean') {
+      return res.status(400).json({ error: 'id + boolean muted required' });
+    }
+    try {
+      const node = await setNodeMute(id, muted);
+      res.json({ ok: true, id: node.id, name: node.name });
+    } catch (err) {
+      res.status(err?.code === 'AUDIO_NO_DEVICE' ? 404 : 502).json({
+        error: err instanceof Error ? err.message : 'mute failed'
+      });
+    }
+  });
+
+  // Tono de prueba (beep 880Hz/0.4s) al sink indicado o al default.
+  app.post('/api/audio/test', async (req, res) => {
+    try {
+      await playTestTone(typeof req.body?.sink === 'string' ? req.body.sink : '');
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'test tone failed' });
+    }
   });
 
   // Estado del watchdog de sidecars STT/TTS (§3b): lo sirve el registro
@@ -658,6 +717,26 @@ export function createApp({ store }) {
       return res.json({ meetings: store.meetingsForProject(goalId) });
     }
     res.json({ meetings: store.listMeetings(50, companyId) });
+  });
+
+  // Mission Control: reuniones con alguien sentado ahora mismo + su equipo.
+  // Ruta nueva (09/11): no toca ningún endpoint existente.
+  app.get('/api/mission/live', (_req, res) => {
+    res.json(buildLiveSnapshot({
+      meetings: store.listMeetings(200),
+      isLive: isMeetingLive,
+      getCompany: (id) => store.getCompany(id),
+      teamFor: (companyId) => store.listAgents({ companyId }),
+      goalFor: (meetingId) => {
+        const meeting = store.getMeeting(meetingId);
+        const goalId = meeting && (meeting.goal_id || meeting.goalId);
+        if (!goalId) {
+          return null;
+        }
+        const goal = store.getGoal(goalId);
+        return goal ? goal.title : null;
+      }
+    }));
   });
 
   app.get('/api/meetings/:id', (req, res) => {

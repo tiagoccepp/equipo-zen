@@ -1,0 +1,167 @@
+/* Mission Control — grid + tarjetas (remix oscuro Lovable, TOKENS.md).
+   Reusa vars de app.css: --card --ink --muted --line --ok --warn --bad --mono. */
+
+.mc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin: 0;
+}
+
+.mc-card {
+  background: var(--card, #232326);
+  border: 1px solid var(--line, #333336);
+  border-radius: 20px;
+  padding: 14px 16px;
+  min-width: 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.mc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mc-card-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink, #f5f4ef);
+}
+
+.mc-emoji {
+  font-size: 1.1rem;
+}
+
+.mc-card-body {
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.mc-card-body p {
+  margin: 0.4em 0;
+}
+
+.mc-list,
+.mc-roster {
+  list-style: none;
+  margin: 0.4em 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mc-list li,
+.mc-roster li {
+  overflow-wrap: anywhere;
+}
+
+.mc-dim {
+  color: var(--muted, #8f8f8a);
+}
+
+.mc-empty {
+  color: var(--muted, #8f8f8a);
+  font-style: italic;
+}
+
+.mc-foot {
+  color: var(--muted, #8f8f8a);
+  font-size: 0.78rem;
+  border-top: 1px solid var(--line, #333336);
+  padding-top: 8px;
+  margin-bottom: 0;
+}
+
+.mc-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Pills 20px: ok/warn/bad/mute sobre glass oscuro. */
+.mc-pill {
+  display: inline-block;
+  border-radius: 20px;
+  padding: 1px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.mc-ok {
+  color: var(--ok, #4ade80);
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.mc-warn {
+  color: var(--warn, #f4bf75);
+  border-color: rgba(244, 191, 117, 0.35);
+  background: rgba(244, 191, 117, 0.08);
+}
+
+.mc-bad {
+  color: var(--bad, #fb7185);
+  border-color: rgba(251, 113, 133, 0.35);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.mc-mute {
+  color: var(--muted, #8f8f8a);
+  border-color: var(--line, #333336);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.mc-agent {
+  font-weight: 600;
+  color: var(--agent, #7491ff);
+}
+
+.mc-meet {
+  margin-bottom: 8px;
+}
+
+.mc-meet:last-child {
+  margin-bottom: 0;
+}
+
+/* Punto pulsante "habla ahora". */
+.mc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+
+.mc-speaking {
+  background: var(--ok, #4ade80);
+  box-shadow: 0 0 8px var(--ok, #4ade80);
+  animation: mc-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes mc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-speaking {
+    animation: none;
+  }
+}

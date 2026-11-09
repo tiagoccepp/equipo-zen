@@ -1,0 +1,543 @@
+[
+ {
+  "id": 101,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "application.name": "equipo",
+    "application.process.binary": "WebKitWebProcess",
+    "application.process.id": 42315,
+    "client.id": 92,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "Playback Stream",
+    "node.driver-id": 80,
+    "node.name": "equipo",
+    "object.id": 101,
+    "object.serial": 146
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 60,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 65,
+   "max-output-ports": 0,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 2,
+   "n-output-ports": 2,
+   "state": "suspended",
+   "error": null,
+   "props": {
+    "client.id": 69,
+    "device.id": 68,
+    "factory.name": "api.alsa.pcm.sink",
+    "media.class": "Audio/Sink",
+    "node.description": "Audio Interno Est\u00e9reo anal\u00f3gico",
+    "node.driver": true,
+    "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+    "object.id": 60,
+    "object.serial": 175
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       0.590438,
+       0.590438
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 59,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "client.id": 69,
+    "device.id": 68,
+    "factory.name": "api.alsa.pcm.source",
+    "media.class": "Audio/Source",
+    "node.description": "Audio Interno Est\u00e9reo anal\u00f3gico",
+    "node.driver": true,
+    "node.name": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+    "object.id": 59,
+    "object.serial": 176
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       0.027001,
+       0.027001
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 70,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 65,
+   "max-output-ports": 0,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 2,
+   "n-output-ports": 2,
+   "state": "suspended",
+   "error": null,
+   "props": {
+    "client.id": 69,
+    "device.id": 67,
+    "factory.name": "api.alsa.pcm.sink",
+    "media.class": "Audio/Sink",
+    "node.description": "Loopback Est\u00e9reo anal\u00f3gico",
+    "node.driver": true,
+    "node.name": "alsa_output.platform-snd_aloop.0.analog-stereo",
+    "object.id": 70,
+    "object.serial": 179
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 71,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 5,
+   "state": "suspended",
+   "error": null,
+   "props": {
+    "client.id": 69,
+    "device.id": 67,
+    "factory.name": "api.alsa.pcm.source",
+    "media.class": "Audio/Source",
+    "node.description": "Loopback Envolvente anal\u00f3gico 5.0",
+    "node.driver": true,
+    "node.name": "alsa_input.platform-snd_aloop.0.analog-surround-50",
+    "object.id": 71,
+    "object.serial": 180
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0,
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 33,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 65,
+   "max-output-ports": 0,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 2,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "application.name": "WebKitWebProcess",
+    "application.process.binary": "WebKitWebProcess",
+    "application.process.id": 42315,
+    "client.id": 90,
+    "media.class": "Stream/Input/Audio",
+    "media.name": "Record Stream",
+    "node.driver-id": 59,
+    "node.name": "WebKitWebProcess",
+    "object.id": 33,
+    "object.serial": 203
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 110,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "application.name": "equipo",
+    "application.process.binary": "WebKitWebProcess",
+    "application.process.id": 42315,
+    "client.id": 92,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "Playback Stream",
+    "node.driver-id": 80,
+    "node.name": "equipo",
+    "object.id": 110,
+    "object.serial": 240
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 80,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 65,
+   "max-output-ports": 0,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 2,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "client.id": 69,
+    "device.id": 102,
+    "factory.name": "api.bluez5.a2dp.sink",
+    "media.class": "Audio/Sink",
+    "media.name": "AWK17 ",
+    "node.description": "AWK17 ",
+    "node.driver": true,
+    "node.name": "bluez_output.0D_45_E7_0E_0B_A8.1",
+    "object.id": 80,
+    "object.serial": 251
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       0.389059,
+       0.389059
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 37,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 1,
+   "state": "suspended",
+   "error": null,
+   "props": {
+    "client.id": 97,
+    "device.id": 102,
+    "media.class": "Audio/Source",
+    "media.name": "AWK17  output",
+    "node.description": "AWK17 ",
+    "node.name": "bluez_input.0D:45:E7:0E:0B:A8",
+    "object.id": 37,
+    "object.serial": 252
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 96,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 65,
+   "max-output-ports": 0,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 1,
+   "n-output-ports": 1,
+   "state": "suspended",
+   "error": null,
+   "props": {
+    "client.id": 97,
+    "media.class": "Stream/Input/Audio/Internal",
+    "media.name": "Bluetooth internal capture stream for AWK17  input",
+    "node.description": "Bluetooth internal capture stream for AWK17 ",
+    "node.name": "bluez_capture_internal.0D:45:E7:0E:0B:A8",
+    "object.id": 96,
+    "object.serial": 253
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 112,
+  "type": "PipeWire:Interface:Node",
+  "version": 3,
+  "permissions": [
+   "r",
+   "w",
+   "x",
+   "m"
+  ],
+  "info": {
+   "max-input-ports": 0,
+   "max-output-ports": 65,
+   "change-mask": [
+    "input-ports",
+    "output-ports",
+    "state",
+    "props",
+    "params"
+   ],
+   "n-input-ports": 0,
+   "n-output-ports": 2,
+   "state": "running",
+   "error": null,
+   "props": {
+    "application.name": "Brave",
+    "application.process.binary": "brave",
+    "application.process.id": 5898,
+    "client.id": 82,
+    "media.class": "Stream/Output/Audio",
+    "media.name": "Playback",
+    "node.driver-id": 80,
+    "node.name": "Brave",
+    "object.id": 112,
+    "object.serial": 266
+   },
+   "params": {
+    "Props": [
+     {
+      "mute": false,
+      "channelVolumes": [
+       1.0,
+       1.0
+      ],
+      "volume": 1.0
+     }
+    ]
+   }
+  }
+ }
+]

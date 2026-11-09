@@ -2,12 +2,14 @@ import 'dotenv/config';
 
 import { createServer } from 'node:http';
 
+import { applyAudioSettings } from './lib/audio.js';
+
 import { DB_PATH, DEFAULT_LLM_PROVIDER, HOST, LLM_PROVIDERS, PORT, collectProviderKeys, companyTemplates } from './lib/config.js';
 import { createApp } from './lib/http.js';
 import { ApiKeyRing } from './lib/key-ring.js';
 import { broadcastToCompany } from './lib/meeting-session.js';
 import { synthesizePiper } from './lib/piper.js';
-import { initSettings } from './lib/settings.js';
+import { getAudioFollowDefault, getAudioInput, getAudioOutput, initSettings } from './lib/settings.js';
 import { firstNonEmpty, loadWarmupWavBase64, pcmToWav16kBase64, startSidecarWatchdog, withTimeoutMs } from './lib/sidecars.js';
 import { Store } from './lib/store.js';
 import { whisperHealthy } from './lib/stt.js';
@@ -121,6 +123,19 @@ const server = createServer(app);
 const keyRing = new ApiKeyRing(collectProviderKeys(DEFAULT_LLM_PROVIDER));
 keyRing.setTelemetry(telemetry);
 initSettings(store, keyRing);
+// Audio guardado: si Tito eligió salida/entrada fija, aplicarla al arrancar
+// (set-default + mover streams; con followDefault no se toca nada).
+if (!getAudioFollowDefault()) {
+  void applyAudioSettings({
+    output: getAudioOutput(),
+    input: getAudioInput(),
+    followDefault: false
+  }).then((r) => {
+    console.log(r.ok
+      ? `Audio guardado aplicado (streams movidos: ${(r.moved || []).join(',') || 'ninguno vivo'}).`
+      : `Audio guardado NO aplicado: ${r.error}`);
+  });
+}
 attachMeetingServer(server, keyRing, store);
 const workforce = new Workforce(store, keyRing, {
   onEvent: (companyId, payload) => broadcastToCompany(companyId, payload)

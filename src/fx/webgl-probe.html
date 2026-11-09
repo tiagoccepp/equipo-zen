@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<!-- fx/webgl-probe.html — página de prueba WebGL2, CERO dependencias.
+     Servida por vite dev en /src/fx/webgl-probe.html.
+     Qué mirar (veredicto en el reporte del track visual-wow):
+       1. La línea "webgl2:" dice OK + el RENDERER (ej. Intel UHD / llvmpipe).
+       2. 1000 puntos blancos rotan sobre fondo #0a0a0a sin tirones.
+     Si esto anda, three.js Points (orb3d.ts) anda: usa el mismo contexto. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fx · webgl probe</title>
+<style>
+  html, body { margin: 0; background: #0a0a0a; color: #f5f4ef;
+    font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 24px auto; padding: 0 16px; }
+  canvas { width: 100%; height: 360px; display: block; background: #0a0a0a;
+    border: 1px solid rgba(255,255,255,.12); border-radius: 20px; }
+  pre { background: #1b1b1b; padding: 12px 16px; border-radius: 12px;
+    white-space: pre-wrap; }
+  .ok { color: #7ee787; } .bad { color: #ff7b72; }
+</style>
+</head>
+<body>
+<main>
+  <h1>fx · webgl probe</h1>
+  <pre id="out">probando…</pre>
+  <canvas id="gl" width="720" height="360"></canvas>
+</main>
+<script>
+const out = document.getElementById('out');
+const log = [];
+try {
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl2');
+  if (!gl) {
+    log.push('webgl2: FAIL (getContext devolvió null) → usar OrbMorph 2D');
+  } else {
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    log.push('webgl2: OK');
+    log.push('renderer: ' + renderer);
+    log.push('dpr: ' + (window.devicePixelRatio || 1));
+    // 1000 puntos en esfera Fibonacci, rotando (mismo espíritu que call-orbs).
+    const N = 1000, GA = Math.PI * (3 - Math.sqrt(5)), pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const y = 1 - (2 * i + 1) / N, r = Math.sqrt(1 - y * y), t = i * GA;
+      pos[i*3] = Math.cos(t) * r; pos[i*3+1] = y; pos[i*3+2] = Math.sin(t) * r;
+    }
+    const vs = 'attribute vec3 p; uniform float a; uniform float asp; void main(){' +
+      'float c=cos(a), s=sin(a); vec3 q=vec3(p.x*c+p.z*s, p.y, p.z*c-p.x*s);' +
+      'gl_Position=vec4(q.x/aspect_fix(), q.y, q.z*0.5, 1.0); gl_PointSize=2.0;}'
+      .replace('aspect_fix()', '(1.0/asp)');
+    const fs = 'precision mediump float; void main(){' +
+      'vec2 d = gl_PointCoord - 0.5; if (dot(d,d) > 0.25) discard;' +
+      'gl_FragColor = vec4(0.96,0.96,0.94,1.0);}';
+    function shader(type, src) {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, shader(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog); gl.useProgram(prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    const uA = gl.getUniformLocation(prog, 'a'), uAsp = gl.getUniformLocation(prog, 'asp');
+    gl.uniform1f(uAsp, canvas.width / canvas.height);
+    let frames = 0, t0 = performance.now(), fps = 0;
+    function frame(now) {
+      const dt = (now - t0) / 1000; frames++;
+      if (dt >= 1) { fps = Math.round(frames / dt); frames = 0; t0 = now;
+        out.innerHTML = log.map(escapeHtml).join('\n') + '\nfps: <b>' + fps + '</b> (1000 pts, gl.POINTS)';
+      }
+      gl.clearColor(0.04, 0.04, 0.04, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform1f(uA, now / 1000 * 0.5);
+      gl.drawArrays(gl.POINTS, 0, N);
+      requestAnimationFrame(frame);
+    }
+    function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    out.innerHTML = log.map(escapeHtml).join('\n') + '\n<span class="ok">renderizando…</span>';
+    requestAnimationFrame(frame);
+  }
+} catch (e) {
+  out.innerHTML = '<span class="bad">ERROR: ' + String(e).replace(/</g,'&lt;') + '</span>';
+}
+</script>
+</body>
+</html>

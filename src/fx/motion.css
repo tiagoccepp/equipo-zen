@@ -1,0 +1,163 @@
+/* ═══════════════════════════════════════════════════════════════════
+   fx/motion.css — micro-interacciones (Emil Kowalski: 140–220ms,
+   solo transform/opacity, UN easing, sin loops decorativos).
+   Importar una vez: `import '../fx/motion.css'` (o el path que use vite).
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --fx-ease: cubic-bezier(.2, .7, .3, 1);
+  --fx-fast: 140ms;
+  --fx-med: 200ms;
+  --fx-reveal: 220ms;
+  --fx-glow: 0 0 0 2px rgba(181, 23, 160, .55), 0 0 24px rgba(181, 23, 160, .28);
+}
+
+/* ── Reveal de tarjetas: entran una vez, de abajo, leve ─────────────── */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(10px);
+}
+[data-reveal].fx-in {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--fx-reveal) var(--fx-ease),
+    transform var(--fx-reveal) var(--fx-ease);
+}
+/* Stagger solo para grupos chicos (≤6): delay por índice. */
+[data-reveal-group] > [data-reveal].fx-in:nth-child(2) { transition-delay: 30ms; }
+[data-reveal-group] > [data-reveal].fx-in:nth-child(3) { transition-delay: 60ms; }
+[data-reveal-group] > [data-reveal].fx-in:nth-child(4) { transition-delay: 90ms; }
+[data-reveal-group] > [data-reveal].fx-in:nth-child(5) { transition-delay: 120ms; }
+[data-reveal-group] > [data-reveal].fx-in:nth-child(6) { transition-delay: 150ms; }
+
+/* ── Botones: hover levanta 1px, active hunde ───────────────────────── */
+.fx-btn {
+  transition: transform var(--fx-fast) var(--fx-ease),
+    opacity var(--fx-fast) var(--fx-ease),
+    box-shadow var(--fx-fast) var(--fx-ease);
+}
+.fx-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.fx-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(.99);
+}
+.fx-btn:disabled {
+  opacity: .45;
+}
+.fx-btn:focus-visible {
+  outline: 2px solid #4d91ff;
+  outline-offset: 2px;
+}
+
+/* ── Transición entre vistas: la saliente se va, la entrante llega ───── */
+[data-view] {
+  transition: opacity var(--fx-med) var(--fx-ease),
+    transform var(--fx-med) var(--fx-ease);
+}
+[data-view].fx-leave {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+[data-view].fx-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+[data-view].fx-enter.fx-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── Celda del que habla: glow bubblegum ─────────────────────────────── */
+[data-speaking="true"] {
+  box-shadow: var(--fx-glow);
+  transition: box-shadow var(--fx-med) var(--fx-ease);
+}
+[data-speaking="false"] {
+  transition: box-shadow var(--fx-med) var(--fx-ease);
+}
+
+/* ── Command palette ────────────────────────────────────────────────── */
+.fx-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, .55);
+  opacity: 0;
+  transition: opacity var(--fx-med) var(--fx-ease);
+  z-index: 90;
+}
+.fx-palette-backdrop.fx-in { opacity: 1; }
+.fx-palette {
+  position: fixed;
+  left: 50%;
+  top: 18vh;
+  width: min(480px, calc(100vw - 48px));
+  transform: translate(-50%, -8px) scale(.98);
+  opacity: 0;
+  transition: transform var(--fx-med) var(--fx-ease),
+    opacity var(--fx-med) var(--fx-ease);
+  z-index: 91;
+  background: #1b1b1b;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 20px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .5);
+  overflow: hidden;
+  color: #f5f4ef;
+}
+.fx-palette.fx-in {
+  transform: translate(-50%, 0) scale(1);
+  opacity: 1;
+}
+.fx-palette input {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  font: inherit;
+  padding: 14px 18px;
+}
+.fx-palette ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 280px;
+  overflow: auto;
+}
+.fx-palette li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.fx-palette li[aria-selected="true"] {
+  background: rgba(181, 23, 160, .22);
+}
+.fx-palette li .fx-kbd {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: .55;
+}
+
+/* ── Movimiento reducido: todo aparece, nada viaja ──────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal],
+  .fx-palette,
+  [data-view] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .fx-btn,
+  [data-speaking] {
+    transition: none;
+  }
+  .fx-btn:hover:not(:disabled),
+  .fx-btn:active:not(:disabled) {
+    transform: none;
+  }
+}

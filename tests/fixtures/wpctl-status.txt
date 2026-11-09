@@ -1,0 +1,71 @@
+PipeWire 'pipewire-0' [1.4.2, tito@tito, cookie:1608608611]
+ └─ Clients:
+        34. pipewire                            [1.4.2, tito@tito, pid:1386]
+        69. WirePlumber [export]                [1.4.2, tito@tito, pid:53840]
+        75. gnome-shell                         [1.4.2, tito@tito, pid:4248]
+        76. GNOME Shell Volume Control          [1.4.2, tito@tito, pid:4248]
+        77. GNOME Volume Control Media Keys     [1.4.2, tito@tito, pid:4368]
+        78. xdg-desktop-portal                  [1.4.2, tito@tito, pid:4743]
+        81. WirePlumber                         [1.4.2, tito@tito, pid:53840]
+        82. Brave                               [1.4.2, tito@tito, pid:5898]
+        90. WebKitWebProcess                    [1.4.2, tito@tito, pid:42315]
+        91. Brave input                         [1.4.2, tito@tito, pid:5898]
+        92. equipo                              [1.4.2, tito@tito, pid:42315]
+        97. WirePlumber                         [1.4.2, tito@tito, pid:53840]
+       117. wpctl                               [1.4.2, tito@tito, pid:62440]
+
+Audio
+ ├─ Devices:
+ │      67. Loopback                            [alsa]
+ │      68. Audio Interno                       [alsa]
+ │     102. AWK17                               [bluez5]
+ │  
+ ├─ Sinks:
+ │      60. Audio Interno Estéreo analógico   [vol: 0.84]
+ │      70. Loopback Estéreo analógico        [vol: 0.62]
+ │  *   80. AWK17                               [vol: 0.73]
+ │  
+ ├─ Sources:
+ │  *   59. Audio Interno Estéreo analógico   [vol: 0.30]
+ │      71. Loopback Envolvente analógico 5.0  [vol: 0.60]
+ │  
+ ├─ Filters:
+ │    - loopback-53840-18                                           
+ │      37. bluez_input.0D:45:E7:0E:0B:A8                                [Audio/Source]
+ │      96. bluez_capture_internal.0D:45:E7:0E:0B:A8                     [Stream/Input/Audio/Internal]
+ │  
+ └─ Streams:
+        33. WebKitWebProcess                                            
+             40. monitor_FR     
+             41. input_FR        < ALC256 Analog:capture_FR	[active]
+             42. monitor_FL     
+            108. input_FL        < ALC256 Analog:capture_FL	[active]
+       101. equipo                                                      
+            109. output_FL       > AWK17 :playback_FL	[active]
+            111. output_FR       > AWK17 :playback_FR	[active]
+       110. equipo                                                      
+             94. output_FL       > AWK17 :playback_FL	[active]
+             95. output_FR       > AWK17 :playback_FR	[active]
+       112. Brave                                                       
+            113. output_FL       > AWK17 :playback_FL	[active]
+            114. output_FR       > AWK17 :playback_FR	[active]
+
+Video
+ ├─ Devices:
+ │      46. ASUS HD webcam                      [v4l2]
+ │      47. ASUS HD webcam                      [v4l2]
+ │      58. ASUS HD webcam: ASUS HD webcam      [libcamera]
+ │  
+ ├─ Sinks:
+ │  
+ ├─ Sources:
+ │  *   85. ASUS HD webcam (V4L2)              
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+
+Settings
+ └─ Default Configured Devices:
+         0. Audio/Sink    bluez_output.0D_45_E7_0E_0B_A8.1
+         1. Audio/Source  alsa_input.pci-0000_00_1f.3.analog-stereo

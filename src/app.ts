@@ -2,7 +2,14 @@
 // (VAD continuo + barge-in + gate de audio + work-events).
 
 import './app.css';
-import { OrbField, type OrbAgent, type OrbSlot } from './lib/call-orbs.ts';
+import type { OrbAgent, OrbSlot } from './lib/call-orbs.ts';
+import { OrbMorph } from './fx/orb-morph.ts';
+import { mountMissionControl } from './mission/view.ts';
+import './mission/mission.css';
+import './fx/motion.css';
+import { mountMotion, setSpeakingGlow } from './fx/motion.ts';
+import { mountPalette } from './fx/palette.ts';
+import { mountMesh } from './fx/mesh.ts';
 import { isTauri, tinvoke } from './lib/tauri.ts';
 import {
   Client,
@@ -194,7 +201,7 @@ function cutAgent(): void {
   voiceOut.flush();
   voiceOut.restoreGain();
   speakingAgent = '';
-  field.setSpeaking('');
+  setSpeaking('');
   setStatus('Stopped — listening to you.');
 }
 
@@ -203,7 +210,7 @@ function maybePlaybackComplete(): void {
     client.playbackComplete(audioSegment.turnId, audioSegment.agentId);
     if (speakingAgent === audioSegment.agentId) {
       speakingAgent = '';
-      field.setSpeaking('');
+      setSpeaking('');
     }
     audioSegment = null;
     if (!liveMic.userSpeaking) setStatus('Ready');
@@ -333,7 +340,7 @@ const liveMic = new LiveMic({
     voiceOut.flush();
     voiceOut.restoreGain();
     speakingAgent = '';
-    field.setSpeaking('');
+    setSpeaking('');
     addMsg('system', '⏵ Cut in — listening.', 'sys');
   },
   onDuck: (ducked) => {
@@ -368,11 +375,30 @@ function callEnergy(): number {
   return 0.28 + 0.22 * Math.sin(performance.now() / 210);
 }
 
-const field = new OrbField(canvas, { energy: callEnergy });
+const field = new OrbMorph(canvas, { energy: callEnergy });
 field.setTheme('dark');
 
 const agents = new Map<string, Agent>();
 const working = new Set<string>();
+
+// Wrapper único de speaking: orbe + glow + figura (fx). Todo cambio de
+// "quién habla" pasa por acá para que nada quede prendido a medias.
+let lastSpeaking = '';
+function glowSpeaking(agentId: string): void {
+  cellsEl.querySelectorAll('[data-speaking]').forEach((el) => setSpeakingGlow(el as HTMLElement, false));
+  if (!agentId) return;
+  const cell = cellsEl.querySelector(`[data-agent-id="${agentId}"]`) as HTMLElement | null;
+  if (cell) setSpeakingGlow(cell, true);
+}
+function setSpeaking(agentId: string): void {
+  field.setSpeaking(agentId);
+  glowSpeaking(agentId);
+  if (lastSpeaking && lastSpeaking !== agentId) {
+    field.setAgentState(lastSpeaking, working.has(lastSpeaking) ? 'trabajando' : 'idle');
+  }
+  if (agentId) field.setAgentState(agentId, 'hablando');
+  lastSpeaking = agentId;
+}
 
 function layoutOrbs(): void {
   const list = [...agents.values()].slice(0, 6);
@@ -389,6 +415,7 @@ function layoutOrbs(): void {
     orbAgents.push({ id: a.id, name: a.name, color: a.color || '#38D1FF' });
     const cell = document.createElement('div');
     cell.className = 'orb-cell';
+    cell.dataset.agentId = a.id;
     const hole = document.createElement('div');
     hole.className = 'orb-hole';
     hole.style.width = `${r * 2}px`;
@@ -486,7 +513,7 @@ const client = new Client({
     // El subtítulo sigue al AUDIO, no al texto: si suena, no se limpia acá.
     if (!audioSegment && speakingAgent === agentId) {
       speakingAgent = '';
-      field.setSpeaking('');
+      setSpeaking('');
       if (!voiceSession) setStatus('Ready');
     }
   },
@@ -501,7 +528,7 @@ const client = new Client({
   onAudioStart: (turnId, agentId) => {
     audioSegment = { turnId, agentId, endReceived: false };
     speakingAgent = agentId;
-    field.setSpeaking(agentId);
+    setSpeaking(agentId);
     setStatus(`${agentName(agentId).toLowerCase()} speaking…`);
   },
   onAudioEnd: (turnId, agentId) => {
@@ -513,10 +540,10 @@ const client = new Client({
   onAgentState: (agentId, state) => {
     if (state === 'speaking' && !audioSegment) {
       speakingAgent = agentId;
-      field.setSpeaking(agentId);
+      setSpeaking(agentId);
     } else if ((state === 'idle' || state === 'interrupted') && speakingAgent === agentId && !audioSegment) {
       speakingAgent = '';
-      field.setSpeaking('');
+      setSpeaking('');
     }
   },
   onInterrupted: (agentId, turnId) => {
@@ -529,16 +556,22 @@ const client = new Client({
     audioSegment = null;
     if (!agentId || speakingAgent === agentId) {
       speakingAgent = '';
-      field.setSpeaking('');
+      setSpeaking('');
     }
     setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onWorkEvent: (kind, agentId, event) => {
     // task_started → arco giratorio; task_done/blocked → fuera.
     if (kind === 'task_started' || kind === 'task_queued' || kind === 'comando' || kind === 'file_written' || kind === 'web') {
-      if (agentId) working.add(agentId);
+      if (agentId) {
+        working.add(agentId);
+        if (agentId !== speakingAgent) field.setAgentState(agentId, 'trabajando');
+      }
     } else if (kind === 'task_done' || kind === 'task_blocked') {
-      if (agentId) working.delete(agentId);
+      if (agentId) {
+        working.delete(agentId);
+        field.setAgentState(agentId, agentId === speakingAgent ? 'hablando' : 'idle');
+      }
     }
     field.setWorking([...working]);
     // Feed de actividad: que SE VEA que laburan.
@@ -694,7 +727,7 @@ voiceBtn.addEventListener('click', () => {
     voiceOut.flush();
     audioSegment = null;
     speakingAgent = '';
-    field.setSpeaking('');
+    setSpeaking('');
   }
 });
 
@@ -1035,6 +1068,105 @@ async function renderSettings(): Promise<void> {
   engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
   box.appendChild(settingRow('🔊 TTS engine', engSel));
 
+  // ── Audio: routing PipeWire (salida/entrada) ──────────────────────
+  // followDefault on = los streams siguen al sistema (selects off).
+  // Volumen/mute son vivos e independientes del routing: siempre activos.
+  box.appendChild(settingGroup('Audio'));
+  const audioSel = s.audio || { output: 'default', input: 'default', followDefault: true };
+  const { getAudioDevices, setAudioVolume, setAudioMute, testAudioOutput } = await import('./client.ts');
+  let audioDev = null;
+  try {
+    audioDev = await getAudioDevices();
+  } catch {
+    audioDev = null;
+  }
+  const followBox = document.createElement('input');
+  followBox.type = 'checkbox';
+  followBox.checked = audioSel.followDefault !== false;
+  followBox.setAttribute('aria-label', 'Follow system default audio');
+  followBox.addEventListener('change', () =>
+    save({ 'audio.followDefault': followBox.checked ? 'true' : 'false' }, true));
+  box.appendChild(settingRow('🔀 Follow system default', followBox));
+  if (!audioDev) {
+    const note = document.createElement('div');
+    note.className = 'sidecar-note';
+    note.textContent = 'Audio devices unavailable — is PipeWire running on this machine?';
+    box.appendChild(note);
+  } else {
+    const sinks = audioDev.sinks || [];
+    const sources = audioDev.sources || [];
+    const withSaved = (list: Array<{ name: string; description: string }>, saved: string): string[] => {
+      const names = list.map((d) => d.name);
+      return saved && saved !== 'default' && !names.includes(saved) ? [saved, ...names] : names;
+    };
+    const labelsFor = (list: Array<{ name: string; description: string; isDefault: boolean }>, kind: string): Record<string, string> => {
+      const labels: Record<string, string> = {};
+      for (const d of list) labels[d.name] = `${d.description}${d.isDefault ? ' (system default)' : ''}`;
+      return { ...labels, [kind]: `Saved (not present)` };
+    };
+    const outSel = settingSelect(withSaved(sinks, audioSel.output), audioSel.output || 'default', labelsFor(sinks, audioSel.output));
+    outSel.setAttribute('aria-label', 'Audio output');
+    outSel.disabled = followBox.checked;
+    outSel.addEventListener('change', () => save({ 'audio.output': outSel.value }));
+    box.appendChild(settingRow('🔈 Output', outSel));
+    const inSel = settingSelect(withSaved(sources, audioSel.input), audioSel.input || 'default', labelsFor(sources, audioSel.input));
+    inSel.setAttribute('aria-label', 'Audio input');
+    inSel.disabled = followBox.checked;
+    inSel.addEventListener('change', () => save({ 'audio.input': inSel.value }));
+    box.appendChild(settingRow('🎙️ Input', inSel));
+    // Volumen/mute del efectivo: guardado si existe, si no el default.
+    const effective = (list: typeof sinks, saved: string): (typeof sinks)[number] | undefined =>
+      list.find((d) => d.name === saved) || list.find((d) => d.isDefault) || list[0];
+    const volRow = (dev: { name: string; volume: number | null; muted: boolean | null } | undefined, label: string): void => {
+      if (!dev) return;
+      const wrap = document.createElement('div');
+      wrap.style.display = 'flex';
+      wrap.style.gap = '8px';
+      wrap.style.alignItems = 'center';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '100';
+      slider.value = String(Math.round((dev.volume ?? 1) * 100));
+      slider.setAttribute('aria-label', `${label} volume`);
+      slider.style.flex = '1';
+      slider.addEventListener('change', () => {
+        void setAudioVolume(dev.name, Number(slider.value) / 100)
+          .then(() => flashSaved())
+          .catch((err) => addMsg('system', `Volume failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
+      });
+      const mute = document.createElement('input');
+      mute.type = 'checkbox';
+      mute.checked = dev.muted === true;
+      mute.title = 'Mute';
+      mute.setAttribute('aria-label', `${label} mute`);
+      mute.addEventListener('change', () => {
+        void setAudioMute(dev.name, mute.checked)
+          .then(() => flashSaved())
+          .catch((err) => addMsg('system', `Mute failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
+      });
+      wrap.append(slider, mute);
+      box.appendChild(settingRow(label, wrap));
+    };
+    volRow(effective(sinks, audioSel.output), '🎚️ Out volume');
+    volRow(effective(sources, audioSel.input), '🎚️ In volume');
+    const testBtn = document.createElement('button');
+    testBtn.className = 'pill';
+    testBtn.textContent = '🔔 Probar salida';
+    testBtn.setAttribute('aria-label', 'Test audio output');
+    testBtn.addEventListener('click', () => {
+      const target = effective(sinks, audioSel.output)?.name || '';
+      testBtn.textContent = '🔔…';
+      void testAudioOutput(followBox.checked ? '' : target)
+        .then(() => { testBtn.textContent = '🔔 Probar salida'; flashSaved(); })
+        .catch((err) => {
+          testBtn.textContent = '🔔 Probar salida';
+          addMsg('system', `Test tone failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
+        });
+    });
+    box.appendChild(settingRow('🔔 Test', testBtn));
+  }
+
   // Sidecars: estado del watchdog STT/TTS (GET directo, sin WS).
   box.appendChild(settingGroup('Sidecars'));
   const scWrap = document.createElement('div');
@@ -1134,6 +1266,63 @@ document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
 });
 if (isTauri()) {
   $('perms-box').hidden = false;
+}
+
+// ── FX + Mission Control (integración main) ──────────────────────────
+mountMotion();
+{
+  const meshCanvas = document.createElement('canvas');
+  meshCanvas.id = 'fx-mesh';
+  meshCanvas.setAttribute('aria-hidden', 'true');
+  meshCanvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;opacity:.5';
+  document.body.prepend(meshCanvas);
+  const shell = document.querySelector('.shell') as HTMLElement | null;
+  if (shell) {
+    shell.style.position = 'relative';
+    shell.style.zIndex = '1';
+  }
+  const mesh = mountMesh(meshCanvas, { energy: callEnergy });
+  const sizeMesh = (): void => mesh.resize(window.innerWidth, window.innerHeight);
+  window.addEventListener('resize', sizeMesh);
+  sizeMesh();
+}
+mountPalette({
+  actions: [
+    { id: 'mic', label: 'Mic on/off', hint: 'sesión de voz' },
+    { id: 'call', label: 'Llamada grupal on/off', hint: 'todos escuchan' },
+    { id: 'voice', label: 'Voz on/off', hint: 'mute salida' },
+    { id: 'mission', label: 'Abrir Mission Control', hint: 'dashboard' }
+  ],
+  onAction: (id) => {
+    if (id === 'mic') micBtn.click();
+    else if (id === 'call') callBtn.click();
+    else if (id === 'voice') voiceBtn.click();
+    else if (id === 'mission') {
+      const box = document.getElementById('settings-box') as HTMLDetailsElement | null;
+      if (box) {
+        box.open = true;
+        document.getElementById('mission-list')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }
+});
+{
+  const settingsBox = document.getElementById('settings-box');
+  if (settingsBox) {
+    const section = document.createElement('section');
+    section.className = 'setting-group';
+    const title = document.createElement('h3');
+    title.textContent = 'Mission Control';
+    const mcEl = document.createElement('div');
+    mcEl.id = 'mission-list';
+    section.appendChild(title);
+    section.appendChild(mcEl);
+    settingsBox.appendChild(section);
+    mountMissionControl(mcEl, {
+      getLiveSpeakers: () => (speakingAgent ? [speakingAgent] : []),
+      getVoiceActive: () => voiceSession
+    });
+  }
 }
 
 // Debug: window.__pablo (para auditoría; __sofia queda como alias legacy).

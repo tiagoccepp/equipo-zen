@@ -144,6 +144,7 @@ export interface PublicSettings {
     minConfidence: number;
   };
   tts: { engine: string; engineOptions: string[]; language: string; url: string };
+  audio: { output: string; input: string; followDefault: boolean };
 }
 
 export async function getSettings(): Promise<PublicSettings> {
@@ -174,6 +175,61 @@ export interface SidecarStatus {
 export async function getSidecars(): Promise<SidecarStatus[]> {
   const data = await apiJson<{ sidecars: SidecarStatus[] }>('/api/sidecars');
   return data.sidecars || [];
+}
+
+// Audio routing (PipeWire): espeja server/lib/audio.js listDevices.
+export interface AudioDevice {
+  id: number;
+  name: string;
+  description: string;
+  volume: number | null;
+  muted: boolean | null;
+  isDefault: boolean;
+}
+
+export interface AudioStream {
+  id: number;
+  nodeName: string;
+  app: string;
+  mediaClass: string;
+  driverId: number | null;
+}
+
+export interface AudioDevices {
+  sinks: AudioDevice[];
+  sources: AudioDevice[];
+  streams: AudioStream[];
+  backend: string;
+  available: boolean;
+}
+
+export async function getAudioDevices(): Promise<AudioDevices> {
+  const data = await apiJson<{ devices: AudioDevices }>('/api/audio/devices');
+  return data.devices;
+}
+
+export async function setAudioVolume(id: number | string, volume: number): Promise<void> {
+  await apiJson('/api/audio/volume', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, volume })
+  });
+}
+
+export async function setAudioMute(id: number | string, muted: boolean): Promise<void> {
+  await apiJson('/api/audio/mute', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, muted })
+  });
+}
+
+export async function testAudioOutput(sink?: string): Promise<void> {
+  await apiJson('/api/audio/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sink: sink || '' })
+  });
 }
 
 export class Client {

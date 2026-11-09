@@ -718,4 +718,33 @@ export class OrbField {
     }
     ctx.globalAlpha = 1;
   }
+
+  // ── Hooks de lectura para fx/* (aditivo, 09/11, track visual-wow) ────
+  // Solo LECTURA: no cambian ningún comportamiento del campo. El main los
+  // usa para espejar estado (mesh reactivo, glow, palette) sin tocar el loop.
+
+  // Quién tiene la palabra ahora ('' = nadie).
+  getSpeakingId() {
+    return this.speakingId;
+  }
+
+  // Foto por esfera: energía suavizada, foco, flags. Objeto nuevo cada vez.
+  snapshot(): OrbSnapshot[] {
+    return this.orbs.map((orb) => ({
+      id: orb.id,
+      energy: orb.energy,
+      focus: orb.focus,
+      speaking: orb.id === this.speakingId,
+      working: this.workingIds.has(orb.id)
+    }));
+  }
 }
+
+// Foto de una esfera para consumidores externos (fx/mesh, main). Solo datos.
+export type OrbSnapshot = {
+  id: string;
+  energy: number;
+  focus: number;
+  speaking: boolean;
+  working: boolean;
+};

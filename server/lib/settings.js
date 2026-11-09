@@ -309,6 +309,27 @@ export function getSalaGroupchat() {
   return ['1', 'true', 'yes', 'on'].includes(value);
 }
 
+// ── Audio (routing PipeWire: salida/entrada) ────────────────────────────
+// 'default' = seguir el default del sistema. followDefault=true (default)
+// = no tocar nada: los streams siguen al sistema solos.
+
+export function getAudioOutput() {
+  return dbValue('audio.output') || 'default';
+}
+
+export function getAudioInput() {
+  return dbValue('audio.input') || 'default';
+}
+
+export function getAudioFollowDefault() {
+  const raw = dbValue('audio.followDefault');
+  if (raw === null || raw === undefined || raw === '') {
+    return true;
+  }
+  const value = String(raw).trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(value);
+}
+
 // ── Lectura/escritura desde la UI ───────────────────────────────────────
 
 const EDITABLE_KEYS = new Set([
@@ -334,7 +355,10 @@ const EDITABLE_KEYS = new Set([
   'sala.v2',
   'sala.sop',
   'sala.agentTimeoutMs',
-  'sala.groupchat'
+  'sala.groupchat',
+  'audio.output',
+  'audio.input',
+  'audio.followDefault'
 ]);
 
 const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
@@ -394,6 +418,11 @@ export function publicSettings() {
       sop: getSalaSop(),
       agentTimeoutMs: getSalaAgentTimeoutMs(),
       groupchat: getSalaGroupchat()
+    },
+    audio: {
+      output: getAudioOutput(),
+      input: getAudioInput(),
+      followDefault: getAudioFollowDefault()
     }
   };
 }
@@ -469,6 +498,16 @@ export function applySettings(patch) {
     }
     // Llamada grupal: flag booleano como sala.v1/v2.
     if (key === 'sala.groupchat' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
+    // Audio: node names de PipeWire (o 'default'/vacío = sistema). Nombres
+    // reales: [A-Za-z0-9_.:+-] (ej. bluez_output.0D_45_E7_0E_0B_A8.1).
+    if ((key === 'audio.output' || key === 'audio.input') && value && value.toLowerCase() !== 'default') {
+      if (value.length > 256 || !/^[A-Za-z0-9_.:+@-]+$/.test(value)) {
+        continue;
+      }
+    }
+    if (key === 'audio.followDefault' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
       continue;
     }
     if (value) {
