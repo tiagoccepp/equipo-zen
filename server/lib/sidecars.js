@@ -50,38 +50,21 @@ export const SIDECARS = [
     spawn: { cmd: 'python3', args: ['server/tts/piper_server.py'] }
   },
   {
-    // Respaldo STT local (09/11): tiny + lazy (PRELOAD=0: ~53M idle, el
-    // modelo carga en el primer transcribe). HF_HUB_OFFLINE=1: los modelos
-    // están cacheados y el proxy del gateway devuelve 403 — el sidecar
-    // jamás debe depender de red en runtime (ese 403 era el HTTP 500).
+    // Tito 09/11: sin respaldos locales, solo Parakeet+Piper. Monitor-only:
+    // el watchdog vigila /health pero NO levanta el proceso (spawn null).
     name: 'whisper',
     health: process.env.WHISPER_URL
       ? `${process.env.WHISPER_URL}/health`
       : 'http://127.0.0.1:7789/health',
-    spawn: {
-      cmd: WHISPER_PYTHON,
-      args: ['server/stt/whisper_server.py'],
-      env: {
-        WHISPER_MODEL: process.env.WHISPER_MODEL || 'tiny',
-        WHISPER_PRELOAD: process.env.WHISPER_PRELOAD || '0',
-        WHISPER_PORT: process.env.WHISPER_PORT || '7789',
-        HF_HUB_OFFLINE: '1'
-      }
-    }
+    spawn: null
   },
   {
-    // Respaldo TTS local (09/11): supertonic-3 (~520M RSS, 44.1kHz, 10
-    // voces M1-M5/F1-F5). Health en /v1/health (no /health). Modelos en
-    // ~/.cache/supertonic3, offline igual que whisper.
+    // Tito 09/11: sin respaldos locales, solo Parakeet+Piper. Monitor-only.
     name: 'supertonic',
     health: process.env.SUPERTONIC_URL
       ? `${process.env.SUPERTONIC_URL}/v1/health`
       : 'http://127.0.0.1:7788/v1/health',
-    spawn: {
-      cmd: SUPERTONIC_BIN,
-      args: ['serve', '--host', '127.0.0.1', '--port', '7788', '--model', 'supertonic-3', '--log-level', 'warning'],
-      env: { HF_HUB_OFFLINE: '1' }
-    }
+    spawn: null
   }
 ];
 

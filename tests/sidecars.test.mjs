@@ -77,25 +77,18 @@ test('shouldRestart: monitor-only y autostart off nunca spawnean', () => {
   }
 });
 
-test('SIDECARS: los 4 spawneables (whisper+supertonic vía venvs, 09/11)', () => {
+test('SIDECARS: parakeet+piper spawneables, whisper+supertonic monitor-only (Tito 09/11)', () => {
   const byName = Object.fromEntries(SIDECARS.map((s) => [s.name, s]));
   assert.ok(byName.parakeet.spawn);
   assert.ok(byName.piper.spawn);
-  assert.ok(byName.whisper.spawn);
-  assert.ok(byName.supertonic.spawn);
+  // Sin respaldos locales: monitor-only (spawn null, health intacto).
+  assert.equal(byName.whisper.spawn, null);
+  assert.equal(byName.supertonic.spawn, null);
   assert.match(byName.parakeet.health, /7790/);
   assert.match(byName.piper.health, /7791/);
   assert.match(byName.whisper.health, /7789/);
   // Supertonic expone /v1/health (no /health).
   assert.match(byName.supertonic.health, /7788\/v1\/health/);
-  // Venvs dedicados, nunca el python3 del sistema.
-  assert.match(byName.whisper.spawn.cmd, /whisper-venv/);
-  assert.match(byName.supertonic.spawn.cmd, /supertonic-venv/);
-  // Whisper: tiny + lazy + offline (ver plan 09/11).
-  assert.equal(byName.whisper.spawn.env.WHISPER_MODEL, 'tiny');
-  assert.equal(byName.whisper.spawn.env.WHISPER_PRELOAD, '0');
-  assert.equal(byName.whisper.spawn.env.HF_HUB_OFFLINE, '1');
-  assert.equal(byName.supertonic.spawn.env.HF_HUB_OFFLINE, '1');
 });
 
 test('watchdog: 2 downs seguidos disparan 1 spawn (fakes, sin procesos reales)', async () => {
