@@ -13,9 +13,10 @@ import { rootDir } from './config.js';
 const CACHE_TTL_MS = 30000;
 const cache = new Map(); // ruta absoluta -> { content, at }
 
-// Presupuesto default de render: identidad + directivas + hechos + hoy entran
-// cómodos; lo episódico pesado (learnings) tiene su propio presupuesto aparte.
-export const DEFAULT_RENDER_BUDGET = 1200;
+// Presupuesto default de render: cubre SOUL+USER+MEMORY+daily corto (~3.2k
+// los seeds; ship 09/11: 1200 dejaba las directivas de USER.md afuera).
+// Lo episódico pesado (learnings) tiene su propio presupuesto aparte.
+export const DEFAULT_RENDER_BUDGET = 3600;
 
 // Nombres escribibles. Todo lo demás se rechaza: no hay subpaths ni escapes.
 const ALLOWLIST = new Set(['SOUL.md', 'USER.md', 'MEMORY.md', 'AGENTS.md']);
@@ -188,10 +189,13 @@ export function __resetPabloMemoryCache() {
 // learningsSection — meeting-session.js líneas ~267 y ~306, y el preview HTTP
 // en http.js línea ~343:
 //
-//   memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 1200 }),
-//   // http.js: renderMemorySection(agent.companyId || 'pablo', { maxChars: 1200 })
+//   memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 }),
+//   // http.js: renderMemorySection(agent.companyId || 'pablo', { maxChars: 3600 })
 //
-// PRESUPUESTO: 1200 chars (~300 tokens). La memoria es identidad + directivas:
-// corta por diseño. Los learnings keeps su propio presupuesto (4800) aparte.
+// PRESUPUESTO: 3600 chars (~900 tokens). 1200 NO alcanzaba: el SOUL seed solo
+// ya mide ~1.6k y las directivas de USER.md quedaban afuera del prompt (ship
+// 09/11, verificado por prompt-preview). Con 3600 entran SOUL+USER+MEMORY+daily
+// corto; si el daily crece, el recorte cae sobre él (va último), nunca sobre
+// identidad y directivas. Los learnings keeps su propio presupuesto (4800) aparte.
 // ORDEN: memoria ANTES que learnings — quién es y qué quiere Tito precede a lo
 // episódico de reuniones pasadas.

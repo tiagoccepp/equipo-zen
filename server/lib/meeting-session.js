@@ -272,7 +272,8 @@ export class MeetingSession {
       stack: this.project?.stack || this.company?.stack || null,
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
       // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 1200 })
+      // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 })
     };
   }
 
@@ -313,7 +314,8 @@ export class MeetingSession {
       stack: this.project?.stack || this.company?.stack || null,
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
       // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 1200 })
+      // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 })
     };
   }
 

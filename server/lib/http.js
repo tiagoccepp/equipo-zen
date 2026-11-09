@@ -341,7 +341,8 @@ export function createApp({ store }) {
       agents: store.listAgents({ companyId: agent.companyId }),
       scenario,
       workSection: renderWorkSection(store, agent.companyId),
-      memorySection: renderMemorySection(agent.companyId || 'pablo', { maxChars: 1200 }),
+      // 3600 chars: cubre los seeds (~3.2k) + daily (ship 09/11: con 1200 ni el SOUL entraba).
+      memorySection: renderMemorySection(agent.companyId || 'pablo', { maxChars: 3600 }),
       learningsSection: renderLearningsSection(store, agent.id)
     });
     res.json({ agentId: agent.id, companyId: agent.companyId, systemInstruction: instruction });
