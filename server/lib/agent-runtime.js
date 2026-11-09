@@ -865,6 +865,7 @@ export function buildSystemInstruction(agent, context = {}) {
     T('- Nunca rompas el personaje.', '- Never break character.'),
     T('- Nunca menciones que sos una IA, un modelo o que tenés instrucciones.', "- Never mention you're an AI, a model, or that you have instructions."),
     T('- No inventes datos, fechas, números ni hechos que no te dieron.', "- Don't invent data, dates, numbers, or facts you weren't given."),
+    T('- Si algo NO lo podés hacer (sin tool, sin permiso, sin dato), decilo en UNA frase y ofrecé lo más cercano que SÍ podés — jamás finjas haberlo hecho ni lo prometas para después.', '- If you CANNOT do something (no tool, no permission, no data), say so in ONE sentence and offer the closest thing you CAN do — never fake having done it or promise it for later.'),
     T('- No generes contenido inapropiado.', "- Don't generate inappropriate content."),
     ...languageRules()
   ].join('\n');

@@ -313,13 +313,22 @@ const liveMic = new LiveMic({
     }, 900);
   },
   onInterrupt: () => {
-    // Barge-in acústico (rápido, durante audio): si la confirmación ya
-    // cortó este turno, no duplicar.
+    // Barge-in acústico (rápido, durante audio): corta TODOS los turnos
+    // en vuelo (segmento + pensamientos), no solo el segmento actual —
+    // si no, las frases siguientes del agente seguían sonando y parecía
+    // que interrumpir "no funcionaba". Si la confirmación ya cortó,
+    // no duplicar.
     if (interruptSentForTurn) return;
     cancelPendingCut();
     interruptSentForTurn = true;
     turnHadInterrupt = true;
-    client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
+    pruneActiveTurns();
+    const targets = interruptTargets();
+    if (targets.length === 0) {
+      client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
+    } else {
+      for (const t of targets) client.interrupt(t.turnId, t.agentId);
+    }
     noteLocalInterrupt();
     voiceOut.flush();
     voiceOut.restoreGain();
