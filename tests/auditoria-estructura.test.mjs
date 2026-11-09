@@ -129,8 +129,8 @@ test('movil-rn: una web disfrazada de app no pasa', async (t) => {
     'App.jsx': "export default function App(){ return <div>hola</div>; }\n",
     'src/screens/Pantalla.jsx': "export default () => { document.title = 'x'; return <span>hola</span>; };\n"
   }), 'movil-rn');
-  assert.ok(grave(r, 'de HTML'), acta(r));
-  assert.ok(grave(r, 'APIs del navegador'), acta(r));
+  assert.ok(grave(r, 'HTML <'), acta(r));
+  assert.ok(grave(r, 'browser APIs'), acta(r));
 });
 
 test('android: el namespace del módulo tiene que coincidir con el paquete del código', async (t) => {

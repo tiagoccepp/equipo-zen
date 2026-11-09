@@ -101,7 +101,7 @@ test('spawn_agent: cap de agentes y dedup por nombre', async () => {
     type: 'spawn_agent',
     agent: { name: julioName, title: 'Otro', aliases: [], domains: [], boundaries: [], initialTasks: [] }
   });
-  assert.ok(socket.sent.some((m) => m.type === 'error' && /Ya hay un agente llamado/.test(m.message)));
+  assert.ok(socket.sent.some((m) => m.type === 'error' && /already an agent called/.test(m.message)));
 
   for (let i = 0; i < 6; i += 1) {
     await session.handleClientMessage({
@@ -115,7 +115,7 @@ test('spawn_agent: cap de agentes y dedup por nombre', async () => {
     type: 'spawn_agent',
     agent: { name: 'Desborde', title: 'Rol', aliases: [], domains: [], boundaries: [], initialTasks: [] }
   });
-  assert.ok(socket.sent.some((m) => m.type === 'error' && /mesa está completa/.test(m.message)));
+  assert.ok(socket.sent.some((m) => m.type === 'error' && /table is full/.test(m.message)));
   assert.equal(session.sessionAgents.length, 8);
 });
 
@@ -127,7 +127,7 @@ test('modo mock: sin claves los agentes responden enlatado con usedMock', async 
   assert.equal(completes.length, session.sessionAgents.length, 'saluda todo el equipo (incl. CEO y contratista)');
   for (const complete of completes) {
     assert.equal(complete.usedMock, true);
-    assert.match(complete.text, /modo simulación/);
+    assert.match(complete.text, /simulation mode/);
   }
 });
 
@@ -346,7 +346,7 @@ test('archive_agent solo permite archivar agentes custom', async () => {
   const { socket, session, store, julioId } = newSession();
 
   await session.handleClientMessage({ type: 'archive_agent', agentId: julioId });
-  assert.ok(socket.sent.some((m) => m.type === 'error' && /equipo base/.test(m.message)));
+  assert.ok(socket.sent.some((m) => m.type === 'error' && /core team/.test(m.message)));
 
   await session.handleClientMessage({
     type: 'spawn_agent',
@@ -447,7 +447,7 @@ test('"Comenzar a trabajar": el equipo arranca con lo que ya tiene, sin cerrar l
   session.startWorkNow();
   const vacio = socket.sent.filter((m) => m.type === 'work_started').at(-1);
   assert.equal(vacio.tasks, 0);
-  assert.match(vacio.note, /tareas asignadas/i);
+  assert.match(vacio.note, /tasks assigned/i);
   assert.equal(store.workQueue(session.company.id).length, 0);
 
   await session.handleClientMessage({ type: 'add_task', agentId: julioId, text: 'armar el informe de stock' });

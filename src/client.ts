@@ -102,7 +102,7 @@ export async function decir(texto: string): Promise<string> {
     `/api/decir?texto=${encodeURIComponent(texto)}`
   );
   if (!data.audio) {
-    throw new Error('sin audio');
+    throw new Error('no audio');
   }
   return data.audio;
 }
@@ -240,7 +240,7 @@ export class Client {
           this.ev.onAgentEnd(String(m.agentId || ''), '', optStr(m.turnId));
           break;
         case 'no_agent_response':
-          this.ev.onNoResponse(String(m.note || 'Nadie respondió.'), optStr(m.turnId));
+          this.ev.onNoResponse(String(m.note || 'No one answered.'), optStr(m.turnId));
           break;
         case 'user_audio_turn_final':
           if (m.text) this.ev.onVoiceTranscript(String(m.text), String(m.source || ''));

@@ -41,27 +41,27 @@ const RIESGOSOS = [
 // Lo único que NO se ejecuta nunca, con el motivo que se le devuelve al agente.
 // Todo apunta a lo mismo: salir del proyecto o romper la máquina del usuario.
 const PROHIBIDO = [
-  [/\bsudo\b|\bdoas\b/, 'no hace falta ser root para construir un producto'],
+  [/\bsudo\b|\bdoas\b/, 'no need for root to build a product'],
   // Cualquier rm que apunte a una ruta absoluta o al home. `rm -rf node_modules`
   // (relativo, dentro del proyecto) sigue permitido: es trabajo normal.
-  [/\brm\s+(-[a-zA-Z]*\s+)*(\/|~|\$HOME|\$\{HOME\})/, 'eso borraría cosas fuera del proyecto'],
-  [/\b(shutdown|reboot|halt|mkfs|diskutil|fdisk)\b/, 'no toca el sistema operativo'],
-  [/\b(curl|wget)\b[^|]*\|\s*(ba)?sh/, 'no se ejecuta un script bajado de internet sin leerlo'],
-  [/\bgit\s+push\b/, 'el trabajo se entrega en la carpeta del proyecto, no se publica'],
-  [/\b(ssh|scp|rsync)\b.*@/, 'no se sale a otras máquinas'],
-  [/\b(launchctl|systemctl|crontab)\b/, 'no se instalan servicios ni tareas programadas'],
-  [/\.\.\/\.\.\//, 'esa ruta se va de la carpeta del proyecto'],
-  [/\b(cd|pushd)\s+(\/|~|\$HOME)/, 'el comando corre dentro del proyecto y de ahí no se sale'],
-  [/\bhistory\b|\.ssh\b|\.env\b|id_rsa|credentials/, 'no se leen credenciales ni secretos']
+  [/\brm\s+(-[a-zA-Z]*\s+)*(\/|~|\$HOME|\$\{HOME\})/, 'that would delete things outside the project'],
+  [/\b(shutdown|reboot|halt|mkfs|diskutil|fdisk)\b/, 'leave the operating system alone'],
+  [/\b(curl|wget)\b[^|]*\|\s*(ba)?sh/, 'do not run a script downloaded from the internet without reading it'],
+  [/\bgit\s+push\b/, 'work is delivered in the project folder, not published'],
+  [/\b(ssh|scp|rsync)\b.*@/, 'no reaching out to other machines'],
+  [/\b(launchctl|systemctl|crontab)\b/, 'no installing services or scheduled tasks'],
+  [/\.\.\/\.\.\//, 'that path leaves the project folder'],
+  [/\b(cd|pushd)\s+(\/|~|\$HOME)/, 'the command runs inside the project and stays there'],
+  [/\bhistory\b|\.ssh\b|\.env\b|id_rsa|credentials/, 'no reading credentials or secrets']
 ];
 
 export function clasificarComando(comando) {
   const texto = String(comando || '').trim();
   if (!texto) {
-    return { permitido: false, motivo: 'comando vacío' };
+    return { permitido: false, motivo: 'empty command' };
   }
   if (texto.length > 2000) {
-    return { permitido: false, motivo: 'comando demasiado largo' };
+    return { permitido: false, motivo: 'command too long' };
   }
   for (const [patron, motivo] of PROHIBIDO) {
     if (patron.test(texto)) {

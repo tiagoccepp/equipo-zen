@@ -84,7 +84,7 @@ async function transcribeLocal(wavBase64) {
 async function transcribeGroq(wavBase64) {
   const key = getGroqKey();
   if (!key) {
-    throw new Error('Falta la clave de Groq (Ajustes → Oído).');
+    throw new Error('Missing Groq key (Settings → Hearing).');
   }
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(wavBase64, 'base64')], { type: 'audio/wav' }), 'turno.wav');
@@ -133,7 +133,7 @@ export async function transcribeWithFallback({ wavBase64, hint = '', provider = 
         return { text, source: 'deepgram' };
       }
     }
-    throw new Error('Sin transcripción del navegador.');
+    throw new Error('No browser transcription.');
   }
 
   try {
@@ -145,7 +145,7 @@ export async function transcribeWithFallback({ wavBase64, hint = '', provider = 
     if (text) {
       return { text, source: provider };
     }
-    throw new Error('Transcripción vacía.');
+    throw new Error('Empty transcription.');
   } catch (error) {
     if (provider !== 'groq' && groqKey) {
       try {

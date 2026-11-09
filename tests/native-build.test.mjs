@@ -46,8 +46,8 @@ test('una web disfrazada de app móvil se rechaza', async () => {
   const r = await revisarReactNative(dir);
   assert.equal(r.ok, false);
   const texto = r.errores.map((e) => e.que).join(' | ');
-  assert.match(texto, /falta la dependencia react-native/);
-  assert.match(texto, /<h1> de HTML|<div> de HTML/);
+  assert.match(texto, /missing the react-native dependency/);
+  assert.match(texto, /HTML <(h1|div)>/);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -60,7 +60,7 @@ test('las APIs del navegador no existen en una app móvil', async () => {
 
   const r = await revisarReactNative(dir);
   assert.equal(r.ok, false);
-  assert.match(r.errores.map((e) => e.que).join(' '), /APIs del navegador/);
+  assert.match(r.errores.map((e) => e.que).join(' '), /browser APIs/);
   rmSync(dir, { recursive: true, force: true });
 });
 

@@ -194,7 +194,7 @@ export class CancellableTurnQueue {
         await withTimeout(
           entry.job(controller.signal),
           this.timeoutMs,
-          'El turno excedió el tiempo máximo de procesamiento.'
+          'The turn exceeded the maximum processing time.'
         );
       } catch (error) {
         if (!controller.signal.aborted) {

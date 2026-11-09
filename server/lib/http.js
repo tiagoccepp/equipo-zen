@@ -124,7 +124,7 @@ export function createApp({ store }) {
   app.get('/api/decir', async (req, res) => {
     const texto = String(req.query.texto || '').slice(0, 280);
     if (!texto.trim()) {
-      res.status(400).json({ error: 'falta texto' });
+      res.status(400).json({ error: 'missing text' });
       return;
     }
     try {
@@ -185,7 +185,7 @@ export function createApp({ store }) {
   app.get('/api/companies/:id/work', (req, res) => {
     const company = store.getCompany(req.params.id);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     const comments = store.recentComments(company.id, 60);
     const commentsByTask = new Map();
@@ -259,7 +259,7 @@ export function createApp({ store }) {
     if (body.templateId) {
       const template = companyTemplates.templates.find((item) => item.id === body.templateId);
       if (!template) {
-        return res.status(404).json({ error: 'plantilla no encontrada' });
+        return res.status(404).json({ error: 'template not found' });
       }
       const overrides = {
         ...template,
@@ -270,7 +270,7 @@ export function createApp({ store }) {
     }
     const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
     if (!name) {
-      return res.status(400).json({ error: 'la empresa necesita un nombre' });
+      return res.status(400).json({ error: 'the company needs a name' });
     }
     const company = store.insertCompany({
       name,
@@ -295,7 +295,7 @@ export function createApp({ store }) {
     if (body.status === 'active' || body.status === 'archived') patch.status = body.status;
     const company = store.updateCompany(req.params.id, patch);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     res.json({ company });
   });
@@ -303,7 +303,7 @@ export function createApp({ store }) {
   app.post('/api/companies/:id/archive', (req, res) => {
     const company = store.getCompany(req.params.id);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     store.archiveCompany(company.id, 'user');
     res.json({ ok: true });
@@ -323,7 +323,7 @@ export function createApp({ store }) {
   app.get('/api/agents/:id/prompt-preview', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent || agent.status !== 'active') {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     const company = agent.companyId ? store.getCompany(agent.companyId) : null;
     const scenario = company
@@ -343,7 +343,7 @@ export function createApp({ store }) {
   app.get('/api/agents/:id/learnings', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     res.json({
       agentId: agent.id,
@@ -363,7 +363,7 @@ export function createApp({ store }) {
     }
     const updated = store.updateLearning(Number(req.params.id), patch, 'user');
     if (!updated) {
-      return res.status(404).json({ error: 'aprendizaje no encontrado' });
+      return res.status(404).json({ error: 'learning not found' });
     }
     res.json({ ok: true });
   });
@@ -371,7 +371,7 @@ export function createApp({ store }) {
   app.post('/api/agents/:id/forget', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     store.forgetAllLearnings(agent.id, 'user');
     res.json({ ok: true });
@@ -380,7 +380,7 @@ export function createApp({ store }) {
   app.post('/api/agents/:id/learning-enabled', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     store.updateAgent(agent.id, { learningEnabled: Boolean(req.body?.enabled) }, 'user', 'toggle de aprendizaje');
     res.json({ ok: true });
@@ -394,7 +394,7 @@ export function createApp({ store }) {
   app.post('/api/suggestions/:id/apply', (req, res) => {
     const suggestion = store.getSuggestion(Number(req.params.id));
     if (!suggestion || suggestion.status !== 'pending') {
-      return res.status(404).json({ error: 'sugerencia no encontrada o ya resuelta' });
+      return res.status(404).json({ error: 'suggestion not found or already resolved' });
     }
     const ok = applySuggestion(store, suggestion);
     store.resolveSuggestion(suggestion.id, ok ? 'applied' : 'rejected');
@@ -404,7 +404,7 @@ export function createApp({ store }) {
   app.post('/api/suggestions/:id/reject', (req, res) => {
     const suggestion = store.getSuggestion(Number(req.params.id));
     if (!suggestion || suggestion.status !== 'pending') {
-      return res.status(404).json({ error: 'sugerencia no encontrada o ya resuelta' });
+      return res.status(404).json({ error: 'suggestion not found or already resolved' });
     }
     store.resolveSuggestion(suggestion.id, 'rejected');
     res.json({ ok: true });
@@ -413,12 +413,12 @@ export function createApp({ store }) {
   app.post('/api/agents/:id/rollback', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     const versions = store.listAgentVersions(agent.id, 50);
     const target = versions.find((version) => version.version === Number(req.body?.toVersion));
     if (!target?.profile) {
-      return res.status(404).json({ error: 'versión no encontrada' });
+      return res.status(404).json({ error: 'version not found' });
     }
     const profile = target.profile;
     store.updateAgent(agent.id, {
@@ -437,7 +437,7 @@ export function createApp({ store }) {
   app.get('/api/agents/:id/versions', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
-      return res.status(404).json({ error: 'agente no encontrado' });
+      return res.status(404).json({ error: 'agent not found' });
     }
     res.json({ versions: store.listAgentVersions(agent.id) });
   });
@@ -450,7 +450,7 @@ export function createApp({ store }) {
   app.get('/api/companies/:id/projects', (req, res) => {
     const company = store.getCompany(req.params.id);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     const projects = store.listProjects(company.id).map((project) => ({
       ...project,
@@ -463,11 +463,11 @@ export function createApp({ store }) {
   app.post('/api/companies/:id/projects', (req, res) => {
     const company = store.getCompany(req.params.id);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     const title = String(req.body?.title || '').trim().slice(0, 120);
     if (!title) {
-      return res.status(400).json({ error: 'el proyecto necesita un nombre' });
+      return res.status(400).json({ error: 'the project needs a name' });
     }
     const project = store.createProject({
       companyId: company.id,
@@ -481,7 +481,7 @@ export function createApp({ store }) {
   app.get('/api/projects/:goalId', (req, res) => {
     const project = store.getGoal(req.params.goalId);
     if (!project) {
-      return res.status(404).json({ error: 'proyecto no encontrado' });
+      return res.status(404).json({ error: 'project not found' });
     }
     const company = store.getCompany(project.company_id);
     const comments = store.commentsForProject(project.id);
@@ -549,7 +549,7 @@ export function createApp({ store }) {
     }
     const project = store.updateProject(req.params.goalId, patch);
     if (!project) {
-      return res.status(404).json({ error: 'proyecto no encontrado' });
+      return res.status(404).json({ error: 'project not found' });
     }
     res.json({ project });
   });
@@ -560,13 +560,13 @@ export function createApp({ store }) {
   app.delete('/api/projects/:goalId', async (req, res) => {
     const project = store.getGoal(req.params.goalId);
     if (!project) {
-      return res.status(404).json({ error: 'proyecto no encontrado' });
+      return res.status(404).json({ error: 'project not found' });
     }
     // Se leen ANTES de borrar: después ya no hay de dónde sacar los ids para
     // limpiar el registro en disco.
     const meetingIds = store.meetingsForProject(project.id).map((meeting) => meeting.id);
     if (meetingIds.some((id) => isMeetingLive(id))) {
-      return res.status(409).json({ error: 'hay una reunión abierta en este proyecto: cerrala antes de borrarlo' });
+      return res.status(409).json({ error: 'there is an open meeting in this project: close it before deleting' });
     }
 
     const resultado = store.deleteProject(project.id);
@@ -605,7 +605,7 @@ export function createApp({ store }) {
     const plataforma = req.query.platform === 'ios' ? 'ios' : 'android';
     const png = await screenshot(plataforma);
     if (!png || png.length === 0) {
-      return res.status(409).json({ error: 'no hay ningún dispositivo con pantalla' });
+      return res.status(409).json({ error: 'no device with a screen' });
     }
     res.setHeader('Content-Type', 'image/png');
     // Sin caché: cada pedido es un cuadro nuevo.
@@ -632,7 +632,7 @@ export function createApp({ store }) {
   app.post('/api/projects/:goalId/open-in-device', async (req, res) => {
     const project = store.getGoal(req.params.goalId);
     if (!project) {
-      return res.status(404).json({ error: 'proyecto no encontrado' });
+      return res.status(404).json({ error: 'project not found' });
     }
     const plataforma = req.body?.platform === 'ios' ? 'ios' : 'android';
     const resultado = plataforma === 'ios'
@@ -653,7 +653,7 @@ export function createApp({ store }) {
   app.get('/api/meetings/:id', (req, res) => {
     const meeting = store.getMeeting(req.params.id);
     if (!meeting) {
-      return res.status(404).json({ error: 'reunión no encontrada' });
+      return res.status(404).json({ error: 'meeting not found' });
     }
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
     res.json({ meeting, turns: store.recentTurns(meeting.id, limit), tasks: store.tasksForMeeting(meeting.id) });
@@ -664,10 +664,10 @@ export function createApp({ store }) {
   app.delete('/api/meetings/:id', async (req, res) => {
     const meeting = store.getMeeting(req.params.id);
     if (!meeting) {
-      return res.status(404).json({ error: 'reunión no encontrada' });
+      return res.status(404).json({ error: 'meeting not found' });
     }
     if (isMeetingLive(meeting.id)) {
-      return res.status(409).json({ error: 'estás sentado en esa reunión: abrí otra antes de borrarla' });
+      return res.status(409).json({ error: 'you are sitting in that meeting: open another one before deleting it' });
     }
     const resultado = store.deleteMeeting(meeting.id);
     const registros = await deleteLogEntries({ meetingId: meeting.id }).catch(() => 0);
@@ -678,7 +678,7 @@ export function createApp({ store }) {
   app.delete('/api/companies/:id/meetings', async (req, res) => {
     const company = store.getCompany(req.params.id);
     if (!company) {
-      return res.status(404).json({ error: 'empresa no encontrada' });
+      return res.status(404).json({ error: 'company not found' });
     }
     // Todas las de la empresa menos en la que hay alguien ahora mismo.
     const ids = store.listMeetings(200, company.id)
@@ -705,7 +705,7 @@ export function createApp({ store }) {
     }
     const meeting = store.updateMeeting(req.params.id, patch);
     if (!meeting) {
-      return res.status(404).json({ error: 'reunión no encontrada' });
+      return res.status(404).json({ error: 'meeting not found' });
     }
     res.json({ meeting });
   });

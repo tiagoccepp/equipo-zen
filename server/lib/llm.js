@@ -167,7 +167,7 @@ async function* sseEventsWithTtft(response, ttftMs) {
 // onDelta(texto, acumulado). Devuelve { text, model, aborted?, partial? }.
 export async function streamChat(keyRing, options, onDelta) {
   if (!keyRing.hasKeys()) {
-    throw new Error(`No hay claves de ${getLlmProviderConfig().label} configuradas para ${options.scope}.`);
+    throw new Error(`No ${getLlmProviderConfig().label} keys configured for ${options.scope}.`);
   }
   const models = options.models || getLlmModels();
   let lastError = null;
@@ -272,13 +272,13 @@ export async function streamChat(keyRing, options, onDelta) {
     modelos: (options.models || []).join(','),
     error: getErrorText(lastError).slice(0, 400)
   });
-  throw lastError || new Error(`La clave de ${getLlmProviderConfig().label} fue rechazada (revisala en Ajustes) — ${options.scope}.`);
+  throw lastError || new Error(`The ${getLlmProviderConfig().label} key was rejected (check it in Settings) — ${options.scope}.`);
 }
 
 // Llamada no-streaming (router/observador/reflexión). Devuelve texto limpio.
 export async function completeChat(keyRing, options) {
   if (!keyRing.hasKeys()) {
-    throw new Error(`No hay claves de ${getLlmProviderConfig().label} configuradas para ${options.scope}.`);
+    throw new Error(`No ${getLlmProviderConfig().label} keys configured for ${options.scope}.`);
   }
   const models = options.models || getLlmModels();
   let lastError = null;
@@ -336,7 +336,7 @@ export async function completeChat(keyRing, options) {
     modelos: (options.models || []).join(','),
     error: getErrorText(lastError).slice(0, 400)
   });
-  throw lastError || new Error(`La clave de ${getLlmProviderConfig().label} fue rechazada (revisala en Ajustes) — ${options.scope}.`);
+  throw lastError || new Error(`The ${getLlmProviderConfig().label} key was rejected (check it in Settings) — ${options.scope}.`);
 }
 
 function isModelNotFound(error) {

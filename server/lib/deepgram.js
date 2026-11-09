@@ -30,7 +30,7 @@ export function mapVoiceToDeepgram(supertonicVoice) {
 function authHeaders(extra = {}) {
   const key = getDeepgramKey();
   if (!key) {
-    throw new Error('Falta la clave de Deepgram (stt.deepgramKey).');
+    throw new Error('Missing Deepgram key (stt.deepgramKey).');
   }
   return { Authorization: `Token ${key}`, ...extra };
 }
@@ -90,7 +90,7 @@ export async function synthesizeDeepgram(text, voice) {
   }
   const pcm = Buffer.from(await response.arrayBuffer());
   if (pcm.length < 100) {
-    throw new Error('Deepgram devolvió audio vacío.');
+    throw new Error('Deepgram returned empty audio.');
   }
   return [{ data: pcm.toString('base64'), mimeType: 'audio/pcm;rate=16000' }];
 }

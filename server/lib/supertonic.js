@@ -43,7 +43,7 @@ export async function isAvailable() {
 function wavToPcm(buffer) {
   const view = new DataView(buffer);
   if (view.getUint32(0, false) !== 0x52494646) { // 'RIFF'
-    throw new Error('Supertonic no devolvió un WAV.');
+    throw new Error('Supertonic returned no WAV.');
   }
   let offset = 12;
   let sampleRate = 44100;
@@ -58,7 +58,7 @@ function wavToPcm(buffer) {
     }
     offset += 8 + chunkSize + (chunkSize % 2);
   }
-  throw new Error('WAV sin chunk data.');
+  throw new Error('WAV with no data chunk.');
 }
 
 // Sintetiza una oración. Devuelve [{ data: base64 PCM, mimeType }] o []

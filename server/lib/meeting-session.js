@@ -6,7 +6,7 @@ import {
   ROUTER_TIMEOUT_MS,
   TELEMETRY_MAX_EVENTS
 } from './config.js';
-import { getMinimaxModels } from './settings.js';
+import { getMinimaxModels, getTtsLanguage } from './settings.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
@@ -129,7 +129,7 @@ export class MeetingSession {
       || this.store.listCompanies()[0]
       || null;
     if (!this.company) {
-      this.send({ type: 'error', message: 'No hay empresas creadas todavía.' });
+      this.send({ type: 'error', message: 'No companies created yet.' });
       return;
     }
 
@@ -249,10 +249,11 @@ export class MeetingSession {
   }
 
   promptContext(agentId = null) {
+    const enPrompt = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     const scenarioText = this.company
       ? [
           this.company.scenario,
-          this.meeting?.scenario_text ? `Objetivo de esta reunión: ${this.meeting.scenario_text}` : ''
+          this.meeting?.scenario_text ? `${enPrompt ? 'Meeting goal' : 'Objetivo de esta reunión'}: ${this.meeting.scenario_text}` : ''
         ].filter(Boolean).join('\n')
       : this.meeting?.scenario_text || '';
     return {
@@ -287,10 +288,11 @@ export class MeetingSession {
   }
 
   promptContext(agentId = null) {
+    const enPrompt = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     const scenarioText = this.company
       ? [
           this.company.scenario,
-          this.meeting?.scenario_text ? `Objetivo de esta reunión: ${this.meeting.scenario_text}` : ''
+          this.meeting?.scenario_text ? `${enPrompt ? 'Meeting goal' : 'Objetivo de esta reunión'}: ${this.meeting.scenario_text}` : ''
         ].filter(Boolean).join('\n')
       : this.meeting?.scenario_text || '';
     return {
@@ -376,7 +378,7 @@ export class MeetingSession {
     }
 
     if (!this.meeting) {
-      this.send({ type: 'error', message: 'La reunión todavía no está inicializada; recargá la página.' });
+      this.send({ type: 'error', message: 'The meeting is not initialized yet; reload the page.' });
       return;
     }
 
@@ -403,7 +405,7 @@ export class MeetingSession {
         playedMs: message.playedMs ?? null
       }, speakingTurnId);
       if (speakingAgentId) {
-        this.memory.add('system', 'Orquestador', `El usuario interrumpió a ${this.sessionAgents.find(a => a.id === speakingAgentId)?.name || speakingAgentId} antes de que termine.`);
+        this.memory.add('system', 'Orchestrator', `The user interrupted ${this.sessionAgents.find(a => a.id === speakingAgentId)?.name || speakingAgentId} before they finished.`);
       }
       return;
     }
@@ -528,15 +530,15 @@ export class MeetingSession {
     if (message.type === 'spawn_agent') {
       const { name, title, color, aliases, domains, boundaries, style, voice, knowledge, initialTasks } = message.agent || {};
       if (!name || !title) {
-        this.send({ type: 'error', message: 'Faltan campos obligatorios para crear el agente.' });
+        this.send({ type: 'error', message: 'Missing required fields to create the agent.' });
         return;
       }
       if (this.sessionAgents.length >= MAX_SESSION_AGENTS) {
-        this.send({ type: 'error', message: `La mesa está completa (máximo ${MAX_SESSION_AGENTS} agentes).` });
+        this.send({ type: 'error', message: `The table is full (maximum ${MAX_SESSION_AGENTS} agents).` });
         return;
       }
       if (this.sessionAgents.some((agent) => agent.name.toLowerCase() === name.toLowerCase())) {
-        this.send({ type: 'error', message: `Ya hay un agente llamado ${name} en la mesa.` });
+        this.send({ type: 'error', message: `There is already an agent called ${name} at the table.` });
         return;
       }
 
@@ -552,7 +554,7 @@ export class MeetingSession {
         domains: Array.isArray(domains) ? domains : (domains || '').split(',').map(s => s.trim()).filter(Boolean),
         boundaries: Array.isArray(boundaries) ? boundaries : (boundaries || '').split(',').map(s => s.trim()).filter(Boolean),
         knowledge: knowledge || '',
-        style: style || 'Conversador estándar y profesional.',
+        style: style || 'Standard, professional conversationalist.',
         voice: voice || 'M1'
       };
 
@@ -581,11 +583,11 @@ export class MeetingSession {
       this.broadcastAgentsUpdated();
 
       const systemMsgId = nanoid(8);
-      this.memory.add('system', 'Orquestador', `Se ha unido ${name} (${title}) a la mesa de trabajo.`, null, systemMsgId);
+      this.memory.add('system', 'Orchestrator', `${name} (${title}) has joined the table.`, null, systemMsgId);
       this.send({
         type: 'user_turn_received',
         turnId: systemMsgId,
-        text: `Se ha unido ${name} (${title}) a la mesa de trabajo.`,
+        text: `${name} (${title}) has joined the table.`,
         source: 'system'
       });
       return;
@@ -594,19 +596,19 @@ export class MeetingSession {
     if (message.type === 'update_agent') {
       const agent = this.sessionAgents.find(a => a.id === message.agentId);
       if (!agent) {
-        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        this.send({ type: 'error', message: 'Could not find that agent at the table.' });
         return;
       }
       if (message.patch.name) {
         const lowerName = message.patch.name.toLowerCase();
         if (this.sessionAgents.some(a => a.id !== agent.id && a.name.toLowerCase() === lowerName)) {
-          this.send({ type: 'error', message: `Ya hay un agente llamado ${message.patch.name} en la mesa.` });
+          this.send({ type: 'error', message: `There is already an agent called ${message.patch.name} at the table.` });
           return;
         }
       }
-      const updated = this.store.updateAgent(agent.id, message.patch, 'user', 'edición desde la UI');
+      const updated = this.store.updateAgent(agent.id, message.patch, 'user', 'edit from the UI');
       if (!updated) {
-        this.send({ type: 'error', message: 'No pude guardar los cambios del agente.' });
+        this.send({ type: 'error', message: 'Could not save the agent changes.' });
         return;
       }
       Object.assign(agent, {
@@ -634,12 +636,12 @@ export class MeetingSession {
     if (message.type === 'archive_agent') {
       const index = this.sessionAgents.findIndex(a => a.id === message.agentId);
       if (index === -1) {
-        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        this.send({ type: 'error', message: 'Could not find that agent at the table.' });
         return;
       }
       const agent = this.sessionAgents[index];
       if (agent.origin === 'builtin') {
-        this.send({ type: 'error', message: `${agent.name} es parte del equipo base y no se puede archivar; podés deshabilitarlo para esta reunión.` });
+        this.send({ type: 'error', message: `${agent.name} is part of the core team and cannot be archived; you can disable them for this meeting.` });
         return;
       }
       this.store.archiveAgent(agent.id, 'user');
@@ -654,7 +656,7 @@ export class MeetingSession {
     if (message.type === 'set_agent_enabled') {
       const agent = this.sessionAgents.find(a => a.id === message.agentId);
       if (!agent) {
-        this.send({ type: 'error', message: 'No encontré ese agente en la mesa.' });
+        this.send({ type: 'error', message: 'Could not find that agent at the table.' });
         return;
       }
       agent.enabled = message.enabled;
@@ -666,7 +668,7 @@ export class MeetingSession {
 
     if (message.type === 'end_meeting') {
       void this.prepareMeetingClose().catch((error) => {
-        this.send({ type: 'error', message: 'No pude preparar el cierre de la reunión.', detail: getShortError(error) });
+        this.send({ type: 'error', message: 'Could not prepare the meeting wrap-up.', detail: getShortError(error) });
       });
       return;
     }
@@ -1008,7 +1010,7 @@ export class MeetingSession {
   enqueueUserTurn(text, source) {
     const fragmentId = nanoid(8);
     // Cada fragmento se muestra al instante en el chat…
-    this.memory.add('user', 'Tu', text, null, fragmentId);
+    this.memory.add('user', 'You', text, null, fragmentId);
     this.send({ type: 'user_turn_received', turnId: fragmentId, text, source });
     logEvent('mensaje_usuario', {
       meetingId: this.meeting?.id,
@@ -1066,12 +1068,12 @@ export class MeetingSession {
         this.send({
           type: 'error',
           turnId,
-          message: 'La orquestacion fallo en este turno.',
+          message: 'Orchestration failed on this turn.',
           detail: getErrorText(error)
         });
         this.logTelemetry('turn_error', {
           turnId,
-          message: 'La orquestacion fallo en este turno.',
+          message: 'Orchestration failed on this turn.',
           detail: getErrorText(error)
         }, turnId);
       }
@@ -1080,7 +1082,7 @@ export class MeetingSession {
       this.send({
         type: 'error',
         turnId,
-        message: 'Hay demasiados turnos en cola; esperá a que termine la ronda actual.'
+        message: 'Too many turns queued; wait for the current round to finish.'
       });
       this.logTelemetry('turn_rejected_queue_full', { turnId, source }, turnId);
     }
@@ -1125,6 +1127,8 @@ export class MeetingSession {
     if (!this.keyRing.hasKeys() || heuristicRoute.closing) {
       return null;
     }
+    // La razón del ruteo se muestra en la UI: en inglés si la voz es inglesa.
+    const enRoute = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
 
     const recentContext = this.memory.recentContext(8);
     const agents = this.sessionAgents.map((agent) => ({
@@ -1143,7 +1147,7 @@ export class MeetingSession {
       'Return ONLY a strict JSON object. No explanation, no markdown, no extra text.',
       '',
       'OUTPUT FORMAT:',
-      '{"targets":[{"agentId":"string","matchedDomains":["string"],"score":0-10,"directMention":true|false}],"reason":"short explanation in Spanish"}',
+      `{"targets":[{"agentId":"string","matchedDomains":["string"],"score":0-10,"directMention":true|false}],"reason":"${enRoute ? 'short explanation in English' : 'short explanation in Spanish'}"}`,
       '',
       'ROUTING RULES:',
       '',
@@ -1203,7 +1207,7 @@ export class MeetingSession {
       const heuristicTarget = heuristicTargetsById.get(agentId);
       const matchedDomains = Array.isArray(item?.matchedDomains) && item.matchedDomains.length > 0
         ? item.matchedDomains.map((domain) => String(domain).slice(0, 60))
-        : heuristicTarget?.matchedDomains || ['decision IA'];
+        : heuristicTarget?.matchedDomains || [enRoute ? 'AI decision' : 'decision IA'];
       targets.push({
         agentId,
         name: agent.name,
@@ -1218,7 +1222,7 @@ export class MeetingSession {
       ...heuristicRoute,
       responses: [],
       targets,
-      reason: String(parsed.reason || 'El orquestador IA decidio el turno segun roles y contexto.').slice(0, 220)
+      reason: String(parsed.reason || (enRoute ? 'The AI orchestrator set the turn by roles and context.' : 'El orquestador IA decidio el turno segun roles y contexto.')).slice(0, 220)
     };
   }
 
@@ -1237,8 +1241,8 @@ export class MeetingSession {
     }, turnId);
 
     if (route.targets.length === 0) {
-      const note = route.reason || 'Ningun agente tiene suficiente senal de dominio para responder sin inventar.';
-      this.memory.add('system', 'Orquestador', note, null, turnId);
+      const note = route.reason || 'No agent has enough domain signal to answer without making things up.';
+      this.memory.add('system', 'Orchestrator', note, null, turnId);
       this.send({ type: 'no_agent_response', turnId, note });
       this.logTelemetry('no_agent_response', { turnId, note }, turnId);
       return;
@@ -1429,7 +1433,7 @@ export class MeetingSession {
         type: 'work_started',
         tasks: 0,
         goalTitle: null,
-        note: 'Nadie tiene tareas asignadas todavía: pediles algo concreto y volvé a tocar el botón.'
+        note: 'Nobody has tasks assigned yet: ask them for something concrete and press the button again.'
       });
       this.logTelemetry('start_work_empty', {});
       return;
@@ -1447,8 +1451,8 @@ export class MeetingSession {
       companyId: this.company.id,
       meetingId: this.meeting.id,
       title: (this.meeting?.scenario_text || '').trim().slice(0, 110)
-        || `Trabajo de ${new Date().toLocaleDateString('es-AR')}`,
-      description: 'Arrancado a mano desde la reunión, con lo que el equipo ya tenía asignado.'
+        || `Work from ${new Date().toLocaleDateString('en-US')}`,
+      description: 'Started by hand from the meeting, with what the team already had assigned.'
     });
 
     // El proyecto se queda con el pedido del usuario si todavía no tenía: es lo
@@ -1487,7 +1491,7 @@ export class MeetingSession {
       type: 'work_started',
       tasks: aTrabajar.length,
       goalTitle: goal.title,
-      note: `${aTrabajar.length} ${aTrabajar.length === 1 ? 'tarea' : 'tareas'} en marcha. Seguí conversando: el equipo trabaja en segundo plano.`
+      note: `${aTrabajar.length} ${aTrabajar.length === 1 ? 'task' : 'tasks'} underway. Keep talking: the team works in the background.`
     });
     this.broadcastAgentsUpdated();
   }
@@ -1542,6 +1546,8 @@ export class MeetingSession {
 
   async prepareMeetingClose() {
     this.reassignCeoDeliverables();
+    // goalTitle/spokenSummary los lee el usuario: en inglés si la voz es inglesa.
+    const enClose = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     const ceo = this.sessionAgents.find((agent) => agent.role === 'ceo' && agent.enabled !== false);
     const assignments = this.sessionAgents
       .filter((agent) => (agent.tasks || []).some((task) => !task.completed))
@@ -1602,7 +1608,8 @@ export class MeetingSession {
       '',
       'Sobre "refuerzos": el equipo es fijo, no se contrata gente nueva. Si en la reunión apareció una habilidad que falta',
       'o el usuario pidió que alguien sea distinto (más directo, que sepa de X), anotá a quién hay que reforzar y en qué.',
-      'Lista vacía si no hace falta tocar a nadie.'
+      'Lista vacía si no hace falta tocar a nadie.',
+      ...(enClose ? ['Escribí goalTitle, goalDescription y spokenSummary en inglés. / Write goalTitle, goalDescription and spokenSummary in English.'] : [])
     ].join('\n');
 
     let plan = null;
@@ -1669,14 +1676,20 @@ export class MeetingSession {
       : [];
 
     const fallbackSummary = producesWork
-      ? `Repasemos antes de cerrar: ${classified.map((a) => `${a.agentName} queda con ${a.tasks.map((t) => t.text).join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`
+      ? (enClose
+        ? `Let's recap before closing: ${classified.map((a) => `${a.agentName} takes ${a.tasks.map((t) => t.text).join(' and ')}`).join('; ')}. If that sounds good, we close and the team starts. Shall we confirm?`
+        : `Repasemos antes de cerrar: ${classified.map((a) => `${a.agentName} queda con ${a.tasks.map((t) => t.text).join(' y ')}`).join('; ')}. Si te parece bien, cerramos y el equipo arranca. ¿Confirmamos?`)
       : assignments.length
-        ? 'De esta reunión no sale nada para construir todavía: quedan los acuerdos anotados. ¿Cerramos así?'
-        : 'No quedaron tareas para producir en esta reunión, solo la conversación. ¿Cerramos igual?';
+        ? (enClose
+          ? 'Nothing to build comes out of this meeting yet: the agreements stay on record. Shall we close like this?'
+          : 'De esta reunión no sale nada para construir todavía: quedan los acuerdos anotados. ¿Cerramos así?')
+        : (enClose
+          ? 'No tasks left to produce in this meeting, just the conversation. Shall we close anyway?'
+          : 'No quedaron tareas para producir en esta reunión, solo la conversación. ¿Cerramos igual?');
 
     this.pendingClose = {
       producesWork,
-      goalTitle: String(plan?.goalTitle || (producesWork ? 'Objetivos de la reunión' : 'Acuerdos de la reunión')).slice(0, 120),
+      goalTitle: String(plan?.goalTitle || (producesWork ? (enClose ? 'Meeting goals' : 'Objetivos de la reunión') : (enClose ? 'Meeting agreements' : 'Acuerdos de la reunión'))).slice(0, 120),
       goalDescription: String(plan?.goalDescription || this.meeting.scenario_text || '').slice(0, 500),
       // La clasificación YA corregida: es la que se aplica al confirmar.
       kinds: classified.flatMap((a) => a.tasks).map((task, index) => [index + 1, task.kind]),
@@ -1714,7 +1727,7 @@ export class MeetingSession {
     const pending = this.pendingClose;
     this.pendingClose = null;
     if (!pending) {
-      this.send({ type: 'error', message: 'No hay un cierre de reunión pendiente.' });
+      this.send({ type: 'error', message: 'There is no pending meeting wrap-up.' });
       return;
     }
 

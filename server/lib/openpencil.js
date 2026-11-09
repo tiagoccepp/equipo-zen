@@ -35,10 +35,10 @@ export function disponible() {
 
 export function motivoNoDisponible() {
   if (!existsSync(OP_BIN)) {
-    return 'Falta el CLI de OpenPencil (op). Instalalo con scripts/instalar-openpencil.sh';
+    return 'Missing the OpenPencil CLI (op). Install it with scripts/instalar-openpencil.sh';
   }
   if (!existsSync(DESKTOP_BIN)) {
-    return 'Falta el editor de OpenPencil. Instalalo con scripts/instalar-openpencil.sh';
+    return 'Missing the OpenPencil editor. Install it with scripts/instalar-openpencil.sh';
   }
   return '';
 }
@@ -99,7 +99,7 @@ export async function abrirDiseno(dir, clave) {
       return { ok: true, puerto };
     }
   }
-  return { ok: false, motivo: 'El editor de diseño no llegó a arrancar.' };
+  return { ok: false, motivo: 'The design editor failed to start.' };
 }
 
 export async function cerrarDiseno(dir, clave) {
@@ -156,8 +156,8 @@ export function tokensComoCodigo(variables, stack) {
     return {
       archivo: 'src/theme.js',
       contenido: [
-        '// Generado desde el diseño (diseno.op). No editar a mano:',
-        '// los valores los define la diseñadora en OpenPencil.',
+        '// Generated from the design (diseno.op). Do not edit by hand:',
+        '// values are defined by the designer in OpenPencil.',
         'export const tokens = {',
         ...entradas.map((e) => `  ${e.js}: ${typeof e.valor === 'number' ? e.valor : JSON.stringify(e.valor)},`),
         '};',
@@ -171,7 +171,7 @@ export function tokensComoCodigo(variables, stack) {
       contenido: [
         'package com.equipo.app.ui',
         '',
-        '// Generado desde el diseño (diseno.op). No editar a mano.',
+        '// Generated from the design (diseno.op). Do not edit by hand.',
         'import androidx.compose.ui.graphics.Color',
         'import androidx.compose.ui.unit.dp',
         '',
@@ -188,8 +188,8 @@ export function tokensComoCodigo(variables, stack) {
   return {
     archivo: 'tokens.css',
     contenido: [
-      '/* Generado desde el diseño (diseno.op). No editar a mano:',
-      '   los valores los define la diseñadora en OpenPencil. */',
+      '/* Generated from the design (diseno.op). Do not edit by hand:',
+      '   values are defined by the designer in OpenPencil. */',
       ':root {',
       ...entradas.map((e) => `  ${e.css}: ${e.tipo === 'number' ? `${e.valor}px` : e.valor};`),
       '}',

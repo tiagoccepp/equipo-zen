@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Pablo — a la orden",
+        "title": "Pablo — At your service",
         "url": "index.html",
         "width": 1280,
         "height": 860,
@@ -29,7 +29,7 @@
       },
       {
         "label": "orb",
-        "title": "Orbe",
+        "title": "Orb",
         "url": "orb.html",
         "width": 200,
         "height": 264,
@@ -62,7 +62,7 @@
     "resources": ["../server", "../node_modules", "../shared", "../models"],
     "externalBin": ["binaries/equipo-node"],
     "category": "Productivity",
-    "shortDescription": "Tu equipo IA en el escritorio",
-    "longDescription": "Equipo: conversá por voz o texto con empleados IA. Orbe flotante, bandeja, permisos por niveles y control de la computadora."
+    "shortDescription": "Your AI team on the desktop",
+    "longDescription": "Equipo: talk by voice or text with AI employees. Floating orb, tray, tiered permissions and computer control."
   }
 }

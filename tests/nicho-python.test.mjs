@@ -351,7 +351,7 @@ test('en un proyecto Python, entregar una web o no entregar nada no cuenta como 
 
   const sinPrograma = await construirApp(vacio, 'python');
   assert.equal(sinPrograma.ok, false);
-  assert.match(sinPrograma.errores.map((e) => e.que).join(' '), /ning[uú]n archivo \.py/);
+  assert.match(sinPrograma.errores.map((e) => e.que).join(' '), /no \.py files/);
   assert.match(renderBuildReport(sinPrograma), /NO ES UN PROGRAMA PYTHON/);
 
   const web = carpetaTemporal(t, 'web');
@@ -359,7 +359,7 @@ test('en un proyecto Python, entregar una web o no entregar nada no cuenta como 
 
   const disfrazada = await construirApp(web, 'python');
   assert.equal(disfrazada.ok, false);
-  assert.match(disfrazada.errores.map((e) => e.que).join(' '), /p[aá]gina web/);
+  assert.match(disfrazada.errores.map((e) => e.que).join(' '), /web page/);
 });
 
 test('detectar el nicho no confunde un .py suelto con un proyecto móvil ni al revés', async (t) => {
@@ -376,7 +376,7 @@ test('detectar el nicho no confunde un .py suelto con un proyecto móvil ni al r
 
   const comoApp = await construirApp(soloPy, 'android');
   assert.equal(comoApp.ok, false);
-  assert.match(comoApp.errores.map((e) => e.que).join(' '), /no es una app Android/);
+  assert.match(comoApp.errores.map((e) => e.que).join(' '), /not an Android app/);
 
   // Una carpeta sin nada tampoco es un proyecto Python.
   const nada = carpetaTemporal(t, 'nada');

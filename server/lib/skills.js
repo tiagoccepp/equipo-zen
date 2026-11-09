@@ -13,6 +13,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getTtsLanguage } from './settings.js';
 
 const SKILLS_DIR = process.env.PABLO_SKILLS_DIR || process.env.SOFIA_SKILLS_DIR
   || join(fileURLToPath(new URL('.', import.meta.url)), '..', 'skills');
@@ -124,8 +125,11 @@ export function renderSkillsSection(text, { scope = 'chat', max = 2 } = {}) {
   if (matched.length === 0) {
     return '';
   }
+  const en = scope !== 'work' && String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
   return [
-    'CONOCIMIENTO APLICABLE (skills, seguilo al pie de la letra):',
+    en
+      ? 'APPLICABLE KNOWLEDGE (skills — follow to the letter):'
+      : 'CONOCIMIENTO APLICABLE (skills, seguilo al pie de la letra):',
     ...matched.map((s) => `### ${s.name}\n${s.body}`),
     ''
   ].join('\n');

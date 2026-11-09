@@ -125,7 +125,7 @@ test('un nicho sin receta lo dice, no explota', async (t) => {
   const d = carpeta(t);
   const r = await andamiar(d, 'inventado', { escribir: escritorPara(d) });
   assert.equal(r.hecho, false);
-  assert.match(r.motivo, /andamiaje/);
+  assert.match(r.motivo, /scaffolding/);
 });
 
 test('al agente se le dice que NO rehaga lo que ya está andamiado', () => {

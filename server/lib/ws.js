@@ -42,7 +42,7 @@ export function attachMeetingServer(server, keyRing, store) {
       if (!parsed.ok) {
         meeting.send({
           type: 'error',
-          message: 'No pude procesar ese mensaje.',
+          message: "Couldn't process that message.",
           detail: parsed.error
         });
         return;
@@ -52,7 +52,7 @@ export function attachMeetingServer(server, keyRing, store) {
       } catch (error) {
         meeting.send({
           type: 'error',
-          message: 'No pude procesar ese mensaje.',
+          message: "Couldn't process that message.",
           detail: getErrorText(error)
         });
       }

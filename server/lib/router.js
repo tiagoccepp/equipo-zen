@@ -47,9 +47,9 @@ export class AgentRouter {
             name: agent.name,
             score: 99,
             directMention: false,
-            matchedDomains: ['cierre de tema']
+            matchedDomains: ['topic close']
           }],
-          reason: 'El usuario cerro el tema; el agente confirma y se calla.'
+          reason: 'The user closed the topic; the agent confirms and goes quiet.'
         };
       }
     }
@@ -84,9 +84,9 @@ export class AgentRouter {
               score: 10,
               directMention: false,
               mentionIndex: 0,
-              matchedDomains: ['saludo']
+              matchedDomains: ['greeting']
             }],
-            reason: 'Saludo simple: contesta solo la CEO, no todo el equipo a coro.'
+            reason: 'Simple greeting: only the CEO answers, not the whole team in chorus.'
           };
         }
       }
@@ -105,11 +105,11 @@ export class AgentRouter {
           score: 10,
           directMention: mentionedAgents.length > 0,
           mentionIndex,
-          matchedDomains: ['saludo']
+          matchedDomains: ['greeting']
         })),
         reason: mentionedAgents.length > 0
-          ? 'El usuario saludo a agentes mencionados; responden breve como apertura.'
-          : 'El usuario saludo al grupo; responden, pero sin repetir el saludo entre ellos.'
+          ? 'The user greeted mentioned agents; they answer briefly as an opening.'
+          : 'The user greeted the group; they answer without repeating the greeting back.'
       };
     }
 
@@ -129,12 +129,12 @@ export class AgentRouter {
             score: 9 + domainMatches.length * 2,
             directMention: true,
             mentionIndex,
-            matchedDomains: domainMatches.length ? domainMatches : ['mencion grupal']
+            matchedDomains: domainMatches.length ? domainMatches : ['group mention']
           };
         }),
         reason: mentionedAgents.length > 1
-          ? 'El usuario menciono a varios agentes; todos los mencionados responden breve desde su rol.'
-          : 'El usuario hablo al grupo; ambos agentes responden breve desde su rol.'
+          ? 'The user mentioned several agents; everyone mentioned answers briefly from their role.'
+          : 'The user addressed the group; the agents answer briefly from their roles.'
       };
     }
 
@@ -183,13 +183,13 @@ export class AgentRouter {
           name: ceo.name,
           score: 3,
           directMention: false,
-          matchedDomains: ['coordinación general'],
+          matchedDomains: ['general coordination'],
           mentionIndex: 0
         });
         return {
           responses: [],
           targets,
-          reason: 'Sin dominio claro: la CEO toma el punto para coordinar.'
+          reason: 'No clear domain: the CEO takes the point to coordinate.'
         };
       }
     }
@@ -198,8 +198,8 @@ export class AgentRouter {
       responses: [],
       targets,
       reason: targets.length > 0
-        ? 'El orquestador encontro contexto compatible para asignar la palabra.'
-        : 'No hubo contexto suficiente para que algun agente responda sin inventar.'
+        ? 'The orchestrator found matching context to assign the floor.'
+        : 'Not enough context for any agent to answer without making things up.'
     };
   }
 

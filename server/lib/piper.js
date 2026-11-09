@@ -34,7 +34,7 @@ export async function isPiperAvailable() {
 function wavToPcm(buffer) {
   const view = new DataView(buffer);
   if (view.getUint32(0, false) !== 0x52494646) { // 'RIFF'
-    throw new Error('Piper no devolvió un WAV.');
+    throw new Error('Piper returned no WAV.');
   }
   let offset = 12;
   let sampleRate = 16000;
@@ -49,7 +49,7 @@ function wavToPcm(buffer) {
     }
     offset += 8 + chunkSize + (chunkSize % 2);
   }
-  throw new Error('WAV sin chunk data.');
+  throw new Error('WAV with no data chunk.');
 }
 
 // Sintetiza una oración. Devuelve [{ data: base64 PCM, mimeType }] o []

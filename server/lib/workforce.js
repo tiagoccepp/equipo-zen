@@ -29,7 +29,7 @@ import {
   tokensComoCodigo
 } from './openpencil.js';
 import { renderVerificationReport, verifyProject } from './verify.js';
-import { getMinimaxModels } from './settings.js';
+import { getMinimaxModels, getTtsLanguage } from './settings.js';
 import { telemetry } from './telemetry.js';
 
 // Motor de trabajo estilo Paperclip: los empleados NO trabajan en vivo
@@ -217,37 +217,50 @@ export function renderWorkSection(store, companyId, goalId = null) {
   if (goals.length === 0) {
     return '';
   }
-  const ESTADOS = {
+  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const ESTADOS = en ? {
+    pending: 'queued',
+    in_progress: 'working now',
+    done: 'done',
+    blocked: 'stuck',
+    noted: 'noted as agreement'
+  } : {
     pending: 'en cola',
     in_progress: 'trabajando ahora',
     done: 'terminada',
     blocked: 'trabada',
     noted: 'anotada como acuerdo'
   };
-  const nameOf = (agentId) => store.getAgent(agentId)?.name || 'alguien del equipo';
+  const nameOf = (agentId) => store.getAgent(agentId)?.name || (en ? 'someone on the team' : 'alguien del equipo');
 
   const lines = [];
   for (const goal of goals) {
-    lines.push(`Proyecto "${goal.title}":`);
+    lines.push(en ? `Project "${goal.title}":` : `Proyecto "${goal.title}":`);
     // Los archivos que YA existen: sin esto, pedirles "cambiá el header" en la
     // reunión les llegaba sin ninguna referencia de qué hay construido.
     const archivos = listProjectFilesSync(companyId, goal.slug);
     if (archivos.length) {
-      lines.push(`  Archivos entregados: ${archivos.slice(0, 20).join(', ')}`);
+      lines.push(en ? `  Shipped files: ${archivos.slice(0, 20).join(', ')}` : `  Archivos entregados: ${archivos.slice(0, 20).join(', ')}`);
     }
     for (const task of store.tasksForGoal(goal.id).slice(0, 8)) {
       const estado = ESTADOS[task.status] || task.status;
       const revision = task.review_status === 'cambios'
-        ? ' (le pidieron cambios)'
-        : task.review_status === 'aprobado' ? ' (revisada y aprobada)' : '';
+        ? (en ? ' (changes requested)' : ' (le pidieron cambios)')
+        : task.review_status === 'aprobado' ? (en ? ' (reviewed and approved)' : ' (revisada y aprobada)') : '';
       lines.push(`- ${nameOf(task.agent_id)}: ${String(task.text).slice(0, 120)} — ${estado}${revision}`);
     }
   }
   return [
     goalId
-      ? 'ESTE PROYECTO, AHORA MISMO (está pasando de verdad; si te preguntan cómo viene'
-      : 'TRABAJO EN CURSO DE LA EMPRESA (está pasando de verdad ahora mismo; si te preguntan cómo viene',
-    'algo, o te piden cambiar algo que ya está entregado, respondé con esto y no digas que no sabés):',
+      ? (en
+        ? 'THIS PROJECT, RIGHT NOW (this is really happening; if they ask how'
+        : 'ESTE PROYECTO, AHORA MISMO (está pasando de verdad; si te preguntan cómo viene')
+      : (en
+        ? 'COMPANY WORK IN PROGRESS (really happening right now; if they ask how'
+        : 'TRABAJO EN CURSO DE LA EMPRESA (está pasando de verdad ahora mismo; si te preguntan cómo viene'),
+    en
+      ? 'something is going, or ask to change something already shipped, answer with this and never say you don\'t know):'
+      : 'algo, o te piden cambiar algo que ya está entregado, respondé con esto y no digas que no sabés):',
     ...lines
   ].join('\n');
 }
@@ -345,12 +358,12 @@ export async function anotarEnBitacora(dir, { agente, tarea, resumen, pendiente 
   const fecha = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const linea = [
     `- **${fecha} · ${agente}** — ${String(tarea).slice(0, 140)}`,
-    `  - Hice: ${String(resumen || '—').slice(0, 400)}`,
-    pendiente ? `  - Queda pendiente: ${String(pendiente).slice(0, 300)}` : ''
+    `  - Did: ${String(resumen || '—').slice(0, 400)}`,
+    pendiente ? `  - Still pending: ${String(pendiente).slice(0, 300)}` : ''
   ].filter(Boolean).join('\n');
 
   const ruta = path.join(dir, 'BITACORA.md');
-  const cabecera = '# Bitácora del proyecto\n\nQué hizo cada uno y qué dejó para el que sigue.\n\n';
+  const cabecera = '# Project log\n\nWhat each person did and what they left for whoever comes next.\n\n';
   // APPEND, no leer-modificar-escribir: con varios agentes terminando a la vez,
   // el ciclo read→write perdía entradas en silencio — justo el canal por el que
   // se pasan el contexto entre corridas.
@@ -692,7 +705,7 @@ export class Workforce {
     // escrita y nadie la llamaba.
     if (goal && esAgenteDeDiseno(agent) && disenoDisponible()) {
       const abierto = await abrirDiseno(workspaceDir, goal.id);
-      log.push({ step: 0, action: 'diseno', ok: abierto.ok, note: abierto.ok ? `puerto ${abierto.puerto}` : abierto.motivo });
+      log.push({ step: 0, action: 'diseno', ok: abierto.ok, note: abierto.ok ? `port ${abierto.puerto}` : abierto.motivo });
     }
     // La verificación determinista corre UNA vez por corrida, al primer finish.
     let verificado = false;
@@ -726,6 +739,8 @@ export class Workforce {
     const teammates = this.store.listAgents({ companyId })
       .filter((a) => a.id !== agent.id)
       .map((a) => `${a.name} (${a.title})`).join(', ');
+    // El summary del finish lo lee el usuario en el panel: en inglés si la voz es inglesa.
+    const enWork = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
 
     const system = [
       `Sos ${agent.name}, ${agent.title} de ${company?.name || 'la empresa'}. AHORA NO estás en una reunión: estás TRABAJANDO, produciendo un entregable real.`,
@@ -760,7 +775,9 @@ export class Workforce {
       '  ↑ Consultale a quien sabe en vez de adivinar. Te contesta EN EL ACTO con su criterio.',
       '  Usalo cuando la duda es de otra especialidad: la paleta, un patrón, si algo se entiende.',
       '  Es una ventaja que tenés y una persona no: preguntar no le hace perder tiempo a nadie.',
-      '{"action":"finish","summary":"qué hiciste en 1-3 oraciones en español","artifacts":["archivos","principales"]}',
+      enWork
+        ? '{"action":"finish","summary":"what you did, in 1-3 sentences in English","artifacts":["main","files"]}'
+        : '{"action":"finish","summary":"qué hiciste en 1-3 oraciones en español","artifacts":["archivos","principales"]}',
       '{"action":"block","reason":"qué te falta para poder avanzar"}',
       '',
       'Reglas: en write_file va el archivo COMPLETO (no parches); para tocar una parte usá edit_file. NO listes archivos más de una vez.',
@@ -1010,13 +1027,13 @@ export class Workforce {
             if (lectura.action === 'list_files') {
               const files = await listFiles();
               partes.push(`Archivos: ${JSON.stringify(files)}`);
-              log.push({ step, action: 'list_files', note: `${files.length} archivos (en lote)` });
+              log.push({ step, action: 'list_files', note: `${files.length} files (batched)` });
               continue;
             }
             const contenido = await fs.readFile(safeWorkspacePath(companyId, slug, lectura.path), 'utf-8')
               .catch((error) => `[no pude leerlo: ${String(error?.message).slice(0, 100)}]`);
             leidos.add(String(lectura.path));
-            log.push({ step, action: 'read_file', path: lectura.path, ok: true, note: 'en lote' });
+            log.push({ step, action: 'read_file', path: lectura.path, ok: true, note: 'batched' });
             partes.push(`--- ${lectura.path} ---\n${String(contenido).slice(0, 30000)}`);
           }
           invalidasSeguidas = 0;
@@ -1027,13 +1044,13 @@ export class Workforce {
         if (acciones.length > 1) {
           // Se ejecuta la primera; el resto se le recuerda para que no lo repita.
           const resto = acciones.slice(1).map((a) => a.action).join(', ');
-          log.push({ step, action: 'multi', note: `además pidió: ${resto}` });
+          log.push({ step, action: 'multi', note: `also asked for: ${resto}` });
         }
       } catch (error) {
         log.push({ step, action: 'error', note: String(error?.message || error).slice(0, 200) });
-        this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la llamada al modelo.', log, artifacts: [...artifacts] });
+        this.store.finishWorkRun(runId, { status: 'error', summary: 'The model call failed.', log, artifacts: [...artifacts] });
         if (task.run_count >= MAX_RUNS_PER_TASK) {
-          const reason = `Falló ${task.run_count} veces seguidas al llamar al modelo. Revisá la clave o el estado del servicio.`;
+          const reason = `Failed ${task.run_count} times in a row calling the model. Check the key or the service status.`;
           this.store.finishTask(task.id, { status: 'blocked', blockedReason: reason });
           this.emitEvent(companyId, { kind: 'task_blocked', taskId: task.id, agentId: agent.id, agentName: agent.name, reason });
           return;
@@ -1045,19 +1062,19 @@ export class Workforce {
 
       if (!action?.action) {
         invalidasSeguidas += 1;
-        log.push({ step, action: 'invalid', note: `sin JSON de acción (${rawText.slice(0, 60).replace(/\s+/g, ' ')}…)` });
+        log.push({ step, action: 'invalid', note: `no action JSON (${rawText.slice(0, 60).replace(/\s+/g, ' ')}…)` });
         // Se corta a la tercera seguida: antes se quemaban los 12 pasos
         // respondiendo en prosa y la tarea terminaba bloqueada sin producir
         // nada. Mejor volver a la cola y reintentar limpio.
         if (invalidasSeguidas >= 3) {
           this.store.finishWorkRun(runId, {
             status: 'error',
-            summary: 'El modelo respondió en prosa tres veces seguidas en vez de una acción.',
+            summary: 'The model answered in prose three times in a row instead of an action.',
             log,
             artifacts: [...artifacts]
           });
           this.store.finishTask(task.id, task.run_count >= MAX_RUNS_PER_TASK
-            ? { status: 'blocked', blockedReason: 'No logró responder con el formato de acciones tras varios intentos.' }
+            ? { status: 'blocked', blockedReason: 'Could not answer with the action format after several tries.' }
             : { status: 'pending' });
           return;
         }
@@ -1080,19 +1097,19 @@ export class Workforce {
       if (action.action === 'comando') {
         if (comandos >= MAX_COMANDOS_POR_CORRIDA) {
           lastObservation = `Ya corriste ${MAX_COMANDOS_POR_CORRIDA} comandos en esta corrida. Terminá con lo que tenés.`;
-          log.push({ step, action: 'comando', ok: false, note: 'tope alcanzado' });
+          log.push({ step, action: 'comando', ok: false, note: 'limit reached' });
           continue;
         }
         const cmd = String(action.cmd || action.comando || '').trim();
         const clasificacion = clasificarComando(cmd);
         if (!clasificacion.permitido) {
-          log.push({ step, action: 'comando', ok: false, note: `bloqueado: ${clasificacion.motivo}` });
+          log.push({ step, action: 'comando', ok: false, note: `blocked: ${clasificacion.motivo}` });
           lastObservation = `No corrí "${cmd.slice(0, 80)}": ${clasificacion.motivo}. Probá otra forma.`;
           continue;
         }
         // Riesgoso sin justificar: se le pide el porqué, no se le niega.
         if (clasificacion.riesgoso && !String(action.porque || '').trim()) {
-          log.push({ step, action: 'comando', ok: false, note: 'riesgoso sin justificar' });
+          log.push({ step, action: 'comando', ok: false, note: 'risky without justification' });
           lastObservation = `"${cmd.slice(0, 80)}" puede borrar o mover cosas. Si de verdad hace falta, repetilo agregando "porque":"para qué lo necesitás" y lo corro.`;
           continue;
         }
@@ -1106,7 +1123,7 @@ export class Workforce {
           riesgoso: Boolean(clasificacion.riesgoso)
         });
         const r = await ejecutar(cmd, workspaceDir);
-        log.push({ step, action: 'comando', ok: r.ok, path: cmd.slice(0, 90), note: r.ok ? 'ok' : `código ${r.codigo}` });
+        log.push({ step, action: 'comando', ok: r.ok, path: cmd.slice(0, 90), note: r.ok ? 'ok' : `code ${r.codigo}` });
         logEvent('comando_agente', {
           companyId,
           agente: agent.name,
@@ -1132,7 +1149,7 @@ export class Workforce {
         // resuelva por su cuenta lo que otro ya sabe.
         if (consultas >= MAX_CONSULTAS_POR_CORRIDA) {
           lastObservation = 'Ya consultaste dos veces en esta corrida. Resolvé con lo que tenés y seguí.';
-          log.push({ step, action: 'consultar', ok: false, note: 'tope alcanzado' });
+          log.push({ step, action: 'consultar', ok: false, note: 'limit reached' });
           continue;
         }
         consultas += 1;
@@ -1151,7 +1168,7 @@ export class Workforce {
 
       if (action.action === 'list_files') {
         const files = await listFiles();
-        log.push({ step, action: 'list_files', note: `${files.length} archivos` });
+        log.push({ step, action: 'list_files', note: `${files.length} files` });
         lastObservation = `Archivos: ${JSON.stringify(files)}. No vuelvas a listar: escribí o terminá.`;
       } else if (action.action === 'read_file') {
         try {
@@ -1289,7 +1306,7 @@ export class Workforce {
           compilado = true;
           const build = await construirApp(workspaceDir, goal?.stack);
           if (build && build.ok === false) {
-            log.push({ step, action: 'build', ok: false, note: `${build.errores.length} errores` });
+            log.push({ step, action: 'build', ok: false, note: `${build.errores.length} errors` });
             lastObservation = renderBuildReport(build);
             this.emitEvent(companyId, {
               kind: 'build_failed',
@@ -1301,7 +1318,7 @@ export class Workforce {
             continue;
           }
           if (build?.ok) {
-            log.push({ step, action: 'build', ok: true, note: build.apk ? 'APK generado e instalado' : 'proyecto válido' });
+            log.push({ step, action: 'build', ok: true, note: build.apk ? 'APK built and installed' : 'project valid' });
             this.emitEvent(companyId, {
               kind: 'build_ok',
               taskId: task.id,
@@ -1310,7 +1327,7 @@ export class Workforce {
               tipo: build.tipo
             });
           } else if (build?.saltado) {
-            log.push({ step, action: 'build', note: `sin compilar: ${build.motivo}` });
+            log.push({ step, action: 'build', note: `not compiled: ${build.motivo}` });
           }
         }
 
@@ -1318,7 +1335,7 @@ export class Workforce {
           verificado = true;
           const hallazgos = await this.verifyArtifacts(companyId, slug, artifacts);
           if (hallazgos.length > 0) {
-            log.push({ step, action: 'verify', note: `${hallazgos.length} hallazgos` });
+            log.push({ step, action: 'verify', note: `${hallazgos.length} findings` });
             ultimaVerificacion = hallazgos;
             lastObservation = renderVerificationReport(hallazgos);
             this.emitEvent(companyId, {
@@ -1330,10 +1347,10 @@ export class Workforce {
             });
             continue;
           }
-          log.push({ step, action: 'verify', ok: true, note: 'sin hallazgos' });
+          log.push({ step, action: 'verify', ok: true, note: 'no findings' });
         }
 
-        const summary = String(action.summary || 'Tarea completada.').slice(0, 500);
+        const summary = String(action.summary || 'Task done.').slice(0, 500);
         const finalArtifacts = [...new Set([...(action.artifacts || []), ...artifacts])].map(String).slice(0, 20);
         // Si quedaron hallazgos sin resolver, se registran para que el revisor
         // no gaste su atención en lo que la máquina ya detectó.
@@ -1376,18 +1393,18 @@ export class Workforce {
         const build = await construirApp(workspaceDir, goal?.stack);
         if (build && build.ok === false) {
           const detalle = build.errores.map((e) => `${e.archivo}${e.linea ? `:${e.linea}` : ''}: ${e.que}`).join(' · ').slice(0, 400);
-          const queEs = goal?.stack === 'python' ? 'un programa que corre' : 'una app válida';
+          const queEs = goal?.stack === 'python' ? 'a program that runs' : 'a valid app';
           this.store.finishWorkRun(runId, {
             status: 'blocked',
-            summary: `Se quedó sin pasos y lo entregado no es ${queEs}: ${detalle}`,
+            summary: `Ran out of steps and what was delivered is not ${queEs}: ${detalle}`,
             log,
             artifacts: produced
           });
           this.store.finishTask(task.id, {
             status: 'blocked',
             blockedReason: goal?.stack === 'python'
-              ? `Falta para que el programa compile → ${detalle}`
-              : `Falta para que sea una app de verdad → ${detalle}`
+              ? `Still needed for the program to compile → ${detalle}`
+              : `Still needed for this to be a real app → ${detalle}`
           });
           this.emitEvent(companyId, {
             kind: 'build_failed',
@@ -1399,7 +1416,7 @@ export class Workforce {
           return;
         }
       }
-      const summary = `Entregó ${produced.join(', ')} (se quedó sin pasos antes de cerrar el resumen).`;
+      const summary = `Delivered ${produced.join(', ')} (ran out of steps before closing the summary).`;
       this.store.finishWorkRun(runId, { status: 'ok', summary, log, artifacts: produced });
       this.store.finishTask(task.id, { status: 'done', summary });
       this.emitEvent(companyId, { kind: 'task_done', taskId: task.id, agentId: agent.id, agentName: agent.name, summary, artifacts: produced });
@@ -1412,7 +1429,7 @@ export class Workforce {
     // cuando tokens.css ya estaba). Eso no es un bloqueo: es una tarea que
     // llegó tarde, y bloquearla ensuciaba el tablero con fallas que no lo eran.
     if (task.target_file && existsSync(path.join(workspaceDir, task.target_file))) {
-      const summary = `${task.target_file} ya estaba escrito: no hacía falta rehacerlo.`;
+      const summary = `${task.target_file} was already written: no need to redo it.`;
       this.store.finishWorkRun(runId, { status: 'ok', summary, log, artifacts: [task.target_file] });
       this.store.finishTask(task.id, { status: 'done', summary });
       this.emitEvent(companyId, { kind: 'task_done', taskId: task.id, agentId: agent.id, agentName: agent.name, summary, artifacts: [task.target_file] });
@@ -1420,11 +1437,11 @@ export class Workforce {
     }
 
     const razon = task.target_file
-      ? `No llegó a escribir ${task.target_file} en ${MAX_STEPS_PER_RUN} pasos.`
-      : 'Agotó los pasos sin producir un archivo. Probablemente la tarea no sea un entregable: puede ser una decisión, una revisión, o parte del archivo de otra persona.';
-    this.store.finishWorkRun(runId, { status: 'blocked', summary: 'Se quedó sin pasos sin producir nada.', log, artifacts: [] });
+      ? `Did not manage to write ${task.target_file} in ${MAX_STEPS_PER_RUN} steps.`
+      : 'Ran out of steps without producing a file. The task is probably not a deliverable: it may be a decision, a review, or part of someone else\'s file.';
+    this.store.finishWorkRun(runId, { status: 'blocked', summary: 'Ran out of steps without producing anything.', log, artifacts: [] });
     this.store.finishTask(task.id, { status: 'blocked', blockedReason: razon });
-    this.emitEvent(companyId, { kind: 'task_blocked', taskId: task.id, agentId: agent.id, agentName: agent.name, reason: 'sin pasos' });
+    this.emitEvent(companyId, { kind: 'task_blocked', taskId: task.id, agentId: agent.id, agentName: agent.name, reason: 'out of steps' });
   }
 
   // Lee del disco lo que se produjo y lo pasa por el verificador. Se lee del
@@ -1474,8 +1491,10 @@ export class Workforce {
   // registrada como comentario, así la colaboración es visible y no magia.
   async consultarCompanero(companyId, { quienPregunta, aQuien, pregunta, goal, slug, task }) {
     const texto = String(pregunta || '').trim();
+    // La respuesta queda como comentario visible: en inglés si la voz es inglesa.
+    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     if (!texto) {
-      return { ok: false, nota: 'sin pregunta', observacion: 'Te faltó la pregunta. Usá {"action":"consultar","a":"Nombre","pregunta":"..."}' };
+      return { ok: false, nota: 'missing question', observacion: 'Te faltó la pregunta. Usá {"action":"consultar","a":"Nombre","pregunta":"..."}' };
     }
 
     const equipo = this.store.listAgents({ companyId })
@@ -1494,7 +1513,7 @@ export class Workforce {
     if (!companero) {
       return {
         ok: false,
-        nota: 'no encontré a esa persona',
+        nota: 'person not found',
         observacion: `No hay nadie llamado "${aQuien}" en el equipo. Son: ${equipo.map((a) => a.name).join(', ')}.`
       };
     }
@@ -1524,7 +1543,7 @@ export class Workforce {
       'Contestale como en el pasillo: DIRECTO y accionable, 2 a 4 oraciones.',
       'Si la respuesta es un valor concreto (un color, una medida, un patrón), dalo.',
       'Si no es tu tema, decilo en una línea y sugerí a quién preguntarle.',
-      'No saludes, no te presentes: ya se conocen. Español rioplatense.'
+      enNote ? 'No greeting, no intro: you already know each other. English.' : 'No saludes, no te presentes: ya se conocen. Español rioplatense.'
     ].filter(Boolean).join('\n');
 
     let respuesta = '';
@@ -1541,13 +1560,13 @@ export class Workforce {
     } catch (error) {
       return {
         ok: false,
-        nota: 'no contestó',
+        nota: 'no answer',
         observacion: `${companero.name} no llegó a contestarte. Resolvelo con tu criterio y seguí.`
       };
     }
 
     if (!respuesta) {
-      return { ok: false, nota: 'respuesta vacía', observacion: `${companero.name} no tenía nada para aportar. Seguí con tu criterio.` };
+      return { ok: false, nota: 'empty answer', observacion: `${companero.name} no tenía nada para aportar. Seguí con tu criterio.` };
     }
 
     // Queda registrado: la colaboración se ve en la Actividad del proyecto.
@@ -1556,7 +1575,7 @@ export class Workforce {
       companyId,
       authorId: companero.id,
       kind: 'consulta',
-      text: `${quienPregunta.name} preguntó: ${texto.slice(0, 300)}\n\n${respuesta}`
+      text: `${quienPregunta.name} asked: ${texto.slice(0, 300)}\n\n${respuesta}`
     });
     this.emitEvent(companyId, {
       kind: 'consulta_respondida',
@@ -1569,7 +1588,7 @@ export class Workforce {
 
     return {
       ok: true,
-      nota: 'contestó',
+      nota: 'answered',
       observacion: `${companero.name} te contestó:\n${respuesta}\n\nSeguí con tu trabajo teniendo esto en cuenta.`
     };
   }
@@ -1623,12 +1642,12 @@ export class Workforce {
         companyId,
         authorId: 'verificacion',
         kind: 'nota',
-        text: `La verificación automática dejó ${hallazgosPendientes.length} punto(s) sin resolver:\n• ${
+        text: `Automatic verification left ${hallazgosPendientes.length} unresolved point(s):\n• ${
           hallazgosPendientes.map((h) => `[${h.archivo}] ${h.que}`).join('\n• ')}`
       });
     }
     const reviewTaskId = this.store.insertTask(task.meeting_id, reviewer.id, {
-      text: `Revisar el trabajo de ${author.name}: ${task.text}`,
+      text: `Review ${author.name}'s work: ${task.text}`,
       kind: 'revision',
       parentTaskId: task.id
     });
@@ -1645,6 +1664,8 @@ export class Workforce {
   }
 
   async executeReview(companyId, reviewer, task, runId) {
+    // El comment queda visible en la tarea: en inglés si la voz es inglesa.
+    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     const parent = task.parent_task_id ? this.store.getTask(task.parent_task_id) : null;
     const goal = task.goal_id ? this.store.getGoal(task.goal_id) : null;
     const slug = goal?.slug || 'general';
@@ -1656,11 +1677,11 @@ export class Workforce {
       // cuando alguien termine su entregable.
       this.store.finishWorkRun(runId, {
         status: 'ok',
-        summary: 'Todavía no hay nada entregado para revisar; queda anotado.',
+        summary: 'Nothing delivered to review yet; noted.',
         log: [],
         artifacts: []
       });
-      this.store.finishTask(task.id, { status: 'noted', summary: 'Queda a la espera de que haya algo entregado.' });
+      this.store.finishTask(task.id, { status: 'noted', summary: 'Waiting for something to be delivered.' });
       return;
     }
 
@@ -1746,7 +1767,9 @@ export class Workforce {
       'Sé exigente pero justo: aprobá si está bien hecho, pedí cambios SOLO si hay algo concreto que arreglar.',
       '',
       'Respondé SOLO un JSON:',
-      '{"verdict":"aprobado|cambios","comment":"2-4 oraciones en español, dirigidas al compañero, concretas","issues":["arreglo puntual 1","arreglo puntual 2"]}'
+      enNote
+        ? '{"verdict":"aprobado|cambios","comment":"2-4 sentences in English, addressed to the teammate, concrete","issues":["concrete fix 1","concrete fix 2"]}'
+        : '{"verdict":"aprobado|cambios","comment":"2-4 oraciones en español, dirigidas al compañero, concretas","issues":["arreglo puntual 1","arreglo puntual 2"]}'
     ].filter(Boolean).join('\n');
 
     let verdict = 'aprobado';
@@ -1766,15 +1789,15 @@ export class Workforce {
       comment = String(parsed.comment || '').slice(0, 1200);
       issues = (Array.isArray(parsed.issues) ? parsed.issues : []).map(String).slice(0, 5);
     } catch (error) {
-      this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la revisión.', log: [{ error: String(error?.message || error).slice(0, 200) }], artifacts: [] });
+      this.store.finishWorkRun(runId, { status: 'error', summary: 'The review failed.', log: [{ error: String(error?.message || error).slice(0, 200) }], artifacts: [] });
       this.store.finishTask(task.id, task.run_count >= MAX_RUNS_PER_TASK
-        ? { status: 'blocked', blockedReason: 'No se pudo completar la revisión tras varios intentos.' }
+        ? { status: 'blocked', blockedReason: 'The review could not be completed after several tries.' }
         : { status: 'pending' });
       return;
     }
 
     if (!comment) {
-      comment = verdict === 'aprobado' ? 'Revisado: cumple con lo pedido.' : 'Revisado: hay cambios pendientes.';
+      comment = verdict === 'aprobado' ? 'Reviewed: meets what was asked.' : 'Reviewed: changes pending.';
     }
 
     this.store.addTaskComment({
@@ -1786,7 +1809,7 @@ export class Workforce {
     });
     this.store.setReviewStatus(parent.id, verdict, reviewer.id);
 
-    const summary = `${verdict === 'aprobado' ? 'Aprobado' : 'Pedí cambios'}: ${comment}`;
+    const summary = `${verdict === 'aprobado' ? 'Approved' : 'Requested changes'}: ${comment}`;
     this.store.finishWorkRun(runId, { status: 'ok', summary, log: [{ verdict, issues }], artifacts: [] });
     this.store.finishTask(task.id, { status: 'done', summary });
     this.emitEvent(companyId, {
@@ -1802,7 +1825,7 @@ export class Workforce {
 
     // Cambios pedidos: vuelve al autor UNA vez, con la lista concreta.
     if (verdict === 'cambios' && author) {
-      const fixText = `Aplicar la revisión de ${reviewer.name} sobre "${parent.text}": ${issues.length ? issues.join('; ') : comment}`;
+      const fixText = `Apply ${reviewer.name}'s review on "${parent.text}": ${issues.length ? issues.join('; ') : comment}`;
       const fixId = this.store.insertTask(parent.meeting_id, author.id, {
         text: fixText.slice(0, 900),
         kind: 'entregable',
@@ -1855,9 +1878,11 @@ export class Workforce {
 
   async executeRefinement(companyId, contratista, task, runId) {
     const company = this.store.getCompany(companyId);
+    // El resumen queda visible en la corrida: en inglés si la voz es inglesa.
+    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
     const objetivo = this.pickRefinementTarget(companyId, task);
     if (!objetivo) {
-      const razon = 'No pude identificar a quién refinar: nombrá a la persona en el pedido.';
+      const razon = 'Could not tell who to refine: name the person in the request.';
       this.store.finishWorkRun(runId, { status: 'blocked', summary: razon, log: [], artifacts: [] });
       this.store.finishTask(task.id, { status: 'blocked', blockedReason: razon });
       return;
@@ -1881,7 +1906,9 @@ export class Workforce {
       '- "knowledge" y "craft": reescribilos completos incorporando lo pedido, sin perder lo que ya sabía.',
       '- Nada de inventar una persona distinta: es la misma, mejor preparada.',
       '',
-      '{"skills":["..."],"knowledge":"...","craft":"...","style":"...","boundaries":["..."],"resumen":"en una oración, qué le cambiaste"}'
+      enNote
+        ? '{"skills":["..."],"knowledge":"...","craft":"...","style":"...","boundaries":["..."],"resumen":"in one sentence, what you changed (English)"}'
+        : '{"skills":["..."],"knowledge":"...","craft":"...","style":"...","boundaries":["..."],"resumen":"en una oración, qué le cambiaste"}'
     ].join('\n');
 
     let patch = null;
@@ -1896,9 +1923,9 @@ export class Workforce {
       });
       patch = parseJsonFromModel(text);
     } catch {
-      this.store.finishWorkRun(runId, { status: 'error', summary: 'Falló la llamada al modelo.', log: [], artifacts: [] });
+      this.store.finishWorkRun(runId, { status: 'error', summary: 'The model call failed.', log: [], artifacts: [] });
       this.store.finishTask(task.id, task.run_count >= MAX_RUNS_PER_TASK
-        ? { status: 'blocked', blockedReason: 'No se pudo refinar tras varios intentos.' }
+        ? { status: 'blocked', blockedReason: 'Could not refine after several tries.' }
         : { status: 'pending' });
       return;
     }
@@ -1918,7 +1945,7 @@ export class Workforce {
     }
 
     if (Object.keys(limpio).length === 0) {
-      const razon = 'El refinamiento no proponía ningún cambio concreto.';
+      const razon = 'The refinement proposed no concrete change.';
       this.store.finishWorkRun(runId, { status: 'blocked', summary: razon, log: [], artifacts: [] });
       this.store.finishTask(task.id, { status: 'blocked', blockedReason: razon });
       return;
@@ -1927,7 +1954,7 @@ export class Workforce {
     const skillsAntes = objetivo.domains;
     this.store.updateAgent(objetivo.id, limpio, 'contratista', String(task.text).slice(0, 200));
     const nuevas = (limpio.domains || []).filter((d) => !skillsAntes.includes(d));
-    const resumen = String((patch && patch.resumen) || `Ajusté el perfil de ${objetivo.name}.`).slice(0, 400);
+    const resumen = String((patch && patch.resumen) || `Tuned ${objetivo.name}'s profile.`).slice(0, 400);
 
     this.store.finishWorkRun(runId, {
       status: 'ok',

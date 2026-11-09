@@ -162,7 +162,7 @@ export function getMentionIndex(text, aliases) {
 
 export function getErrorText(error) {
   if (!error) {
-    return 'Error desconocido';
+    return 'Unknown error';
   }
   if (typeof error === 'string') {
     return error;

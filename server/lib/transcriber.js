@@ -96,14 +96,14 @@ export class CaptureTranscriberRuntime {
       if (verdict && !verdict.speech) {
         this.callbacks.emit({
           type: 'audio_transcription_empty',
-          message: 'Solo ruido de fondo; seguí hablando nomás.',
+          message: 'Just background noise; keep talking.',
           silero: { maxProb: verdict.maxProb, ratio: verdict.speechRatio }
         });
         return;
       }
       const wavBase64 = chunks.length > 0 ? buildWavBase64FromPcmChunks(chunks) : '';
       if (wavBase64 && getSttProvider() !== 'browser') {
-        this.callbacks.emit({ type: 'audio_transcription_status', message: 'Transcribiendo…' });
+        this.callbacks.emit({ type: 'audio_transcription_status', message: 'Transcribing…' });
       }
       try {
         const { text, source } = await transcribeTurn({ wavBase64, hint });
@@ -111,7 +111,7 @@ export class CaptureTranscriberRuntime {
       } catch (error) {
         this.callbacks.emit({
           type: 'audio_transcription_empty',
-          message: `No pude transcribir el turno (${getShortError(error)}); probá de nuevo o escribí.`
+          message: `Couldn't transcribe that turn (${getShortError(error)}); try again or type it.`
         });
       }
     } finally {
@@ -125,7 +125,7 @@ export class CaptureTranscriberRuntime {
       return;
     }
     if (isJunkTranscript(finalText)) {
-      this.callbacks.emit({ type: 'audio_transcription_empty', message: 'Solo ruido de fondo; seguí hablando nomás.' });
+      this.callbacks.emit({ type: 'audio_transcription_empty', message: 'Just background noise; keep talking.' });
       return;
     }
     this.lastFinalized = finalText;

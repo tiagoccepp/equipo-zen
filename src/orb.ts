@@ -1,12 +1,23 @@
-// Orbe minimizado: esfera upstream + mini-UI glass.
-// 🎤 = hablar (toggle voz), ⤢ = abrir Pablo, arrastrar = mover.
+// Orbe minimizado: MISMO OrbField upstream, vivo en tarjeta glass.
+// Clic (sin arrastrar) = hablar, ⤢ = abrir Pablo, arrastrar = mover.
+// La energía es audio real: la ventana main la reporta vía orb_report y
+// acá se lee con orb_poll (estados del protocolo: idle/escuchando/hablando/pensando).
 
 import { invoke } from '@tauri-apps/api/core';
 import { OrbField } from './lib/call-orbs.ts';
 
 const canvas = document.getElementById('orb-canvas') as HTMLCanvasElement;
+const card = document.getElementById('orb-card') as HTMLElement;
 const statusEl = document.getElementById('orb-status') as HTMLElement;
 const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
+
+// Solo la etiqueta visible va en inglés; las claves son protocolo Rust.
+const STATUS_LABEL: Record<string, string> = {
+  idle: 'Pablo',
+  escuchando: '● Listening',
+  hablando: '♪ Speaking',
+  pensando: '… Thinking'
+};
 
 let level = 0;
 const field = new OrbField(canvas, { energy: () => level });
@@ -15,27 +26,21 @@ field.setAgents([{ id: 'pablo', name: 'Pablo', color: '#38D1FF' }]);
 
 function layout(): void {
   const r = canvas.getBoundingClientRect();
-  const w = r.width || 176;
-  const h = r.height || 176;
+  const w = r.width || 148;
+  const h = r.height || 148;
   field.resize(w, h);
-  field.setSlots([{ id: 'pablo', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 6 }]);
+  field.setSlots([{ id: 'pablo', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 4 }]);
 }
 window.addEventListener('resize', layout);
 layout();
 field.start();
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: 'pablo',
-  escuchando: '● escuchando',
-  hablando: '♪ hablando'
-};
-
 async function poll(): Promise<void> {
   try {
     const { estado, nivel } = await invoke<{ estado: string; nivel: number }>('orb_poll');
     level = Math.max(0, Math.min(1, nivel || 0));
-    field.setSpeaking(estado === 'hablando' || estado === 'escuchando' ? 'pablo' : '');
-    statusEl.textContent = STATUS_LABEL[estado] || 'pablo';
+    field.setSpeaking(estado === 'idle' ? '' : 'pablo');
+    statusEl.textContent = STATUS_LABEL[estado] || 'Pablo';
     micBtn.classList.toggle('live', estado === 'escuchando');
   } catch {
     // Núcleo aún no listo.
@@ -47,10 +52,16 @@ void poll();
 micBtn.addEventListener('click', () => {
   void invoke('orb_command', { cmd: 'toggle-mic' });
 });
-// Clic en la esfera = hablar; arrastrar = mover (umbral 6px).
+document.getElementById('expandBtn')?.addEventListener('click', () => {
+  void invoke('orb_command', { cmd: 'expand' });
+});
+
+// Arrastre desde cualquier punto de la tarjeta (fondo glass incluido);
+// clic sin arrastre fuera de los botones = hablar (umbral 6px).
 let downAt: { x: number; y: number } | null = null;
 let dragging = false;
-canvas.addEventListener('pointerdown', (e) => {
+card.addEventListener('pointerdown', (e) => {
+  if ((e.target as HTMLElement).closest('button')) return;
   downAt = { x: e.clientX, y: e.clientY };
   dragging = false;
 });
@@ -58,17 +69,14 @@ window.addEventListener('pointermove', (e) => {
   if (!downAt || dragging) return;
   if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) {
     dragging = true;
+    downAt = null;
     void invoke('orb_drag');
   }
 });
-window.addEventListener('pointerup', () => {
-  if (downAt && !dragging) {
+window.addEventListener('pointerup', (e) => {
+  if (downAt && !dragging && !(e.target as HTMLElement).closest?.('button')) {
     void invoke('orb_command', { cmd: 'toggle-mic' });
   }
   downAt = null;
+  dragging = false;
 });
-document.getElementById('expandBtn')?.addEventListener('click', () => {
-  void invoke('orb_command', { cmd: 'expand' });
-});
-
-// Arrastre desde la esfera (fondo transparente, sin card).

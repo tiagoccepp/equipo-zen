@@ -178,7 +178,7 @@ export function comandoPedidoPorElUsuario(textos) {
 export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } = {}) {
   const receta = recetaPara(stack);
   if (!receta) {
-    return { hecho: false, motivo: `no hay andamiaje definido para "${stack}"` };
+    return { hecho: false, motivo: `no scaffolding defined for "${stack}"` };
   }
   if (!proyectoVacio(dir)) {
     return { hecho: false, yaEstaba: true };
@@ -202,7 +202,7 @@ export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } =
     await escribir('README.md', `# ${nombre}\n\nQué hace, qué necesita y cómo correrlo.\n`);
     return receta.prueba(dir)
       ? { hecho: true, como: 'plantilla', que: receta.que }
-      : { hecho: false, motivo: 'no pude escribir la plantilla del flujo' };
+      : { hecho: false, motivo: 'could not write the flow template' };
   }
 
   if (!explicito && receta.plantilla === 'android') {
@@ -212,7 +212,7 @@ export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } =
     }
     return receta.prueba(dir)
       ? { hecho: true, como: 'plantilla', que: receta.que }
-      : { hecho: false, motivo: 'no pude escribir la plantilla de Android' };
+      : { hecho: false, motivo: 'could not write the Android template' };
   }
 
   const cmd = explicito || receta.cmd;
@@ -229,7 +229,7 @@ export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } =
   return {
     hecho: false,
     cmd,
-    motivo: `el andamiaje no dejó la estructura esperada. Salida:\n${r.salida.slice(-800)}`
+    motivo: `scaffolding did not leave the expected structure. Output:\n${r.salida.slice(-800)}`
   };
 }
 

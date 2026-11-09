@@ -1,61 +1,75 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0a0a" />
-    <title>Pablo — a la orden</title>
+    <title>Pablo — At your service</title>
   </head>
   <body>
     <div class="mesh" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-name">Pablo</span>
+        <span class="brand-sub">team</span>
+      </div>
+      <div class="conn" id="conn" role="status">
+        <span class="conn-dot" aria-hidden="true"></span>
+        <span id="conn-text">Connecting</span>
+      </div>
+    </header>
     <main class="shell">
       <section class="stage">
         <div class="orbs" id="orbs" aria-hidden="true">
           <canvas id="orb-canvas"></canvas>
           <div class="orb-cells" id="orb-cells"></div>
         </div>
-        <h1 class="greet" id="greet">¿En qué te ayudo, señor?</h1>
-        <p class="status" id="status">conectando…</p>
+        <h1 class="greet" id="greet">How can I help?</h1>
+        <p class="status" id="status">Connecting…</p>
       </section>
 
       <section class="composer">
         <textarea
           id="prompt"
           rows="2"
-          placeholder="Pedile algo a Pablo…"
-          aria-label="Pedile algo a Pablo"
+          placeholder="Ask Pablo anything…"
+          aria-label="Ask Pablo anything"
         ></textarea>
         <div class="composer-actions">
           <div class="left">
-            <button id="btn-mic" class="pill" type="button" aria-pressed="false">🎤 hablar</button>
-            <button id="btn-call" class="pill" type="button" aria-pressed="false">📞 llamar a todos</button>
-            <button id="btn-voice" class="pill on" type="button" aria-pressed="true">🔊 voz</button>
-            <button id="btn-autowork" class="pill on" type="button" aria-pressed="true" title="Los agentes laburan solos en el proyecto">⚙️ auto</button>
+            <button id="btn-mic" class="pill" type="button" aria-pressed="false" title="Talk to Pablo with your voice">🎤 Talk</button>
+            <button id="btn-call" class="pill" type="button" aria-pressed="false" title="Let the whole team listen">📞 Call all</button>
+            <button id="btn-voice" class="pill on" type="button" aria-pressed="true" title="Spoken replies on/off">🔊 Voice</button>
+            <button id="btn-autowork" class="pill on" type="button" aria-pressed="true" title="Agents keep working on the project on their own">⚙️ Auto</button>
           </div>
-          <button id="btn-send" class="send" type="button" aria-label="Enviar">↑</button>
+          <button id="btn-send" class="send" type="button" aria-label="Send">↑</button>
         </div>
       </section>
 
       <section class="quick">
-        <button class="chip" type="button" data-say="Preséntense, por favor.">Preséntense</button>
-        <button class="chip" type="button" data-say="¿En qué anda el equipo?">¿En qué andan?</button>
-        <button class="chip" type="button" id="btn-test-voice">Probar voz</button>
+        <button class="chip" type="button" data-say="Please introduce yourselves.">Meet the team</button>
+        <button class="chip" type="button" data-say="What is the team working on?">Status update</button>
+        <button class="chip" type="button" id="btn-test-voice">Test voice</button>
       </section>
 
-      <section class="stream" id="stream" aria-live="polite"></section>
+      <section class="stream-wrap">
+        <div class="stream-head" aria-hidden="true"><span>Activity</span></div>
+        <section class="stream" id="stream" aria-live="polite"></section>
+      </section>
 
       <details class="companies">
-        <summary>Empresas</summary>
+        <summary>Companies</summary>
         <div id="companies-list"></div>
       </details>
 
       <details class="companies" id="perms-box" hidden>
-        <summary>Permisos de computadora</summary>
+        <summary>Computer permissions</summary>
         <div id="perms-list"></div>
       </details>
 
       <details class="companies" id="settings-box">
-        <summary>Ajustes</summary>
+        <summary>Settings</summary>
         <div id="settings-list"></div>
       </details>
     </main>

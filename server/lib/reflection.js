@@ -3,7 +3,7 @@ import {
   ROUTER_AUTO_APPLY_VOCAB,
   ROUTER_TUNING_ENABLED
 } from './config.js';
-import { getMinimaxModels } from './settings.js';
+import { getMinimaxModels, getTtsLanguage } from './settings.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { normalize } from './text.js';
 import { telemetry } from './telemetry.js';
@@ -22,11 +22,23 @@ const VOCAB_STOPWORDS = new Set([
   'todos', 'reunion', 'equipo', 'sistema', 'empresa'
 ]);
 
-const REFLECTION_FORMAT = [
+const REFLECTION_FORMAT_ES = [
   'Respondé ÚNICAMENTE con un JSON válido, sin markdown, con esta forma exacta:',
   '{"title":"título corto en español (máx 8 palabras)","summary":"resumen de 2-4 oraciones en español","vocab":[{"agentId":"<id>","term":"término del negocio"}],"styleHints":[{"agentId":"<id>","hint":"sugerencia de estilo"}]}',
   'vocab y styleHints pueden ser listas vacías.'
 ].join('\n');
+
+const REFLECTION_FORMAT_EN = [
+  'Respond with ONLY valid JSON, no markdown, with this exact shape:',
+  '{"title":"short title in English (max 8 words)","summary":"2-4 sentence summary in English","vocab":[{"agentId":"<id>","term":"business term"}],"styleHints":[{"agentId":"<id>","hint":"style suggestion"}]}',
+  'vocab and styleHints may be empty lists.',
+  'Write the title and summary in English.'
+].join('\n');
+
+function reflectionFormat() {
+  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  return en ? REFLECTION_FORMAT_EN : REFLECTION_FORMAT_ES;
+}
 
 // Reflexión post-reunión: resume, sugiere vocabulario para el router y
 // propone ajustes de estilo. Vocabulario aditivo se auto-aplica con
@@ -103,7 +115,7 @@ export class ReflectionRunner {
       timeoutMs: 20000,
       maxTokens: 1800,
       temperature: 0,
-      messages: [{ role: 'user', content: `${prompt}\n\n${REFLECTION_FORMAT}` }]
+      messages: [{ role: 'user', content: `${prompt}\n\n${reflectionFormat()}` }]
     });
 
     const parsed = parseJsonFromModel(responseText);

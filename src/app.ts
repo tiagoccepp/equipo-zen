@@ -40,6 +40,15 @@ const setStatus = (t: string): void => {
   statusEl.textContent = t;
 };
 
+// Pastilla de conexión del topbar (visual; no toca el protocolo WS).
+const connEl = $('conn');
+const connTextEl = $('conn-text');
+function setConn(state: 'connecting' | 'live' | 'offline'): void {
+  connEl.classList.toggle('live', state === 'live');
+  connEl.classList.toggle('offline', state === 'offline');
+  connTextEl.textContent = state === 'live' ? 'Live' : state === 'offline' ? 'Offline' : 'Connecting';
+}
+
 function addMsg(who: string, text: string, cls = ''): void {
   const div = document.createElement('div');
   div.className = `msg ${cls}`.trim();
@@ -159,7 +168,7 @@ function cutAgent(): void {
   voiceOut.restoreGain();
   speakingAgent = '';
   field.setSpeaking('');
-  setStatus('te escucho — la corté.');
+  setStatus('Stopped — listening to you.');
 }
 
 function maybePlaybackComplete(): void {
@@ -170,7 +179,7 @@ function maybePlaybackComplete(): void {
       field.setSpeaking('');
     }
     audioSegment = null;
-    if (!liveMic.userSpeaking) setStatus('a la orden');
+    if (!liveMic.userSpeaking) setStatus('Ready');
   }
 }
 
@@ -188,7 +197,7 @@ const liveMic = new LiveMic({
       window.clearTimeout(graceTimer);
       graceTimer = null;
       graceHint = '';
-      setStatus('grabando tu turno…');
+      setStatus('Recording…');
       return;
     }
     // Turno nuevo: el interrupt (si hace falta) lo manda onSpeechConfirmed
@@ -197,7 +206,7 @@ const liveMic = new LiveMic({
     interruptSentForTurn = false;
     voiceOut.flush();
     voiceOut.restoreGain();
-    setStatus('grabando tu turno…');
+    setStatus('Recording…');
   },
   onSpeechConfirmed: (ms) => {
     // Habla REAL (sostenida ≥ minSpeechMs). Sobre pensamiento silencioso
@@ -235,7 +244,7 @@ const liveMic = new LiveMic({
     lastSpeechEndAt = performance.now();
     graceHint = hint;
     audioEndSent = false;
-    setStatus('¿terminaste?…');
+    setStatus('Finished?…');
     if (graceTimer !== null) window.clearTimeout(graceTimer);
     graceTimer = window.setTimeout(() => {
       graceTimer = null;
@@ -244,15 +253,15 @@ const liveMic = new LiveMic({
       // Hint más fresco no-vacío: el actual del navegador o el guardado.
       const best = browserSpeech.latestUtterance() || graceHint;
       client.audioEnd(best);
-      setStatus('transcribiendo…');
+      setStatus('Transcribing…');
     }, GRACE_MS);
   },
   onDiscarded: () => {
     client.audioCancel('too_short', 0);
-    setStatus('ruido descartado.');
+    setStatus('Noise skipped.');
     window.setTimeout(() => {
-      if (voiceSession && statusEl.textContent === 'ruido descartado.') {
-        setStatus(voiceGroup ? 'te escuchan todos' : 'te escucho…');
+      if (voiceSession && statusEl.textContent === 'Noise skipped.') {
+        setStatus(voiceGroup ? 'Everyone is listening' : 'Listening…');
       }
     }, 900);
   },
@@ -268,12 +277,12 @@ const liveMic = new LiveMic({
     voiceOut.restoreGain();
     speakingAgent = '';
     field.setSpeaking('');
-    addMsg('sistema', '⏵ la cortaste — te escucha.', 'sys');
+    addMsg('system', '⏵ Cut in — listening.', 'sys');
   },
   onDuck: (ducked) => {
     if (ducked) {
       voiceOut.duck();
-      setStatus('te escucho…');
+      setStatus('Listening…');
     } else {
       voiceOut.restoreGain();
     }
@@ -361,17 +370,18 @@ const client = new Client({
       }
     }
     const pablo = list.find((a) => a.role === 'ceo') || list[0];
-    greetEl.textContent = pablo ? `¿En qué te ayudo, señor? — ${pablo.name}` : '¿En qué te ayudo, señor?';
-    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+    greetEl.textContent = pablo ? `How can I help? — ${pablo.name}` : 'How can I help?';
+    setStatus(voiceSession ? 'Listening…' : 'Ready');
+    setConn('live');
     layoutOrbs();
   },
   onUserText: (text) => {
-    addMsg('vos', text, 'me');
-    setStatus('orquestando respuesta…');
+    addMsg('you', text, 'me');
+    setStatus('Working on it…');
   },
   onRoute: (names) => {
     const who = names.filter(Boolean);
-    if (who.length > 1) setStatus(`ronda: ${who.join(', ')}`);
+    if (who.length > 1) setStatus(`Round: ${who.join(', ')}`);
   },
   onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
@@ -401,7 +411,7 @@ const client = new Client({
     if (!audioSegment && speakingAgent === agentId) {
       speakingAgent = '';
       field.setSpeaking('');
-      if (!voiceSession) setStatus('a la orden');
+      if (!voiceSession) setStatus('Ready');
     }
   },
   onMp3: (b64, turnId) => {
@@ -416,7 +426,7 @@ const client = new Client({
     audioSegment = { turnId, agentId, endReceived: false };
     speakingAgent = agentId;
     field.setSpeaking(agentId);
-    setStatus(`habla ${agentName(agentId).toLowerCase()}…`);
+    setStatus(`${agentName(agentId).toLowerCase()} speaking…`);
   },
   onAudioEnd: (turnId, agentId) => {
     if (audioSegment?.turnId === turnId && audioSegment?.agentId === agentId) {
@@ -445,7 +455,7 @@ const client = new Client({
       speakingAgent = '';
       field.setSpeaking('');
     }
-    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+    setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onWorkEvent: (kind, agentId, event) => {
     // task_started → arco giratorio; task_done/blocked → fuera.
@@ -459,23 +469,23 @@ const client = new Client({
     const who = String(event.agentName || agentName(agentId) || 'equipo');
     const str = (k: string): string => String(event[k] || '');
     if (kind === 'comando' && str('cmd')) {
-      addMsg('tools', `⚙️ ${who} ejecuta: ${str('cmd').slice(0, 120)}`, 'sys');
+      addMsg('tools', `⚙️ ${who} runs: ${str('cmd').slice(0, 120)}`, 'sys');
     } else if (kind === 'file_written' && str('path')) {
-      addMsg('tools', `📝 ${who} ${event.edited ? 'editó' : 'escribió'}: ${str('path')}`, 'sys');
+      addMsg('tools', `📝 ${who} ${event.edited ? 'edited' : 'wrote'}: ${str('path')}`, 'sys');
     } else if (kind === 'web' && str('url')) {
-      addMsg('tools', `🌐 ${who} leyó: ${str('url').slice(0, 100)}`, 'sys');
+      addMsg('tools', `🌐 ${who} read: ${str('url').slice(0, 100)}`, 'sys');
     } else if (kind === 'task_started' && str('text')) {
       addMsg('tools', `▶️ ${who}: ${str('text').slice(0, 140)}`, 'sys');
     } else if (kind === 'task_done') {
-      addMsg('tools', `✅ ${who} terminó${str('summary') ? `: ${str('summary').slice(0, 160)}` : ''}`, 'sys');
+      addMsg('tools', `✅ ${who} finished${str('summary') ? `: ${str('summary').slice(0, 160)}` : ''}`, 'sys');
     } else if (kind === 'task_blocked') {
-      addMsg('tools', `⛔ ${who} bloqueado: ${str('reason').slice(0, 140)}`, 'sys');
+      addMsg('tools', `⛔ ${who} blocked: ${str('reason').slice(0, 140)}`, 'sys');
     } else if (kind === 'build_ok') {
       addMsg('tools', `🔨 ${who}: build OK`, 'sys');
     } else if (kind === 'build_failed') {
-      addMsg('tools', `🔨 ${who}: build falló`, 'sys');
+      addMsg('tools', `🔨 ${who}: build failed`, 'sys');
     } else if (kind === 'task_queued' && str('text')) {
-      addMsg('tools', `📋 ${who} encoló: ${str('text').slice(0, 140)}`, 'sys');
+      addMsg('tools', `📋 ${who} queued: ${str('text').slice(0, 140)}`, 'sys');
     }
   },
   onLiveTranscript: (text) => {
@@ -490,22 +500,23 @@ const client = new Client({
   },
   onNoResponse: (note, turnId) => {
     if (turnId) activeTurns.delete(turnId);
-    addMsg('sistema', note, 'sys');
-    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+    addMsg('system', note, 'sys');
+    setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onVoiceTranscript: (text, source) => {
-    addMsg('vos · voz', `${text}  [${source}]`, 'me');
-    setStatus('orquestando respuesta…');
+    addMsg('you · voice', `${text}  [${source}]`, 'me');
+    setStatus('Working on it…');
   },
   onTranscribeEmpty: () => {
-    addMsg('sistema', 'No te escuché; probá de nuevo.', 'sys');
-    setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+    addMsg('system', "Didn't catch that — try again.", 'sys');
+    setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onError: (message) => {
-    addMsg('sistema', message, 'sys');
+    addMsg('system', message, 'sys');
   },
   onClose: () => {
-    setStatus('desconectada — reintentá en unos segundos');
+    setStatus('Disconnected — retrying shortly');
+    setConn('offline');
   }
 });
 
@@ -527,7 +538,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     voiceGroup = false;
     micBtn.classList.remove('live');
     callBtn.classList.remove('live');
-    setStatus('a la orden');
+    setStatus('Ready');
     return;
   }
   voiceOut.flush();
@@ -535,8 +546,8 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   client.audioPrepare();
   const ok = await liveMic.start();
   if (!ok) {
-    addMsg('sistema', 'No pude abrir el micrófono.', 'sys');
-    setStatus('a la orden');
+    addMsg('system', "Couldn't open the microphone.", 'sys');
+    setStatus('Ready');
     return;
   }
   // El ASR del navegador (hint) sigue el idioma de escucha del servidor.
@@ -552,7 +563,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   voiceGroup = group;
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
-  setStatus(group ? 'te escuchan todos — hablá nomás' : 'te escucho…');
+  setStatus(group ? 'Everyone is listening — go ahead' : 'Listening…');
 }
 
 micBtn.addEventListener('click', () => {
@@ -600,7 +611,7 @@ voiceBtn.addEventListener('click', () => {
   client.setVoice(voiceOn);
   voiceBtn.classList.toggle('on', voiceOn);
   voiceBtn.classList.toggle('off', !voiceOn);
-  voiceBtn.textContent = voiceOn ? '🔊 voz' : '🔇 muda';
+  voiceBtn.textContent = voiceOn ? '🔊 Voice' : '🔇 Muted';
   voiceBtn.setAttribute('aria-pressed', String(voiceOn));
   if (!voiceOn) {
     voiceOut.flush();
@@ -623,14 +634,14 @@ $('btn-autowork').addEventListener('click', () => {
 $('btn-test-voice').addEventListener('click', () => {
   void (async () => {
     try {
-      setStatus('probando voz…');
-      const b64 = await decir('Pablo here, sir. Can you hear me clearly?');
+      setStatus('Testing voice…');
+      const b64 = await decir('Pablo here. Can you hear me clearly?');
       await voiceOut.unlock();
       await voiceOut.playMp3(b64);
-      setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+      setStatus(voiceSession ? 'Listening…' : 'Ready');
     } catch (err) {
-      addMsg('sistema', `Probar voz falló: ${err instanceof Error ? err.message : 'error'}`, 'sys');
-      setStatus(voiceSession ? 'te escucho…' : 'a la orden');
+      addMsg('system', `Voice test failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
+      setStatus(voiceSession ? 'Listening…' : 'Ready');
     }
   })();
 });
@@ -683,7 +694,7 @@ async function renderCompanies(): Promise<void> {
         const goalId = await firstProject(c.id).catch(() => null);
         if (!goalId) return;
         connectTo(c.id, goalId);
-        setStatus(`con ${c.name}…`);
+        setStatus(`Switched to ${c.name}…`);
         void renderCompanies();
       })();
     });
@@ -731,9 +742,15 @@ if (isTauri()) {
 const PERM_CAPS = ['pantalla', 'mouse', 'teclado'] as const;
 const PERM_LEVELS = ['permitir', 'preguntar', 'bloquear'] as const;
 const PERM_LABEL: Record<string, string> = {
-  pantalla: '🖥️ ver pantalla',
-  mouse: '🖱️ mover/click',
-  teclado: '⌨️ teclas/escribir'
+  pantalla: '🖥️ View screen',
+  mouse: '🖱️ Move & click',
+  teclado: '⌨️ Keys & typing'
+};
+// Etiquetas visibles en inglés; los values siguen el protocolo Rust (CAPS/LEVELS).
+const PERM_LEVEL_LABEL: Record<string, string> = {
+  permitir: 'Allow',
+  preguntar: 'Ask',
+  bloquear: 'Block'
 };
 
 async function renderPerms(): Promise<void> {
@@ -753,13 +770,13 @@ async function renderPerms(): Promise<void> {
     for (const lv of PERM_LEVELS) {
       const opt = document.createElement('option');
       opt.value = lv;
-      opt.textContent = lv;
+      opt.textContent = PERM_LEVEL_LABEL[lv] || lv;
       sel.appendChild(opt);
     }
     sel.value = current[cap] || 'preguntar';
     sel.addEventListener('change', () => {
       void tinvoke('set_permission', { cap, level: sel.value }).catch((err) => {
-        addMsg('sistema', `Permiso falló: ${String(err)}`, 'sys');
+        addMsg('system', `Permission failed: ${String(err)}`, 'sys');
       });
     });
     row.appendChild(label);
@@ -773,10 +790,10 @@ document.querySelector('#perms-box')?.addEventListener('toggle', (e) => {
 
 // ── Ajustes (cerebro, oído, voz) ──────────────────────────────────────
 const LLM_KEY_FIELD: Record<string, { field: string; label: string }> = {
-  minimax: { field: 'llm.apiKey', label: '🔑 clave MiniMax' },
-  deepseek: { field: 'llm.deepseekKey', label: '🔑 clave DeepSeek' },
-  opencode: { field: 'llm.opencodeKey', label: '🔑 clave opencode' },
-  groq: { field: 'llm.groqKey', label: '🔑 clave Groq' }
+  minimax: { field: 'llm.apiKey', label: '🔑 MiniMax key' },
+  deepseek: { field: 'llm.deepseekKey', label: '🔑 DeepSeek key' },
+  opencode: { field: 'llm.opencodeKey', label: '🔑 opencode key' },
+  groq: { field: 'llm.groqKey', label: '🔑 Groq key' }
 };
 
 function settingRow(label: string, control: HTMLElement): HTMLDivElement {
@@ -810,9 +827,9 @@ function settingSelect(options: string[], current: string, labels?: Record<strin
 
 function flashSaved(): void {
   const prev = statusEl.textContent;
-  setStatus('ajuste guardado ✓');
+  setStatus('Saved ✓');
   window.setTimeout(() => {
-    if (statusEl.textContent === 'ajuste guardado ✓') setStatus(prev);
+    if (statusEl.textContent === 'Saved ✓') setStatus(prev);
   }, 1200);
 }
 
@@ -823,7 +840,7 @@ async function renderSettings(): Promise<void> {
   try {
     s = await getSettings();
   } catch {
-    box.textContent = 'Sin backend.';
+    box.textContent = 'No backend.';
     return;
   }
   const save = (patch: Record<string, string>, rerender = false): void => {
@@ -832,21 +849,21 @@ async function renderSettings(): Promise<void> {
         flashSaved();
         if (rerender) void renderSettings();
       })
-      .catch((err) => addMsg('sistema', `Ajuste falló: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
+      .catch((err) => addMsg('system', `Setting failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
   };
 
-  box.appendChild(settingGroup('Cerebro'));
+  box.appendChild(settingGroup('Brain'));
   const provLabels: Record<string, string> = {};
   for (const p of s.llm.providerOptions) provLabels[p.id] = p.label;
   const provSel = settingSelect(s.llm.providerOptions.map((p) => p.id), s.llm.provider, provLabels);
-  provSel.setAttribute('aria-label', 'Proveedor de razonamiento');
+  provSel.setAttribute('aria-label', 'Reasoning provider');
   provSel.addEventListener('change', () => save({ 'llm.provider': provSel.value }, true));
-  box.appendChild(settingRow('🧠 proveedor', provSel));
+  box.appendChild(settingRow('🧠 Provider', provSel));
 
   const modelSel = settingSelect(s.llm.modelOptions, s.llm.model);
-  modelSel.setAttribute('aria-label', 'Modelo');
+  modelSel.setAttribute('aria-label', 'Model');
   modelSel.addEventListener('change', () => save({ 'llm.model': modelSel.value }));
-  box.appendChild(settingRow('📦 modelo', modelSel));
+  box.appendChild(settingRow('📦 Model', modelSel));
 
   const keyInfo = LLM_KEY_FIELD[s.llm.provider] || LLM_KEY_FIELD.opencode;
   const masked = s.llm.provider === 'minimax' ? s.llm.apiKeyMasked
@@ -854,7 +871,7 @@ async function renderSettings(): Promise<void> {
     : s.llm.provider === 'opencode' ? s.llm.opencodeKeyMasked : '';
   const keyInput = document.createElement('input');
   keyInput.type = 'password';
-  keyInput.placeholder = masked || 'vacía — pegá la clave';
+  keyInput.placeholder = masked || 'Empty — paste the key';
   keyInput.setAttribute('aria-label', keyInfo.label);
   keyInput.addEventListener('change', () => {
     if (!keyInput.value) return;
@@ -863,56 +880,56 @@ async function renderSettings(): Promise<void> {
   });
   box.appendChild(settingRow(keyInfo.label, keyInput));
 
-  box.appendChild(settingGroup('Oído'));
+  box.appendChild(settingGroup('Hearing'));
   const sttSel = settingSelect(s.stt.providerOptions, s.stt.provider);
-  sttSel.setAttribute('aria-label', 'Proveedor de transcripción');
+  sttSel.setAttribute('aria-label', 'Transcription provider');
   sttSel.addEventListener('change', () => save({ 'stt.provider': sttSel.value }));
-  box.appendChild(settingRow('👂 transcripción', sttSel));
+  box.appendChild(settingRow('👂 Transcription', sttSel));
 
   const wSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
-  wSel.setAttribute('aria-label', 'Modelo Whisper local');
+  wSel.setAttribute('aria-label', 'Local Whisper model');
   wSel.addEventListener('change', () => save({ 'stt.whisperModel': wSel.value }));
-  box.appendChild(settingRow('📦 whisper local', wSel));
+  box.appendChild(settingRow('📦 Local Whisper', wSel));
 
   const groqInput = document.createElement('input');
   groqInput.type = 'password';
-  groqInput.placeholder = s.stt.groqKeyMasked || 'vacía';
-  groqInput.setAttribute('aria-label', 'Clave Groq STT');
+  groqInput.placeholder = s.stt.groqKeyMasked || 'Empty';
+  groqInput.setAttribute('aria-label', 'Groq STT key');
   groqInput.addEventListener('change', () => {
     if (!groqInput.value) return;
     save({ 'stt.groqKey': groqInput.value });
     groqInput.value = '';
   });
-  box.appendChild(settingRow('🔑 clave Groq', groqInput));
+  box.appendChild(settingRow('🔑 Groq key', groqInput));
 
   const dgInput = document.createElement('input');
   dgInput.type = 'password';
-  dgInput.placeholder = s.stt.deepgramKeyMasked || 'vacía';
-  dgInput.setAttribute('aria-label', 'Clave Deepgram');
+  dgInput.placeholder = s.stt.deepgramKeyMasked || 'Empty';
+  dgInput.setAttribute('aria-label', 'Deepgram key');
   dgInput.addEventListener('change', () => {
     if (!dgInput.value) return;
     save({ 'stt.deepgramKey': dgInput.value });
     dgInput.value = '';
   });
-  box.appendChild(settingRow('🔑 clave Deepgram', dgInput));
+  box.appendChild(settingRow('🔑 Deepgram key', dgInput));
 
   const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English', auto: 'Auto' };
   const sttLang = (s.stt.language === 'es' || s.stt.language === 'en' || s.stt.language === 'auto')
     ? s.stt.language
     : (s.stt.language.startsWith('en') ? 'en' : (s.stt.language.startsWith('auto') ? 'auto' : 'es'));
   const langSel = settingSelect(['auto', 'es', 'en'], sttLang, LANG_LABELS);
-  langSel.setAttribute('aria-label', 'Idioma de escucha');
+  langSel.setAttribute('aria-label', 'Listening language');
   langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
-  box.appendChild(settingRow('🗣️ idioma oído', langSel));
+  box.appendChild(settingRow('🗣️ Listening language', langSel));
 
-  box.appendChild(settingGroup('Voz'));
+  box.appendChild(settingGroup('Voice'));
   const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en')
     ? s.tts.language
     : (s.tts.language.startsWith('en') ? 'en' : 'es');
   const ttsSel = settingSelect(['es', 'en'], ttsLangCur, LANG_LABELS);
-  ttsSel.setAttribute('aria-label', 'Idioma de voz');
+  ttsSel.setAttribute('aria-label', 'Voice language');
   ttsSel.addEventListener('change', () => save({ 'tts.language': ttsSel.value }));
-  box.appendChild(settingRow('🗣️ idioma voz', ttsSel));
+  box.appendChild(settingRow('🗣️ Voice language', ttsSel));
 }
 document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderSettings();
@@ -946,6 +963,6 @@ layoutOrbs();
     const space = await findOrCreatePabloSpace();
     connectTo(space.companyId, space.goalId);
   } catch (err) {
-    setStatus(`sin backend: ${err instanceof Error ? err.message : 'error'}`);
+    setStatus(`No backend: ${err instanceof Error ? err.message : 'error'}`);
   }
 })();

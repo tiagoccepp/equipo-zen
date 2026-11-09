@@ -71,11 +71,11 @@ function edgeCtor() {
 export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
   const Ctor = edgeCtor();
   if (!Ctor) {
-    throw new Error('edge-tts no instalado');
+    throw new Error('edge-tts not installed');
   }
   const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EDGE_CHARS);
   if (!clean) {
-    throw new Error('texto vacío');
+    throw new Error('empty text');
   }
   const tts = new Ctor({ voice: mapVoiceToEdge(voice), lang: edgeTable().lang, timeout: timeoutMs });
   const chunks = [];
@@ -87,7 +87,7 @@ export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_T
   }
   const audio = Buffer.concat(chunks);
   if (!looksLikeMp3(audio)) {
-    throw new Error('Edge devolvió audio inválido');
+    throw new Error('Edge returned invalid audio');
   }
   return { data: audio.toString('base64'), mimeType: 'audio/mpeg' };
 }

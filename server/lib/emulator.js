@@ -55,7 +55,7 @@ export async function androidStatus() {
   if (!adb || !emulador) {
     return {
       disponible: false,
-      motivo: 'No encontré el SDK de Android. Instalá Android Studio o definí ANDROID_HOME.',
+      motivo: 'Android SDK not found. Install Android Studio or set ANDROID_HOME.',
       avds: [],
       dispositivos: []
     };
@@ -74,7 +74,7 @@ export async function androidStatus() {
 
   return {
     disponible: avds.length > 0,
-    motivo: avds.length === 0 ? 'El SDK está, pero no hay ningún dispositivo virtual creado.' : '',
+    motivo: avds.length === 0 ? 'The SDK is there, but no virtual device has been created.' : '',
     avds,
     dispositivos,
     arrancado: dispositivos.length > 0
@@ -87,7 +87,7 @@ export async function androidStatus() {
 export async function startAndroid(avd) {
   const emulador = emulatorPath();
   if (!emulador) {
-    return { ok: false, error: 'No encontré el emulador de Android.' };
+    return { ok: false, error: 'Android emulator not found.' };
   }
   const estado = await androidStatus();
   if (estado.arrancado) {
@@ -95,7 +95,7 @@ export async function startAndroid(avd) {
   }
   const elegido = avd && estado.avds.includes(avd) ? avd : estado.avds[0];
   if (!elegido) {
-    return { ok: false, error: 'No hay ningún dispositivo virtual creado en Android Studio.' };
+    return { ok: false, error: 'No virtual device created in Android Studio.' };
   }
 
   const proceso = execFile(emulador, ['-avd', elegido, '-netdelay', 'none', '-netspeed', 'full'], () => {
@@ -109,12 +109,12 @@ export async function startAndroid(avd) {
 export async function openInAndroid(companyId, slug, { esperaMs = 90000 } = {}) {
   const adb = adbPath();
   if (!adb) {
-    return { ok: false, error: 'No encontré adb.' };
+    return { ok: false, error: 'adb not found.' };
   }
 
   const espera = await correr(adb, ['wait-for-device'], esperaMs);
   if (!espera.ok) {
-    return { ok: false, error: 'El emulador no terminó de arrancar. Probá de nuevo en unos segundos.' };
+    return { ok: false, error: 'The emulator did not finish booting. Try again in a few seconds.' };
   }
   // wait-for-device vuelve apenas responde adb, pero el sistema todavía puede
   // estar booteando: sin esto, el intent se pierde en silencio.
@@ -148,7 +148,7 @@ export async function openInAndroid(companyId, slug, { esperaMs = 90000 } = {}) 
   if (!chrome.ok || /Error|does not exist/i.test(chrome.salida || '')) {
     const generico = await correr(adb, ['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url]);
     if (!generico.ok) {
-      return { ok: false, error: 'No pude abrir el navegador del emulador.' };
+      return { ok: false, error: 'Could not open the emulator browser.' };
     }
   }
 
@@ -162,7 +162,7 @@ export async function openInAndroid(companyId, slug, { esperaMs = 90000 } = {}) 
       return {
         ok: true,
         url,
-        aviso: 'Chrome abrió en su pantalla de bienvenida: aceptala una vez y volvé a tocar el botón.'
+        aviso: 'Chrome opened on its welcome screen: accept it once and press the button again.'
       };
     }
     if (/chrome|browser/i.test(linea)) {
@@ -171,7 +171,7 @@ export async function openInAndroid(companyId, slug, { esperaMs = 90000 } = {}) 
   }
   return {
     ok: false,
-    error: 'Mandé la orden pero el navegador no llegó a abrirse. Probá de nuevo en unos segundos.'
+    error: 'The command went through but the browser did not open. Try again in a few seconds.'
   };
 }
 
@@ -206,7 +206,7 @@ export async function screenshot(platform = 'android') {
 export async function wakeAndroid() {
   const adb = adbPath();
   if (!adb) {
-    return { ok: false, error: 'No encontré adb.' };
+    return { ok: false, error: 'adb not found.' };
   }
   await despertarPantalla(adb);
   return { ok: true };
@@ -229,7 +229,7 @@ export async function screenSize() {
 export async function sendInput(accion) {
   const adb = adbPath();
   if (!adb) {
-    return { ok: false, error: 'No encontré adb.' };
+    return { ok: false, error: 'adb not found.' };
   }
   const n = (valor) => Math.max(0, Math.round(Number(valor) || 0));
 
@@ -255,7 +255,7 @@ export async function sendInput(accion) {
     };
     const code = TECLAS[accion.key];
     if (!code) {
-      return { ok: false, error: 'tecla no permitida' };
+      return { ok: false, error: 'key not allowed' };
     }
     return correr(adb, ['shell', 'input', 'keyevent', code], 8000);
   }
@@ -264,11 +264,11 @@ export async function sendInput(accion) {
     // comilla no pueden inyectar un comando.
     const texto = String(accion.text || '').slice(0, 200);
     if (!texto) {
-      return { ok: false, error: 'texto vacío' };
+      return { ok: false, error: 'empty text' };
     }
     return correr(adb, ['shell', 'input', 'text', texto.replace(/ /g, '%s')], 8000);
   }
-  return { ok: false, error: 'acción desconocida' };
+  return { ok: false, error: 'unknown action' };
 }
 
 // ── iOS ─────────────────────────────────────────────────────────────────
@@ -280,13 +280,13 @@ export async function sendInput(accion) {
 export async function iosStatus() {
   const listado = await correr('xcrun', ['simctl', 'list', 'devices', 'available', '--json']);
   if (!listado.ok) {
-    return { disponible: false, motivo: 'No encontré Xcode ni sus simuladores.', dispositivos: [] };
+    return { disponible: false, motivo: 'Xcode and its simulators not found.', dispositivos: [] };
   }
   let datos = {};
   try {
     datos = JSON.parse(listado.salida);
   } catch {
-    return { disponible: false, motivo: 'No pude leer la lista de simuladores.', dispositivos: [] };
+    return { disponible: false, motivo: 'Could not read the simulator list.', dispositivos: [] };
   }
   const dispositivos = Object.values(datos.devices || {})
     .flat()
@@ -294,7 +294,7 @@ export async function iosStatus() {
     .map((d) => ({ udid: d.udid, nombre: d.name, arrancado: d.state === 'Booted' }));
   return {
     disponible: dispositivos.length > 0,
-    motivo: dispositivos.length === 0 ? 'No hay simuladores de iPhone instalados.' : '',
+    motivo: dispositivos.length === 0 ? 'No iPhone simulators installed.' : '',
     dispositivos,
     arrancado: dispositivos.some((d) => d.arrancado)
   };
@@ -309,7 +309,7 @@ export async function openInIos(companyId, slug) {
   if (!destino.arrancado) {
     const arranque = await correr('xcrun', ['simctl', 'boot', destino.udid], 60000);
     if (!arranque.ok) {
-      return { ok: false, error: 'No pude arrancar el simulador.' };
+      return { ok: false, error: 'Could not boot the simulator.' };
     }
     await correr('open', ['-a', 'Simulator']);
     await new Promise((resolve) => setTimeout(resolve, 4000));

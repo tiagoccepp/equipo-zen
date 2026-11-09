@@ -259,7 +259,7 @@ test('la bitácora acumula lo que dejó cada uno', async () => {
   assert.match(texto, /Hice el hero/);
   assert.match(texto, /Delfina/);
   assert.match(texto, /falta el modo oscuro/);
-  assert.equal(texto.match(/# Bitácora del proyecto/g).length, 1, 'una sola cabecera');
+  assert.equal(texto.match(/# Project log/g).length, 1, 'una sola cabecera');
 
   rmSync(dir, { recursive: true, force: true });
 });

@@ -200,7 +200,7 @@ export function parsearErroresPython(salida, archivoPorDefecto = null) {
       errores.push({
         archivo: ubicacion[1].trim(),
         linea: Number(ubicacion[2]),
-        que: que || 'no compila (el intérprete no pudo leer el archivo)'
+        que: que || 'does not compile (the interpreter could not read the file)'
       });
       continue;
     }
@@ -233,12 +233,12 @@ export async function compilarPython(dir) {
   const python = pythonBin();
   const version = await correr(python, ['--version'], { cwd: dir, timeout: 15000 });
   if (!version.ok) {
-    return { ok: false, saltado: true, motivo: 'No encontré Python 3 en la máquina.' };
+    return { ok: false, saltado: true, motivo: 'Python 3 not found on this machine.' };
   }
 
   const archivos = archivosPython(dir);
   if (archivos.length === 0) {
-    return { ok: false, saltado: true, motivo: 'No hay ningún archivo .py que compilar.' };
+    return { ok: false, saltado: true, motivo: 'No .py files to compile.' };
   }
 
   const cache = path.join(process.env.TMPDIR || '/tmp', 'equipo-pycache');
@@ -250,7 +250,7 @@ export async function compilarPython(dir) {
       env: { PYTHONPYCACHEPREFIX: cache, PYTHONDONTWRITEBYTECODE: '' }
     });
     if (r.expiro) {
-      errores.push({ archivo, linea: null, que: 'la compilación de este archivo tardó demasiado y se cortó' });
+      errores.push({ archivo, linea: null, que: 'compiling this file took too long and was cut off' });
     } else if (!r.ok) {
       errores.push(...parsearErroresPython(r.salida, archivo));
     }
@@ -266,11 +266,11 @@ export async function compilarPython(dir) {
 export async function compilarAndroid(dir) {
   const gradle = gradleBin();
   if (!gradle) {
-    return { ok: false, saltado: true, motivo: 'No hay ninguna distribución de Gradle en la caché.' };
+    return { ok: false, saltado: true, motivo: 'No Gradle distribution in the cache.' };
   }
   const sdk = SDK_ROOT();
   if (!existsSync(sdk)) {
-    return { ok: false, saltado: true, motivo: 'No encontré el SDK de Android.' };
+    return { ok: false, saltado: true, motivo: 'Android SDK not found.' };
   }
 
   const r = await correr(gradle, ['assembleDebug', '--console=plain'], {
@@ -279,7 +279,7 @@ export async function compilarAndroid(dir) {
   });
 
   if (r.expiro) {
-    return { ok: false, errores: [{ archivo: 'compilación', linea: null, que: 'La compilación tardó demasiado y se cortó.' }] };
+    return { ok: false, errores: [{ archivo: 'compilación', linea: null, que: 'The build took too long and was cut off.' }] };
   }
   if (!r.ok || /BUILD FAILED/.test(r.salida)) {
     return { ok: false, errores: parsearErroresKotlin(r.salida) };
@@ -306,17 +306,17 @@ export async function compilarAndroid(dir) {
 export async function instalarYAbrir(apk, dir) {
   const adb = path.join(SDK_ROOT(), 'platform-tools', 'adb');
   if (!existsSync(adb) || !apk) {
-    return { ok: false, motivo: 'Sin adb o sin APK.' };
+    return { ok: false, motivo: 'No adb or no APK.' };
   }
   const devices = await correr(adb, ['devices'], { timeout: 10000 });
   const hayDispositivo = (devices.salida || '').split('\n').slice(1).some((l) => /\sdevice$/.test(l.trim()));
   if (!hayDispositivo) {
-    return { ok: false, motivo: 'No hay ningún emulador encendido.' };
+    return { ok: false, motivo: 'No emulator is running.' };
   }
 
   const install = await correr(adb, ['install', '-r', apk], { timeout: 180000 });
   if (!install.ok || /Failure/.test(install.salida)) {
-    return { ok: false, motivo: `No se pudo instalar: ${install.salida.slice(-200)}` };
+    return { ok: false, motivo: `Could not install: ${install.salida.slice(-200)}` };
   }
 
   // El paquete sale del manifiesto; sin él no se puede lanzar.
@@ -326,7 +326,7 @@ export async function instalarYAbrir(apk, dir) {
     || gradleApp.match(/applicationId\s*=\s*"([^"]+)"/)?.[1]
     || gradleApp.match(/namespace\s*=\s*"([^"]+)"/)?.[1];
   if (!paquete) {
-    return { ok: true, instalado: true, motivo: 'Instalada, pero no pude deducir el paquete para abrirla.' };
+    return { ok: true, instalado: true, motivo: 'Installed, but could not figure out the package to open it.' };
   }
 
   await correr(adb, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], { timeout: 8000 });
@@ -354,8 +354,8 @@ export async function construirApp(dir, stackEsperado = null) {
         archivo: hayWeb ? 'index.html' : 'el proyecto',
         linea: null,
         que: hayWeb
-          ? 'entregaste una página web. Acá va un programa Python que se corre con python3, no algo que se abre en el navegador'
-          : 'no hay ningún archivo .py: falta el programa (main.py, y src/<modulo>.py si se dividió)'
+          ? 'you delivered a web page. This needs a Python program run with python3, not something opened in a browser'
+          : 'no .py files: the program is missing (main.py, plus src/<module>.py if split)'
       }]
     };
   }
@@ -372,12 +372,12 @@ export async function construirApp(dir, stackEsperado = null) {
         archivo: hayWeb ? 'index.html' : 'el proyecto',
         linea: null,
         que: stackEsperado === 'android'
-          ? 'esto no es una app Android: falta el proyecto Gradle (settings.gradle.kts, app/build.gradle.kts, app/src/main/AndroidManifest.xml y MainActivity.kt)'
-          : 'esto no es una app móvil: falta el proyecto React Native (package.json con react-native, app.json y App.jsx)'
+          ? 'this is not an Android app: the Gradle project is missing (settings.gradle.kts, app/build.gradle.kts, app/src/main/AndroidManifest.xml and MainActivity.kt)'
+          : 'this is not a mobile app: the React Native project is missing (package.json with react-native, app.json and App.jsx)'
       }, ...(hayWeb ? [{
         archivo: 'index.html',
         linea: null,
-        que: 'entregaste una página web. Este proyecto es una APP que se instala en el teléfono, no un sitio que se abre en el navegador'
+        que: 'you delivered a web page. This project is an APP installed on the phone, not a site opened in a browser'
       }] : [])]
     };
   }
@@ -405,7 +405,7 @@ export async function construirApp(dir, stackEsperado = null) {
     }
     return { tipo, ...build };
   }
-  return { tipo: null, saltado: true, motivo: 'No hay nada que compilar acá.' };
+  return { tipo: null, saltado: true, motivo: 'Nothing to build here.' };
 }
 
 // Revisión de un proyecto React Native SIN instalar dependencias: que sea una
@@ -417,14 +417,14 @@ export async function revisarReactNative(dir) {
   try {
     pkg = JSON.parse(pkgTexto);
   } catch {
-    errores.push({ archivo: 'package.json', linea: null, que: 'no es JSON válido' });
+    errores.push({ archivo: 'package.json', linea: null, que: 'not valid JSON' });
   }
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   if (!deps['react-native']) {
-    errores.push({ archivo: 'package.json', linea: null, que: 'falta la dependencia react-native: esto no es una app móvil' });
+    errores.push({ archivo: 'package.json', linea: null, que: 'missing the react-native dependency: this is not a mobile app' });
   }
   if (!existsSync(path.join(dir, 'app.json'))) {
-    errores.push({ archivo: 'app.json', linea: null, que: 'falta app.json (nombre, slug, icono y splash de la app)' });
+    errores.push({ archivo: 'app.json', linea: null, que: 'missing app.json (the app name, slug, icon and splash)' });
   }
 
   // Etiquetas HTML en el código: el error clásico de entregar una web.
@@ -441,14 +441,14 @@ export async function revisarReactNative(dir) {
           errores.push({
             archivo: path.relative(dir, completo),
             linea: null,
-            que: `usa <${html[1]}> de HTML. En React Native va View, Text, Pressable, FlatList — esto no es una web`
+            que: `uses HTML <${html[1]}>. In React Native use View, Text, Pressable, FlatList — this is not a web page`
           });
         }
         if (/document\.|window\.|localStorage/.test(texto)) {
           errores.push({
             archivo: path.relative(dir, completo),
             linea: null,
-            que: 'usa APIs del navegador (document/window/localStorage), que no existen en una app móvil'
+            que: 'uses browser APIs (document/window/localStorage), which do not exist in a mobile app'
           });
         }
       }

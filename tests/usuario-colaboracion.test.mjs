@@ -251,7 +251,7 @@ test('el que agarra el proyecto después se entera de lo que dejó pendiente el 
     texto.indexOf('Unifiqué la paleta') > texto.indexOf('falta el formulario de contacto'),
     'se lee en orden: lo último, abajo'
   );
-  assert.equal(texto.match(/# Bitácora del proyecto/g).length, 1, 'una sola cabecera');
+  assert.equal(texto.match(/# Project log/g).length, 1, 'una sola cabecera');
 
   // Con los meses la bitácora crece. Se recorta, pero lo que sobrevive tiene
   // que ser lo reciente: es lo que le sirve al que entra ahora.
@@ -267,5 +267,5 @@ test('el que agarra el proyecto después se entera de lo que dejó pendiente el 
   assert.ok(larga.length < 22000, `la bitácora no crece sin techo (quedó en ${larga.length})`);
   assert.match(larga, /traspaso número 59\./, 'lo último que pasó sigue estando');
   assert.doesNotMatch(larga, /falta el formulario de contacto/, 'lo viejo se cae antes que lo nuevo');
-  assert.equal(larga.match(/# Bitácora del proyecto/g).length, 1, 'sigue teniendo una sola cabecera');
+  assert.equal(larga.match(/# Project log/g).length, 1, 'sigue teniendo una sola cabecera');
 });

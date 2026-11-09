@@ -112,10 +112,10 @@ test('si entregan una web disfrazada de app, el rechazo dice qué archivo es y q
   assert.equal(revision.ok, false, 'esto no se puede instalar en un celular');
 
   const texto = revision.errores.map((e) => `${e.archivo}: ${e.que}`).join('\n');
-  assert.match(texto, /falta la dependencia react-native/, 'dice qué le falta al package.json');
-  assert.match(texto, /falta app\.json/, 'dice que sin app.json la app no tiene ni nombre ni ícono');
+  assert.match(texto, /missing the react-native dependency/, 'dice qué le falta al package.json');
+  assert.match(texto, /missing app\.json/, 'dice que sin app.json la app no tiene ni nombre ni ícono');
   assert.match(texto, /App\.jsx/, 'dice en qué archivo está el problema');
-  assert.match(texto, /<(div|h1)> de HTML/, 'nombra la etiqueta que no va');
+  assert.match(texto, /HTML <(div|h1)>/, 'nombra la etiqueta que no va');
   assert.match(texto, /View, Text, Pressable/, 'y dice qué usar en su lugar');
 
   const informe = renderBuildReport({ tipo: 'react-native', ok: false, errores: revision.errores });
@@ -147,7 +147,7 @@ test('guardar en localStorage no funciona en un celular y el equipo se entera an
 
   const revision = await revisarReactNative(dir);
   assert.equal(revision.ok, false);
-  const culpable = revision.errores.find((e) => /APIs del navegador/.test(e.que));
+  const culpable = revision.errores.find((e) => /browser APIs/.test(e.que));
   assert.ok(culpable, 'el rechazo explica que esas APIs no existen en una app móvil');
   assert.equal(culpable.archivo, path.join('src', 'almacenamiento.js'), 'y señala el archivo exacto');
 
