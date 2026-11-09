@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail \"npm:dev:server\" \"npm:dev:client\" \"npm:dev:tts\" \"npm:dev:stt\"",
+    "dev": "concurrently --kill-others-on-fail \"npm:dev:server\" \"npm:dev:client\" \"npm:dev:tts\" \"npm:dev:stt\" \"npm:dev:parakeet\" \"npm:dev:piper\"",
     "dev:server": "node --watch server/index.js",
     "dev:client": "vite --host 127.0.0.1 --port 5173",
     "dev:bg": "concurrently npm:dev:server npm:dev:client",
@@ -16,6 +16,7 @@
     "test": "node --test tests/*.test.mjs",
     "dev:tts": "sh -c '.venv-tts/bin/supertonic serve --host 127.0.0.1 --port 7788 || echo \"[tts] Supertonic no instalado (ver README); la reunión corre sin voz\"'",
     "dev:stt": "sh -c '.venv-tts/bin/python server/stt/whisper_server.py || echo \"[stt] Whisper local no disponible (ver README); se usa el navegador\"'",
+    "dev:parakeet": "sh -c 'python3 server/stt/parakeet_server.py || echo \"[parakeet] no disponible (pip install sherpa-onnx + modelo en ~/.local/share/equipo/sherpa); cae a Whisper\"'",
     "dev:piper": "sh -c 'python3 server/tts/piper_server.py || echo \"[piper] no disponible (pip install piper-tts + voces en ~/.local/share/piper); cae a Supertonic/Edge\"'",
     "doctor": "node scripts/doctor.mjs"
   },

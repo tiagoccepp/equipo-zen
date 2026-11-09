@@ -77,3 +77,27 @@ def transcribe(request: TranscribeRequest):
     text = stream.result.text.strip()
     duration_ms = int((time.monotonic() - started) * 1000)
     return {"text": text, "language": request.language or "es", "durationMs": duration_ms}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Warmup tolerante: carga encoder/decoder/joiner + un decode en caliente
+    # con 0.5s de silencio para que el primer turno real no pague el load
+    # (~2-5s). Si el modelo falta, se avisa y se arranca igual (el STT cae a
+    # Whisper como antes, la cadena no muere).
+    try:
+        import numpy as np
+
+        _rec = get_recognizer()
+        _s = _rec.create_stream()
+        _s.accept_waveform(16000, np.zeros(8000, dtype=np.float32))
+        _rec.decode_stream(_s)
+    except Exception as _e:
+        print(f"[parakeet] warmup falló ({_e}); arranco igual")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=int(os.environ.get("PARAKEET_PORT", "7790")),
+        log_level="warning",
+    )
