@@ -5,10 +5,18 @@ import { telemetry } from './telemetry.js';
 // STT del usuario. Proveedores:
 //  - local  (default): Parakeet-TDT-0.6B-v3 vía sherpa-onnx
 //              (server/stt/parakeet_server.py, :7790, ~0.4s en CPU),
-//              con fallback a Whisper faster-whisper (:7789).
+//              con respaldo OPORTUNISTA a Whisper faster-whisper (:7789).
 //  - groq   : Whisper hosteado por Groq (API OpenAI-compatible, rapidísimo).
 //  - deepgram: Nova-3 cloud (smart_format + keyterms; ~2.3s desde UY).
 //  - browser: SpeechRecognition del navegador (solo el hint del cliente).
+//
+// DECISIÓN 09/11 (auditoría SKIP/flaky): Parakeet-único-local + fallback
+// cloud. faster-whisper NO está instalado en esta máquina (sin .venv-tts,
+// `import faster_whisper` falla) y nada lo levanta: Whisper es un respaldo
+// oportunista —si algún día responde en :7789 se usa, si no, el
+// connection-refused falla en ~1ms SIN reintentos ni sleep (ver
+// transcribeLocal + test 'ambos caídos … <500ms'). La cadena real es:
+// Parakeet → Whisper(oportunista) → Groq(key) → Deepgram(key) → hint.
 
 const STT_TIMEOUT_MS = 20000;
 // Parakeet mide ~398ms de mediana; 8s = colgado, caer a Whisper ya.
@@ -136,7 +144,9 @@ export async function postTranscribe(url, wavBase64, { withModel = false, timeou
 }
 
 export async function transcribeLocal(wavBase64, { parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
-  // Parakeet primero (rápido); Whisper de respaldo (compatible). Si el
+  // Parakeet primero (rápido); Whisper de respaldo OPORTUNISTA (casi nunca
+  // está: sin faster-whisper instalado el puerto está cerrado y el fetch
+  // rechaza en ~1ms, SIN reintentos ni sleeps — el skip es gratis). Si el
   // health dice caído, se salta directo a Whisper sin pagar el intento.
   if (await isParakeetAvailable(parakeetUrl)) {
     try {

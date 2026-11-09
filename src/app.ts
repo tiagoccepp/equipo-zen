@@ -10,11 +10,13 @@ import {
   findOrCreatePabloSpace,
   firstProject,
   getSettings,
+  getSidecars,
   listCompanies,
   resolveBase,
   saveSettings,
   type Agent,
-  type PublicSettings
+  type PublicSettings,
+  type SidecarStatus
 } from './client.ts';
 import { BrowserSpeech, LiveMic, VoiceOut, computeEndpointing, hintTail, type TurnVoiceStats } from './voice.ts';
 
@@ -1006,9 +1008,103 @@ async function renderSettings(): Promise<void> {
   ttsSel.setAttribute('aria-label', 'Voice language');
   ttsSel.addEventListener('change', () => save({ 'tts.language': ttsSel.value }));
   box.appendChild(settingRow('🗣️ Voice language', ttsSel));
+
+  // Sidecars: estado del watchdog STT/TTS (GET directo, sin WS).
+  box.appendChild(settingGroup('Sidecars'));
+  const scWrap = document.createElement('div');
+  scWrap.id = 'sidecars-list';
+  scWrap.className = 'sidecars';
+  const scLoading = document.createElement('div');
+  scLoading.className = 'sidecar-note';
+  scLoading.textContent = 'Loading sidecars…';
+  scWrap.appendChild(scLoading);
+  box.appendChild(scWrap);
+  const scFoot = document.createElement('div');
+  scFoot.className = 'sidecars-foot';
+  const scRefresh = document.createElement('button');
+  scRefresh.className = 'pill';
+  scRefresh.textContent = '↻ Refresh';
+  scRefresh.setAttribute('aria-label', 'Refresh sidecar status');
+  scRefresh.addEventListener('click', () => void renderSidecars(scWrap));
+  scFoot.appendChild(scRefresh);
+  box.appendChild(scFoot);
+  void renderSidecars(scWrap);
+}
+
+// ── Sidecars: 1 fila por sidecar (dot + métricas del watchdog) ─────────
+// Auto-refresh cada 20s SOLO con Ajustes abierto; al cerrar se limpia.
+let sidecarTimer: number | null = null;
+const SIDECAR_REFRESH_MS = 20000;
+
+function sidecarRow(s: SidecarStatus): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'sidecar-row';
+  const dot = document.createElement('span');
+  // status del server: 'up' | 'down' | 'unknown' (watchdog aún sin tick).
+  const cls = s.status === 'up' ? 'up' : s.status === 'down' ? 'down' : 'unknown';
+  dot.className = `sidecar-dot ${cls}`;
+  dot.title = s.status;
+  const name = document.createElement('span');
+  name.className = 'sidecar-name';
+  name.textContent = s.name;
+  const meta = document.createElement('span');
+  meta.className = 'sidecar-meta';
+  meta.textContent =
+    `${s.status} · downs ${s.downs} · restarts/h ${s.restartsLastHour} · autostart ${s.autostart ? 'on' : 'off'}`;
+  row.append(dot, name, meta);
+  return row;
+}
+
+async function renderSidecars(wrap: HTMLElement): Promise<void> {
+  // Sin loading intermedio en cada refresh: el contenido viejo queda hasta
+  // que el fetch resuelve (evita flicker en el auto-refresh de 20s).
+  let list: SidecarStatus[];
+  try {
+    list = await getSidecars();
+  } catch {
+    wrap.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'sidecar-note';
+    err.textContent = 'Sidecars unavailable — is the backend running?';
+    wrap.appendChild(err);
+    return;
+  }
+  wrap.innerHTML = '';
+  if (list.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'sidecar-note';
+    empty.textContent = 'No sidecars configured.';
+    wrap.appendChild(empty);
+    return;
+  }
+  for (const s of list) wrap.appendChild(sidecarRow(s));
+}
+
+function stopSidecarRefresh(): void {
+  if (sidecarTimer !== null) {
+    window.clearInterval(sidecarTimer);
+    sidecarTimer = null;
+  }
+}
+
+function startSidecarRefresh(): void {
+  stopSidecarRefresh();
+  sidecarTimer = window.setInterval(() => {
+    // El contenedor se rebusca en cada tick: renderSettings lo recrea.
+    const box = document.getElementById('settings-box') as HTMLDetailsElement | null;
+    const el = document.getElementById('sidecars-list');
+    if (!box?.open || !el) return;
+    void renderSidecars(el);
+  }, SIDECAR_REFRESH_MS);
 }
 document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
-  if ((e.target as HTMLDetailsElement).open) void renderSettings();
+  const open = (e.target as HTMLDetailsElement).open;
+  if (open) {
+    void renderSettings();
+    startSidecarRefresh();
+  } else {
+    stopSidecarRefresh();
+  }
 });
 if (isTauri()) {
   $('perms-box').hidden = false;

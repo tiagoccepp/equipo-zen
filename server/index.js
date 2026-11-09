@@ -8,12 +8,13 @@ import { ApiKeyRing } from './lib/key-ring.js';
 import { broadcastToCompany } from './lib/meeting-session.js';
 import { synthesizePiper } from './lib/piper.js';
 import { initSettings } from './lib/settings.js';
-import { startSidecarWatchdog } from './lib/sidecars.js';
+import { firstNonEmpty, loadWarmupWavBase64, pcmToWav16kBase64, startSidecarWatchdog, withTimeoutMs } from './lib/sidecars.js';
 import { Store } from './lib/store.js';
 import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable, synthesize } from './lib/supertonic.js';
 
-// WAV 16k mono, 0.5s de silencio, en base64. Sirve para calentar los STT.
+// WAV 16k mono, 0.5s de silencio, en base64. Último recurso si no hay
+// fixture ni Piper: calentar con algo siempre gana.
 function silenceWavBase64() {
   const pcm = Buffer.alloc(16000);
   const header = Buffer.alloc(44);
@@ -47,28 +48,47 @@ async function warmStt(url, wav) {
   }
 }
 
+// Tasa del PCM que devuelve Piper (mimeType audio/pcm;rate=NN).
+function piperPcmRate(mimeType) {
+  const m = /rate=(\d+)/.exec(String(mimeType || ''));
+  return m ? Number(m[1]) : 22050;
+}
+
 // Calienta en paralelo lo que realmente se usa (plan §2d): Piper (TTS
 // primero: una frase ES + una EN), Parakeet (STT primero) y Whisper (STT
 // fallback), más Supertonic de yapa porque salía gratis (una línea).
-// Todo fire-and-forget: nada bloquea el boot.
+// El STT se calienta con HABLA REAL (09/11: el silencio emite ~0 tokens y
+// kswapd igual saca el encoder en idle): frase de Piper si responde, si
+// no el fixture bundledo, si no silencio. Todo con techo y
+// fire-and-forget: nada bloquea el boot, ni Piper caído.
 async function prewarmLocalModels() {
-  const wav = silenceWavBase64();
+  const fixture = loadWarmupWavBase64();
+  const fallbackWav = firstNonEmpty(fixture, silenceWavBase64());
   const parakeetUrl = process.env.PARAKEET_URL || 'http://127.0.0.1:7790';
   const whisperUrl = process.env.WHISPER_URL || 'http://127.0.0.1:7789';
-  const [ttsPiper, sttParakeet, sttWhisper, ttsSupertonic] = await Promise.all([
-    (async () => {
-      try {
-        const [es, en] = await Promise.all([
-          synthesizePiper('Hola.', 'F1', {}),
-          synthesizePiper('Hello.', 'F1', {})
-        ]);
-        return es.length > 0 && en.length > 0 ? 'warm' : 'empty';
-      } catch {
-        return 'down';
-      }
-    })(),
-    warmStt(parakeetUrl, wav),
-    warmStt(whisperUrl, wav),
+  // Piper con techo propio: si tarda o está DOWN, el STT igual se
+  // calienta con el fixture (el boot nunca espera de más).
+  const ttsPiper = await withTimeoutMs((async () => {
+    try {
+      const [es, en, warm] = await Promise.all([
+        synthesizePiper('Hola.', 'F1', {}),
+        synthesizePiper('Hello.', 'F1', {}),
+        synthesizePiper('warming up speech recognition.', 'F1', {})
+      ]);
+      const spoken = warm?.[0] || es?.[0] || en?.[0] || null;
+      const asWav = spoken?.data ? pcmToWav16kBase64(spoken.data, piperPcmRate(spoken.mimeType)) : null;
+      return {
+        status: es.length > 0 && en.length > 0 ? 'warm' : 'empty',
+        wav: firstNonEmpty(asWav, fixture, silenceWavBase64())
+      };
+    } catch {
+      return { status: 'down', wav: fallbackWav };
+    }
+  })(), 10000, { status: 'down', wav: fallbackWav });
+  const sttWav = ttsPiper.wav || fallbackWav;
+  const [sttParakeet, sttWhisper, ttsSupertonic] = await Promise.all([
+    warmStt(parakeetUrl, sttWav),
+    warmStt(whisperUrl, sttWav),
     (async () => {
       try {
         const parts = await synthesize('Hola.', 'M1', {});
@@ -78,7 +98,7 @@ async function prewarmLocalModels() {
       }
     })()
   ]);
-  return { ttsPiper, sttParakeet, sttWhisper, ttsSupertonic };
+  return { ttsPiper: ttsPiper.status, sttParakeet, sttWhisper, ttsSupertonic };
 }
 import { telemetry } from './lib/telemetry.js';
 import { Workforce } from './lib/workforce.js';
@@ -123,7 +143,7 @@ server.listen(PORT, HOST, () => {
     void whisperHealthy().then((ok) => {
       console.log(ok
         ? 'Whisper local: OK (tu voz se transcribe en la máquina).'
-        : 'Whisper local no responde todavía: el STT usará el hint del navegador.');
+        : 'Whisper local caído (no instalado): STT = Parakeet → Groq/Deepgram si hay keys → hint del navegador.');
     });
     // Prewarm: calentar TTS/STT en fondo para que el primer turno no pague
     // la carga del modelo (Parakeet frío 3.4s → tibio 0.4s).

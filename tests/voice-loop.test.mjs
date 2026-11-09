@@ -24,7 +24,7 @@ async function appViva(base) {
 }
 
 for (const caso of Object.keys(CASOS)) {
-  test(`turno de voz E2E [${caso}]`, { timeout: 90_000 }, async (t) => {
+  test(`turno de voz E2E [${caso}]`, { timeout: 180_000 }, async (t) => { // 2 intentos × (synth+collecta 30s) bajo carga de suite superan 90s
     if (!PORT) {
       t.skip('app DOWN: sin puerto (server.log ausente y sin VOICE_PORT). Post-merge: node scripts/voice-smoke.mjs [PORT] both');
       return;

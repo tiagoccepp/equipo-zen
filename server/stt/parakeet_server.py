@@ -51,7 +51,19 @@ class TranscribeRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": "parakeet-v3"}
+    # VmSwap propio: hace visible la causa raíz del STT lento (09/11:
+    # kswapd saca ~680MB del encoder tras 4min idle y el primer decode
+    # paga ~5s de page-in). Barato: una lectura de /proc/self/status.
+    out = {"ok": True, "model": "parakeet-v3"}
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmSwap:"):
+                    out["vmSwapKb"] = int(line.split()[1])
+                    break
+    except Exception:
+        pass
+    return out
 
 
 def _wav_to_float32(raw: bytes):
@@ -79,20 +91,56 @@ def transcribe(request: TranscribeRequest):
     return {"text": text, "language": request.language or "es", "durationMs": duration_ms}
 
 
+def _find_warmup_wav():
+    # Audio REAL para el warmup (el silencio emite ~0 tokens y no ejercita
+    # el loop TDT; el chirp sí). Orden: fixture del repo, test_wavs del
+    # modelo, test_wavs junto al server.
+    import glob
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, "..", "..", "tests", "fixtures", "parakeet-warmup.wav")]
+    candidates += sorted(glob.glob(os.path.join(MODEL_DIR, "test_wavs", "*.wav")))
+    candidates += sorted(glob.glob(os.path.join(here, "test_wavs", "*.wav")))
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def _synth_chirp(seconds=0.7):
+    # Fallback si no hay ningún wav: chirp 300->1400Hz con armónicos
+    # (nunca silencio: tiene que emitir tokens de verdad).
+    import numpy as np
+
+    n = int(16000 * seconds)
+    t = np.arange(n) / 16000
+    f = 300 + (1400 - 300) * t / seconds
+    phase = 2 * np.pi * np.cumsum(f) / 16000
+    env = np.sin(np.pi * t / seconds) ** 0.5
+    return (env * (0.6 * np.sin(phase) + 0.25 * np.sin(2 * phase))).astype(np.float32)
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    # Warmup tolerante: carga encoder/decoder/joiner + un decode en caliente
-    # con 0.5s de silencio para que el primer turno real no pague el load
-    # (~2-5s). Si el modelo falta, se avisa y se arranca igual (el STT cae a
-    # Whisper como antes, la cadena no muere).
+    # Warmup tolerante: carga encoder/decoder/joiner + decode COMPLETO con
+    # habla real para que el primer turno no pague ni el load ni el page-in
+    # (~5s bajo swap). Si el modelo falta, se avisa y se arranca igual (el
+    # STT cae a Whisper como antes, la cadena no muere).
     try:
-        import numpy as np
-
         _rec = get_recognizer()
+        _wav_path = _find_warmup_wav()
+        if _wav_path:
+            with open(_wav_path, "rb") as _fh:
+                _samples, _ = _wav_to_float32(_fh.read())
+            print(f"[parakeet] warmup con {_wav_path}")
+        else:
+            _samples = _synth_chirp()
+            print("[parakeet] warmup con chirp sintetizado (sin fixture)")
         _s = _rec.create_stream()
-        _s.accept_waveform(16000, np.zeros(8000, dtype=np.float32))
+        _s.accept_waveform(16000, _samples)
         _rec.decode_stream(_s)
+        print(f"[parakeet] warmup texto: {(_s.result.text or '').strip()[:60]!r}")
     except Exception as _e:
         print(f"[parakeet] warmup falló ({_e}); arranco igual")
     uvicorn.run(

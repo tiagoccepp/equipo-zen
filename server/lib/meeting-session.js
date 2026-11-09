@@ -22,6 +22,7 @@ import { listProjectFilesFor, renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { CaptureTranscriberRuntime } from './transcriber.js';
+import { maybeConsultSala } from './turn-pipeline.js';
 import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
@@ -43,7 +44,17 @@ const PERSISTED_TELEMETRY_TYPES = new Set([
   'ai_route_planned',
   'turn_error',
   'client_voice',
-  'audio_turn_stt'
+  'audio_turn_stt',
+  // Noche 09/11: sin esto la sala, el watchdog y los retry STT son
+  // invisibles post-hoc (iban solo al ring en RAM). Todos bajo volumen.
+  'sala_note',
+  'sala_skip',
+  'sidecar_restart',
+  'sidecar_down',
+  'sidecar_restart_failed',
+  'parakeet_keepalive_failing',
+  'host_swap_pressure',
+  'stt_retry'
 ]);
 
 // Una sola sesión WS viva por reunión (single-writer): una segunda pestaña
@@ -1265,6 +1276,16 @@ export class MeetingSession {
       return;
     }
 
+    // Team v1 (sala): 1 consulta silenciosa a especialista tras flag sala.v1.
+    // Todo fallo/timeout/flag-off degrada a turno normal (maybeConsultSala
+    // nunca lanza). El NOTE se anexa solo al texto que ve el modelo.
+    let teamNote = '';
+    try {
+      teamNote = await maybeConsultSala({ text, route, deps: { completeChat, keyRing: this.keyRing, onTelemetry: (t, p) => this.logTelemetry(t, p, turnId) } }) || '';
+    } catch {
+      teamNote = '';
+    }
+
     for (const target of route.targets) {
       if (signal?.aborted) {
         return;
@@ -1283,7 +1304,7 @@ export class MeetingSession {
       }, turnId);
       const response = await agent.respond({
         speaker: 'Usuario',
-        text,
+        text: teamNote ? `${text}\n\n${teamNote}` : text,
         source,
         route,
         target,

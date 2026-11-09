@@ -202,6 +202,23 @@ test('stt: local parakeet vacío → cae a whisper', async () => {
   }
 });
 
+test('stt: local con ambos caídos (puertos cerrados) falla rápido <500ms, sin reintentos', async () => {
+  // Decisión 09/11: Whisper es respaldo oportunista. Con los puertos
+  // cerrados (el caso real: sin faster-whisper instalado) el
+  // connection-refused tiene que rechazar casi al instante, sin quemar
+  // los 8s/20s de timeout. Margen generoso (500ms vs ~1ms real) para
+  // que no flakee bajo carga.
+  process.env.no_proxy = '*';
+  process.env.NO_PROXY = '*';
+  const started = Date.now();
+  await assert.rejects(() => transcribeLocal(shortWav(), {
+    parakeetUrl: 'http://127.0.0.1:1',
+    whisperUrl: 'http://127.0.0.1:2'
+  }));
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 500, `rechazó en ${elapsed}ms, tendría que ser <500ms`);
+});
+
 // ── Orden completo: local → groq → deepgram → hint ─────────────────────
 
 test('stt: orden local ok (alta confianza) → groq/deepgram ni se llaman', async () => {

@@ -18,7 +18,7 @@ import net from 'node:net';
 import path from 'node:path';
 
 import { clasificarComando, ejecutar } from './herramientas.js';
-import { projectDir, safeWorkspacePath } from './workforce.js';
+import { esCarpetaIgnorada, projectDir, safeWorkspacePath } from './workforce.js';
 
 // ---------------------------------------------------------------------------
 // 1. Registry
@@ -114,6 +114,53 @@ registerTool({
       return { ok: true, output: contenido.slice(0, 30000) };
     } catch (error) {
       return { ok: false, output: '', error: `no pude leer ${args.path}: ${errorClaro(error)}` };
+    }
+  }
+});
+
+// Tope de entradas de list_files: un proyecto con miles de archivos no
+// puede volcarse al prompt (además el registry ya recorta salidas a 2000ch).
+const LIST_FILES_MAX = 100;
+
+registerTool({
+  name: 'list_files',
+  description: 'Lista archivos y carpetas del proyecto. Sin ocultos ni dependencias.',
+  parameters: {
+    type: 'object',
+    properties: { dir: { type: 'string', description: 'Subcarpeta relativa (default raíz)' } },
+    required: []
+  },
+  execute: async (args, ctx) => {
+    const { companyId, slug } = ctxWorkspace(ctx);
+    const raw = String(args.dir || '').trim();
+    let target = projectDir(companyId, slug);
+    if (raw) {
+      // La subcarpeta pasa por el mismo guardia que los archivos: se valida
+      // con un nombre hijo sintético (el guardia exige extensión válida) y
+      // se lista el dirname validado. Escapes, absolutos y ocultos tiran.
+      try {
+        target = path.dirname(safeWorkspacePath(companyId, slug, path.join(raw, 'lista.tmp.txt')));
+      } catch (error) {
+        return { ok: false, output: '', error: `no pude listar ${raw}: ${errorClaro(error)}` };
+      }
+    }
+    try {
+      const entries = await fs.readdir(target, { withFileTypes: true });
+      const nombres = [];
+      for (const entry of entries) {
+        if (entry.name.startsWith('.') || esCarpetaIgnorada(entry.name)) continue;
+        nombres.push(entry.isDirectory() ? `${entry.name}/` : entry.name);
+      }
+      nombres.sort();
+      if (nombres.length === 0) {
+        return { ok: true, output: '(vacío)' };
+      }
+      const total = nombres.length;
+      const pagina = nombres.slice(0, LIST_FILES_MAX);
+      const aviso = total > pagina.length ? `\n…[${total - pagina.length} más, tope ${LIST_FILES_MAX}]` : '';
+      return { ok: true, output: pagina.join('\n') + aviso };
+    } catch (error) {
+      return { ok: false, output: '', error: `no pude listar ${raw || 'raíz'}: ${errorClaro(error)}` };
     }
   }
 });
@@ -369,12 +416,34 @@ export function parseToolCalls(texto) {
 // 4. Sección de prompt
 // ---------------------------------------------------------------------------
 
-export function renderManosPrompt() {
-  const lineas = listTools().map(
-    (t) => `- ${t.name}: ${t.description} Parámetros: ${JSON.stringify(t.parameters.properties || {})}`
-  );
+// source 'audio' = prompt CORTO para voz (nombre + 1 línea por tool, sin
+// schemas: el loop tolera JSON simple); cualquier otro valor = FULL con
+// params compactos nombre:tipo (D7). Default full: compatible con los
+// llamados viejos sin argumento.
+export function renderManosPrompt(source = 'text') {
+  const tools = listTools();
+  const head = 'Tenés MANOS: podés actuar en el proyecto con estas herramientas:';
+  if (source === 'audio') {
+    const lineas = tools.map((t) => {
+      const args = Object.keys(t.parameters?.properties || {}).join(', ');
+      const una = String(t.description || '').split(/[.]\s/)[0].slice(0, 60);
+      return `- ${t.name}${args ? ` (${args})` : ''}: ${una}`;
+    });
+    return [
+      head,
+      ...lineas,
+      '',
+      'FORMATO: ```tool:NOMBRE {"arg": "valor"}``` — un bloque por tool, en orden.',
+      'REGLAS: rutas relativas dentro del proyecto, sin secretos; lo destructivo se avisa antes; al terminar, contá el resultado en criollo SIN más bloques.'
+    ].join('\n');
+  }
+  const lineas = tools.map((t) => {
+    const props = t.parameters?.properties || {};
+    const params = Object.entries(props).map(([n, d]) => `${n}:${d?.type || '?'}`).join(', ');
+    return `- ${t.name}: ${t.description}${params ? ` Params ${params}` : ''}`;
+  });
   return [
-    'Tenés MANOS: podés actuar en el proyecto con estas herramientas:',
+    head,
     ...lineas,
     '',
     'FORMATO: para usar una herramienta, emití un bloque cercado así (SOLO así, sin texto pegado al JSON):',
@@ -384,8 +453,7 @@ export function renderManosPrompt() {
     'Varios bloques por mensaje valen; se ejecutan en orden.',
     '',
     'REGLAS:',
-    '- Workspace-only: solo rutas relativas dentro del proyecto. Nada de /absolutas, ../ ni secretos (.env, claves).',
-    '- Nunca pongas secretos, tokens ni contraseñas en los argumentos.',
+    '- Workspace-only: solo rutas relativas dentro del proyecto. Nada de /absolutas, ../, secretos (.env, claves) ni tokens en argumentos.',
     '- Antes de un comando destructivo (borrar, mover, publicar), avisá qué vas a hacer y por qué. En vivo puedo negarlo.',
     '- Cuando termines de usar herramientas, respondé normal SIN más bloques tool: contá el resultado en criollo.'
   ].join('\n');
@@ -403,7 +471,8 @@ const GATE_PATTERNS = [
   /\bejecut[ao]\w*\b/, /\bcorr[ée]\w*\b/, /\bcorré\b/, /\bproba\b/, /\bprobá\b/, /\brun\b/, /\bexecute\b/,
   /\bbusc[ao]\w*\b/, /\bbuscá\b/, /\bfetch\b/, /\btrae\b/, /\btraé\b/,
   /\bqu[eé] hora\b/, /\bqu[eé] d[ií]a\b/, /\bfecha\b/, /\bwhat time\b/, /\btoday'?s date\b/,
-  /\bfijate\b/, /\brevis[ao]\w*\b/, /\bmir[ao]\b/, /\bcheck\b/, /\blook at\b/
+  /\bfijate\b/, /\brevis[ao]\w*\b/, /\bmir[ao]\b/, /\bcheck\b/, /\blook at\b/,
+  /\blista\w*\b/, /\bque archivos\b/, /\bwhat files\b/ // list_files ('listo' a propósito NO matchea: es muletilla rioplatense)
 ];
 
 function normalizarGate(texto) {
@@ -473,8 +542,10 @@ export async function runToolLoop({
   };
   const base = { turnId: srcObj.turnId ?? turnId, agentId: srcObj.agentId ?? agentId };
 
+  // El system YA trae la sección manos anexada por agent-runtime en versión
+  // source-aware (voz corta / texto full): no re-anexar (era 2×, ~2400ch).
   const chat = [
-    { role: 'system', content: [system, renderManosPrompt()].filter(Boolean).join('\n\n') },
+    { role: 'system', content: system },
     ...messages
   ];
 

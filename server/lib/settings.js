@@ -151,6 +151,27 @@ export function getManosMaxTurns() {
   return (Number.isInteger(value) && value >= 1 && value <= 12) ? value : 6;
 }
 
+// ── Sala (equipo v1: gate + consulta silenciosa) ─────────────────────────
+// Sin UI en v1: flag + timeout vía PATCH /api/settings o defaults.
+
+export function getSalaV1() {
+  const raw = dbValue('sala.v1');
+  if (raw === null || raw === undefined || raw === '') {
+    return false;
+  }
+  const value = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value);
+}
+
+export function getSalaTimeoutMs() {
+  const raw = dbValue('sala.timeoutMs');
+  if (raw === null || raw === undefined || raw === '') {
+    return 15000;
+  }
+  const value = Number(raw);
+  return (Number.isFinite(value) && value >= 1000 && value <= 60000) ? value : 15000;
+}
+
 // ── Lectura/escritura desde la UI ───────────────────────────────────────
 
 const EDITABLE_KEYS = new Set([
@@ -168,7 +189,9 @@ const EDITABLE_KEYS = new Set([
   'stt.minConfidence',
   'tts.language',
   'manos.enabled',
-  'manos.maxTurns'
+  'manos.maxTurns',
+  'sala.v1',
+  'sala.timeoutMs'
 ]);
 
 const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
@@ -217,6 +240,10 @@ export function publicSettings() {
     manos: {
       enabled: getManosEnabled(),
       maxTurns: getManosMaxTurns()
+    },
+    sala: {
+      v1: getSalaV1(),
+      timeoutMs: getSalaTimeoutMs()
     }
   };
 }
@@ -258,6 +285,16 @@ export function applySettings(patch) {
     if (key === 'manos.maxTurns' && value) {
       const n = Number(value);
       if (!Number.isInteger(n) || n < 1 || n > 12) {
+        continue;
+      }
+    }
+    // Sala v1: flag booleano en texto; timeout 1000..60000 ms.
+    if (key === 'sala.v1' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'sala.timeoutMs' && value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 1000 || n > 60000) {
         continue;
       }
     }

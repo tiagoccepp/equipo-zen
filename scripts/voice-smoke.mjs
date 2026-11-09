@@ -39,6 +39,9 @@ export const CASOS = {
 };
 
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:7791';
+// Parakeet hace ITN ("dos" → "2"): el fuzzy expande dígitos a palabras ES+EN.
+const DIGITO_ES = { 0: 'cero', 1: 'uno', 2: 'dos', 3: 'tres', 4: 'cuatro', 5: 'cinco', 6: 'seis', 7: 'siete', 8: 'ocho', 9: 'nueve' };
+const DIGITO_EN = { 0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine' };
 const FRAME_SAMPLES = 480; // 30 ms @ 16k, igual que el worklet del cliente
 const COLECTA_MS = 30_000;
 
@@ -261,7 +264,9 @@ export async function runVoiceCase(base, caso) {
     assert('texto-agente', null, 'SKIP (DEGRADED: sin turno no hay respuesta)');
     assert('audio-tts', null, 'SKIP (DEGRADED: sin turno no hay TTS)');
   } else {
-    const norm = ` ${normalizar(resultado.transcript)} `;
+    let norm = ` ${normalizar(resultado.transcript)} `;
+    // Parakeet emite dígitos (ITN): «2» debe matchear keyword «dos».
+    norm = norm.replace(/\b(\d)\b/g, (m, d) => `${m} ${DIGITO_ES[d] || ''} ${DIGITO_EN[d] || ''}`);
     const hits = def.keywords.filter((k) => norm.includes(` ${k} `) || norm.includes(` ${k}`) || norm.includes(`${k} `));
     const ratio = def.keywords.length ? hits.length / def.keywords.length : 0;
     assert('transcript-fuzzy', ratio >= 0.6,

@@ -44,6 +44,12 @@ await paso('read_file roundtrip', async () => {
   return r.output;
 });
 
+await paso('list_files raíz (ve smoke.txt)', async () => {
+  const r = await getTool('list_files').execute({}, ctx);
+  ok(r.ok && r.output.includes('smoke.txt'), r.error || r.output);
+  return r.output.split('\n').length + ' entradas';
+});
+
 await paso('run_cmd echo', async () => {
   const r = await getTool('run_cmd').execute({ cmd: 'echo smoke-vivo' }, ctx);
   ok(r.ok && r.output.includes('smoke-vivo'), r.error || r.output);

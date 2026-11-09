@@ -137,7 +137,7 @@ if (tieneVenv) {
     const vivo = await responde('http://127.0.0.1:7789/health');
     anotar('ok', 'Transcripción local (Whisper)', vivo ? 'instalada y respondiendo en :7789' : 'instalada (arranca sola con npm run dev)');
   } else {
-    anotar('aviso', 'Sin transcripción local', 'falta faster-whisper: se usa el navegador (menos preciso)', ".venv-tts/bin/pip install faster-whisper fastapi uvicorn");
+    anotar('aviso', 'Sin transcripción local', 'falta faster-whisper (opcional): el STT local es Parakeet; sin él, Groq/Deepgram/hint', ".venv-tts/bin/pip install faster-whisper fastapi uvicorn");
   }
 } else {
   anotar('aviso', 'Sin transcripción local', 'se usa la del navegador (menos preciso)', "python3 -m venv .venv-tts && .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn");

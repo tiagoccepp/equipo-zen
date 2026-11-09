@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { clasificarComando, ejecutar, renderHerramientas, renderResultado } from '../server/lib/herramientas.js';
-import { esAgenteDeDiseno, renderDiseno, tokensComoCodigo } from '../server/lib/openpencil.js';
+import { esAgenteDeDiseno, disponible as openpencilDisponible, renderDiseno, tokensComoCodigo } from '../server/lib/openpencil.js';
 
 function carpeta(t) {
   const d = mkdtempSync(path.join(tmpdir(), 'equipo-tools-'));
@@ -146,7 +146,13 @@ test('sin diseño no hay tokens que traducir', () => {
   assert.equal(tokensComoCodigo(null, 'web'), null);
 });
 
-test('el que diseña recibe la herramienta; el que programa, el diseño hecho', () => {
+test('el que diseña recibe la herramienta; el que programa, el diseño hecho', (t) => {
+  // Sin binarios OpenPencil instalados renderDiseno degrada a '' por diseño
+  // (fail preexistente en main, 09/11): el test necesita el entorno real.
+  if (!openpencilDisponible()) {
+    t.skip('sin binarios OpenPencil (op): scripts/instalar-openpencil.sh');
+    return;
+  }
   const tokens = tokensComoCodigo({ 'color/x': { type: 'color', value: '#111' } }, 'web');
 
   const paraDisenador = renderDiseno({ esDisenador: true, hayDiseno: false, tokens: null, stack: 'web' });

@@ -94,7 +94,9 @@ test('gate: español positivo', () => {
     'abrí el readme',
     'creá un archivo nuevo',
     'qué hora es',
-    'fijate si compila'
+    'fijate si compila',
+    'listá los archivos del proyecto',
+    'qué archivos hay acá'
   ]) {
     assert.equal(shouldUseTools(t), true, t);
   }
@@ -103,6 +105,7 @@ test('gate: español positivo', () => {
 test('gate: inglés positivo', () => {
   for (const t of [
     'read the file app.js',
+    'what files are here',
     'write a summary',
     'run the tests',
     'fetch that url',
@@ -118,7 +121,9 @@ test('gate: charla normal no dispara', () => {
     'Hola, ¿cómo estás?',
     'Contame un cuento',
     'Qué lindo día para tomar mate',
-    'Gracias por tu ayuda'
+    'Gracias por tu ayuda',
+    'Listo, gracias',
+    'Dale, listo'
   ]) {
     assert.equal(shouldUseTools(t), false, t);
   }
@@ -425,6 +430,56 @@ test('loop: ejecuta en serie y en orden', async () => {
   } finally {
     toolRegistry.delete('manos_test_orden');
   }
+});
+
+test('list_files: raíz lista relativo, ordenado, sin ocultos ni dependencias', async () => {
+  const w = getTool('write_file');
+  await w.execute({ path: 'zeta.txt', content: 'z' }, ctx);
+  await w.execute({ path: 'alfa.txt', content: 'a' }, ctx);
+  await w.execute({ path: 'sub/nota.txt', content: 'n' }, ctx);
+  const t = getTool('list_files');
+  const r = await t.execute({}, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.ok(r.output.includes('alfa.txt'));
+  assert.ok(r.output.includes('zeta.txt'));
+  assert.ok(r.output.includes('sub/'), 'carpetas con /');
+  assert.ok(r.output.indexOf('alfa.txt') < r.output.indexOf('zeta.txt'), 'ordenado');
+});
+
+test('list_files: subcarpeta + ignora node_modules y ocultos', async () => {
+  const w = getTool('write_file');
+  await w.execute({ path: 'node_modules/fake.txt', content: 'x' }, ctx);
+  const t = getTool('list_files');
+  const raiz = await t.execute({}, ctx);
+  assert.equal(raiz.ok, true);
+  assert.ok(!raiz.output.includes('node_modules'), 'dependencias afuera');
+  const sub = await t.execute({ dir: 'sub' }, ctx);
+  assert.equal(sub.ok, true, sub.error);
+  assert.ok(sub.output.includes('nota.txt'));
+});
+
+test('list_files: escape y ausente denegados con error claro', async () => {
+  const t = getTool('list_files');
+  for (const evil of ['../../../etc', '/tmp', '..', '.oculto']) {
+    const r = await t.execute({ dir: evil }, ctx);
+    assert.equal(r.ok, false, `dir ${evil}`);
+    assert.ok(r.error, 'con motivo');
+  }
+  const ausente = await t.execute({ dir: 'no-existe-xyz' }, ctx);
+  assert.equal(ausente.ok, false);
+});
+
+test('list_files: tope 100 entradas con aviso', async () => {
+  const w = getTool('write_file');
+  for (let i = 0; i < 105; i += 1) {
+    await w.execute({ path: `muchos/f${String(i).padStart(3, '0')}.txt`, content: 'x' }, ctx);
+  }
+  const t = getTool('list_files');
+  const r = await t.execute({ dir: 'muchos' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  const lineas = r.output.split('\n');
+  assert.equal(lineas.filter((l) => l.endsWith('.txt')).length, 100);
+  assert.match(r.output, /tope 100/);
 });
 
 test('teardown: limpio el workspace temporal', () => {

@@ -40,7 +40,7 @@ function parseSkill(filename, raw) {
     description: meta.description || '',
     keywords: (meta.keywords || '').split(',').map((k) => k.trim().toLowerCase()).filter(Boolean),
     scope: (meta.scope || 'all').toLowerCase(),
-    body: match[2].trim().slice(0, 4000)
+    body: match[2].trim().slice(0, 1500) // D6: cuerpo acotado (antes 4000)
   };
 }
 
@@ -126,11 +126,31 @@ export function renderSkillsSection(text, { scope = 'chat', max = 2 } = {}) {
     return '';
   }
   const en = scope !== 'work' && String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  // Techo total D6: 2 skills × cuerpo ya acotado no pueden pasar de 1500ch
+  // en el prompt del turno (peor caso viejo: 8000ch). La 2ª se recorta o cae.
+  const SKILLS_TOTAL_MAX = 1500;
+  const bodies = [];
+  let used = 0;
+  for (const s of matched) {
+    const chunk = `### ${s.name}\n${s.body}`;
+    if (used + chunk.length > SKILLS_TOTAL_MAX) {
+      const room = SKILLS_TOTAL_MAX - used;
+      if (room > s.name.length + 8 && bodies.length === 0) {
+        bodies.push(`${chunk.slice(0, room - 1).trimEnd()}…`);
+      }
+      break;
+    }
+    bodies.push(chunk);
+    used += chunk.length;
+  }
+  if (bodies.length === 0) {
+    return '';
+  }
   return [
     en
       ? 'APPLICABLE KNOWLEDGE (skills — follow to the letter):'
       : 'CONOCIMIENTO APLICABLE (skills, seguilo al pie de la letra):',
-    ...matched.map((s) => `### ${s.name}\n${s.body}`),
+    ...bodies,
     ''
   ].join('\n');
 }

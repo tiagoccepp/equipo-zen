@@ -239,15 +239,18 @@ export function renderWorkSection(store, companyId, goalId = null) {
     // Los archivos que YA existen: sin esto, pedirles "cambiá el header" en la
     // reunión les llegaba sin ninguna referencia de qué hay construido.
     const archivos = listProjectFilesSync(companyId, goal.slug);
+    // Techos dieta D8: 10 archivos (antes 20) — con proyecto grande esta
+    // línea escala sin red.
     if (archivos.length) {
-      lines.push(en ? `  Shipped files: ${archivos.slice(0, 20).join(', ')}` : `  Archivos entregados: ${archivos.slice(0, 20).join(', ')}`);
+      lines.push(en ? `  Shipped files: ${archivos.slice(0, 10).join(', ')}` : `  Archivos entregados: ${archivos.slice(0, 10).join(', ')}`);
     }
-    for (const task of store.tasksForGoal(goal.id).slice(0, 8)) {
+    // 6 tasks (antes 8), títulos a 80ch (antes 120).
+    for (const task of store.tasksForGoal(goal.id).slice(0, 6)) {
       const estado = ESTADOS[task.status] || task.status;
       const revision = task.review_status === 'cambios'
         ? (en ? ' (changes requested)' : ' (le pidieron cambios)')
         : task.review_status === 'aprobado' ? (en ? ' (reviewed and approved)' : ' (revisada y aprobada)') : '';
-      lines.push(`- ${nameOf(task.agent_id)}: ${String(task.text).slice(0, 120)} — ${estado}${revision}`);
+      lines.push(`- ${nameOf(task.agent_id)}: ${String(task.text).slice(0, 80)} — ${estado}${revision}`);
     }
   }
   return [

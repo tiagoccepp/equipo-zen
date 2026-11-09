@@ -158,6 +158,22 @@ export async function saveSettings(patch: Record<string, string>): Promise<Publi
   return data.settings;
 }
 
+// Estado del watchdog de sidecars STT/TTS (fetch directo, sin WS).
+// Espeja server/lib/sidecars.js getSidecarStatus (solo lectura).
+export interface SidecarStatus {
+  name: string;
+  status: string;
+  downs: number;
+  restartsLastHour: number;
+  lastSpawnAt: string | null;
+  autostart: boolean;
+}
+
+export async function getSidecars(): Promise<SidecarStatus[]> {
+  const data = await apiJson<{ sidecars: SidecarStatus[] }>('/api/sidecars');
+  return data.sidecars || [];
+}
+
 export class Client {
   private ws: WebSocket | null = null;
   private ev: ClientEvents;

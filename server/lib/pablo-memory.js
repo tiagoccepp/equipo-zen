@@ -18,6 +18,11 @@ const cache = new Map(); // ruta absoluta -> { content, at }
 // Lo episódico pesado (learnings) tiene su propio presupuesto aparte.
 export const DEFAULT_RENDER_BUDGET = 3600;
 
+// Cola máxima del daily (D1): el log de hoy nunca puede comerse el
+// presupuesto entero y dejar la identidad afuera. Se queda con lo ÚLTIMO
+// (lo reciente es lo que importa) y el resto es para SOUL/USER/MEMORY.
+export const DAILY_TAIL_MAX_CHARS = 800;
+
 // Nombres escribibles. Todo lo demás se rechaza: no hay subpaths ni escapes.
 const ALLOWLIST = new Set(['SOUL.md', 'USER.md', 'MEMORY.md', 'AGENTS.md']);
 
@@ -119,6 +124,9 @@ export function readDaily(companySlug, stamp = todayStamp()) {
 // orden, recortada por presupuesto duro de caracteres. AGENTS.md no se inyecta:
 // son convenciones de escritura para agentes con archivos, no para la voz.
 // Empresa sin memoria devuelve '' (cero tokens, cero drama).
+// Recorte POR PARTE (D1), de atrás hacia adelante: el daily cae primero
+// (además va acotado a la cola de DAILY_TAIL_MAX_CHARS), la identidad SOUL
+// última. Nunca un slice ciego que decapite lo importante.
 export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUDGET } = {}) {
   const budget = Math.max(0, Number(maxChars) || 0);
   if (budget <= 0) {
@@ -128,27 +136,49 @@ export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUD
   const user = readMemoryFile(companySlug, 'USER.md') || '';
   const memory = readMemoryFile(companySlug, 'MEMORY.md') || '';
   const daily = readDaily(companySlug) || '';
-  const parts = [];
+  const blocks = [];
   if (soul.trim()) {
-    parts.push(`PABLO SOUL (who I am, how I talk):\n${soul.trim()}`);
+    blocks.push({ head: 'PABLO SOUL (who I am, how I talk):', body: soul.trim() });
   }
   if (user.trim()) {
-    parts.push(`PABLO USER (standing directives from Tito):\n${user.trim()}`);
+    blocks.push({ head: 'PABLO USER (standing directives from Tito):', body: user.trim() });
   }
   if (memory.trim()) {
-    parts.push(`PABLO MEMORY (durable facts):\n${memory.trim()}`);
+    blocks.push({ head: 'PABLO MEMORY (durable facts):', body: memory.trim() });
   }
   if (daily.trim()) {
-    parts.push(`PABLO TODAY (${todayStamp()}, daily log):\n${daily.trim()}`);
+    blocks.push({ head: `PABLO TODAY (${todayStamp()}, daily log):`, body: daily.trim().slice(-DAILY_TAIL_MAX_CHARS) });
   }
-  if (parts.length === 0) {
+  if (blocks.length === 0) {
     return '';
   }
-  const out = parts.join('\n\n');
-  if (out.length <= budget) {
-    return out;
+  const totalLen = () => blocks.reduce((n, b) => n + b.head.length + 1 + b.body.length, 0) + Math.max(0, blocks.length - 1) * 2;
+  const render = () => blocks.map((b) => `${b.head}\n${b.body}`).join('\n\n');
+  if (totalLen() <= budget) {
+    return render();
   }
-  return `${out.slice(0, Math.max(0, budget - 1)).trimEnd()}…`;
+  // Achicar desde la última parte: primero se recorta el cuerpo (con marca
+  // …), y si ni el header entra, la parte entera sale.
+  let over = totalLen() - budget;
+  while (blocks.length > 1 && over > 0) {
+    const last = blocks[blocks.length - 1];
+    if (last.body.length > over + 1) {
+      last.body = `${last.body.slice(0, last.body.length - over - 1).trimEnd()}…`;
+      over = 0;
+    } else {
+      blocks.pop();
+      over = totalLen() - budget;
+    }
+  }
+  if (blocks.length === 1 && totalLen() > budget) {
+    const solo = blocks[0];
+    const room = budget - solo.head.length - 1;
+    solo.body = room > 1 ? `${solo.body.slice(0, room - 1).trimEnd()}…` : '';
+    if (room <= 1) {
+      return solo.head.slice(0, budget);
+    }
+  }
+  return render();
 }
 
 // Solo tests.

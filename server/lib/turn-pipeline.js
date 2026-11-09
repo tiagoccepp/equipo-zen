@@ -1,5 +1,6 @@
 import { withTimeout } from './llm.js';
 import { beginUserTurn, endUserTurn } from './priority.js';
+import { consult as salaConsult } from './sala.js';
 
 // ── SpeakerGate ─────────────────────────────────────────────────────────
 // Garantiza que UN solo agente emite audio a la vez, a nivel servidor.
@@ -210,5 +211,20 @@ export class CancellableTurnQueue {
       }
     }
     this.processing = false;
+  }
+}
+
+// ── Gate pre-respuesta Team v1 (sala) ─────────────────────────────────────
+// Punto ÚNICO de gate: se llama ANTES del respond normal con el texto del
+// usuario y la ruta ya decidida. Devuelve el TEAM NOTE a inyectar al
+// contexto del turno, o null si el turno sigue con flujo normal (flag off,
+// gate negativo, error, timeout). Nunca lanza: degradación segura.
+// El cableado (llamarla desde meeting-session/agent-runtime) es integración
+// posterior; este helper es el punto de gate testeable y documentado.
+export async function maybeConsultSala({ text, route = null, deps = {} } = {}) {
+  try {
+    return await salaConsult({ text, route, deps });
+  } catch {
+    return null;
   }
 }

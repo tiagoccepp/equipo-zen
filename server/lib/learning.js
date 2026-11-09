@@ -12,9 +12,12 @@ const SWEEP_EVERY_N_TURNS = 4;
 const MAX_LEARNINGS_PER_CYCLE = 3;
 const MIN_CONFIDENCE = 0.6;
 const DEDUP_JACCARD = 0.6;
-const MEMORY_TOP_K = 8;
-const MEMORY_CHAR_BUDGET = 4800; // ~1200 tokens
-const LEARNING_ITEM_MAX_CHARS = 200;
+// Techos dieta D5 (09/11): los learnings inyectados no pueden pasar de
+// 2000ch ni 5 items de 160ch — sin techo, esta sección escala a 4800ch y se
+// vuelve la 2ª del system. El ranking no se toca (no-tocar §4.9).
+const MEMORY_TOP_K = 5;
+const MEMORY_CHAR_BUDGET = 2000; // ~500 tokens
+const LEARNING_ITEM_MAX_CHARS = 160;
 
 const OBSERVER_FORMAT = [
   'Respondé ÚNICAMENTE con un JSON válido, sin markdown, con esta forma exacta:',
