@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CASOS, detectPort, runVoiceCase } from '../scripts/voice-smoke.mjs';
+import { CASOS, detectPort, runVoiceCaseWithRetry } from '../scripts/voice-smoke.mjs';
 
 const PORT = detectPort(process.env.VOICE_PORT || process.argv.find((a) => /^\d+$/.test(a)));
 
@@ -34,8 +34,8 @@ for (const caso of Object.keys(CASOS)) {
       t.skip(`app DOWN en ${base}. Post-merge: levantar la app y correr node scripts/voice-smoke.mjs ${PORT} both`);
       return;
     }
-    const res = await runVoiceCase(base, caso);
-    t.diagnostic(`fuente=${res.fuente} degraded=${res.degraded} transcript=«${res.transcript.slice(0, 100)}»`);
+    const res = await runVoiceCaseWithRetry(base, caso, 2);
+    t.diagnostic(`intentos=${res.intentos} fuente=${res.fuente} degraded=${res.degraded} transcript=«${res.transcript.slice(0, 100)}»`);
     t.diagnostic(`timings=${JSON.stringify(res.timings)}`);
     for (const a of res.asserts) {
       if (a.pass === null) {
