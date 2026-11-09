@@ -59,12 +59,19 @@ async function loadManos() {
 }
 
 // completeChat pre-ligado al keyRing del turno: el loop lo llama como
-// completeChat({messages, ...}) sin conocer el ring. Si el loop lo llama con
-// la firma de dos args (keyRing, opts), también funciona.
-function bindManosCompleteChat(keyRing) {
-  return (...args) => (args.length >= 2
-    ? completeChat(args[0], args[1])
-    : completeChat(keyRing, args[0]));
+// completeChat(chatArray) — array crudo de mensajes. llm.completeChat espera
+// (keyRing, {messages, ...}): envolver acá (sin esto Zen devuelve 400
+// 'messages: expected an array' y TODA fase tools viva falla callada).
+// Si el loop lo llama con la firma de dos args (keyRing, opts), pasa directo.
+export function bindManosCompleteChat(keyRing) {
+  return (...args) => {
+    if (args.length >= 2) return completeChat(args[0], args[1]);
+    const only = args[0];
+    const opts = Array.isArray(only)
+      ? { messages: only, scope: 'manos', maxTokens: 1500 }
+      : only;
+    return completeChat(keyRing, opts);
+  };
 }
 
 // emit con identidad: el loop emite {type, ...} y sale con turnId/agentId.

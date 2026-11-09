@@ -482,6 +482,39 @@ test('list_files: tope 100 entradas con aviso', async () => {
   assert.match(r.output, /tope 100/);
 });
 
+test('bindManosCompleteChat: array crudo se envuelve en {messages, scope manos} (regresión 400 Zen)', async () => {
+  const { bindManosCompleteChat } = await import('../server/lib/agent-runtime.js');
+  // Ring sin claves: completeChat real tira ANTES de red, y el mensaje
+  // incluye options.scope — si el array llegara crudo, scope sería undefined.
+  const noKeys = { hasKeys: () => false };
+  const bound = bindManosCompleteChat(noKeys);
+  const chat = [{ role: 'system', content: 's' }, { role: 'user', content: 'hola' }];
+  await assert.rejects(() => bound(chat), /manos/);
+});
+
+test('runToolLoop + adapter vivo: el chat llega como {messages:[...]} al modelo', async () => {
+  const manos = await import('../server/lib/manos.js');
+  const { bindManosCompleteChat } = await import('../server/lib/agent-runtime.js');
+  let seenOpts = null;
+  // Adapter con la MISMA firma que bindManosCompleteChat produce en vivo:
+  // el loop pasa array crudo; el modelo debe recibir {messages: array}.
+  const liveShaped = (ring) => (...args) => {
+    const only = args[0];
+    const opts = Array.isArray(only) ? { messages: only, scope: 'manos' } : only;
+    seenOpts = opts;
+    assert.ok(Array.isArray(opts.messages), 'el modelo recibe messages array');
+    return { text: '```tool:now\n{}\n```' };
+  };
+  const out = await manos.runToolLoop({
+    system: 'test', messages: [{ role: 'user', content: 'qué hora es' }],
+    completeChat: liveShaped({}), emit: () => {}, maxTurns: 2,
+    deadlineMs: 15000, companyId: 'test', slug: 'general'
+  });
+  assert.ok(seenOpts && Array.isArray(seenOpts.messages));
+  assert.ok((out.toolSummary || '').length > 0);
+  assert.equal(typeof bindManosCompleteChat, 'function');
+});
+
 test('teardown: limpio el workspace temporal', () => {
   rmSync(TMPWS, { recursive: true, force: true });
   assert.ok(true);
