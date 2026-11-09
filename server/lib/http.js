@@ -12,6 +12,7 @@ import {
 import { buildSystemInstruction } from './agent-runtime.js';
 import { applyAudioSettings, listDevices, playTestTone, setNodeMute, setNodeVolume } from './audio.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
+import { enqueueJob, getDefaultSession, getJob } from './driver.js';
 import { renderLearningsSection } from './learning.js';
 import { isMeetingLive } from './meeting-session.js';
 import { buildLiveSnapshot } from './mission.js';
@@ -807,6 +808,35 @@ export function createApp({ store }) {
         limit: Math.max(1, Math.min(200, Number(req.query.limit) || 50))
       })
     });
+  });
+
+  // Driver autónomo del equipo (track driver, 09/11): SOLO rutas nuevas.
+  // POST crea el job (intake síncrono → jobId real) y corre async; GET
+  // devuelve la vista pública resumida. La sesión viva la cablea main con
+  // setDefaultSession() (meeting-session.js es no-tocar para el track).
+  app.post('/api/team/jobs', (req, res) => {
+    const session = getDefaultSession();
+    if (!session || typeof session.runAgentJobTurn !== 'function') {
+      return res.status(503).json({ error: 'sin sesión viva: el driver necesita una reunión con agentes' });
+    }
+    const brief = req.body?.brief;
+    if (!brief || typeof brief !== 'object') {
+      return res.status(400).json({ error: 'brief requerido (objeto con objetivo, criteriosExito, ...)' });
+    }
+    try {
+      const { jobId, estado } = enqueueJob(session, brief, {});
+      res.json({ jobId, estado });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  app.get('/api/team/jobs/:id', (req, res) => {
+    const job = getJob(req.params.id);
+    if (!job) {
+      return res.status(404).json({ error: 'job not found' });
+    }
+    res.json({ job });
   });
 
   if (process.env.NODE_ENV === 'production') {

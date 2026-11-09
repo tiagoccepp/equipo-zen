@@ -19,7 +19,7 @@ import {
   selectReplicaTargets,
   shouldCeoClose
 } from './groupchat.js';
-import { completeChat, parseJsonFromModel } from './llm.js';
+import { completeChat, parseJsonFromModel, withTimeout } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
 import { renderMemorySection } from './pablo-memory.js';
@@ -1622,6 +1622,39 @@ export class MeetingSession {
     });
     this.logTelemetry('team_event', { evento: evento?.tipo || null, speaker: payload.speaker });
     return payload;
+  }
+
+  // Driver autónomo: corre UN turno real del agente (modelo + tools manos)
+  // y devuelve el resultado. Los turnos de voz normales no tocan esto.
+  async runAgentJobTurn(agentId, taskText, { timeoutMs = 120000, signal } = {}) {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`runAgentJobTurn: ${agentId} sin runtime en la reunión`);
+    const turnId = `job-${Date.now().toString(36)}-${agentId}`;
+    const toolCalls = [];
+    const t0 = Date.now();
+    const response = await withTimeout(
+      agent.respond(
+        { speaker: 'Orquestador', text: String(taskText || ''), route: { source: 'job' } },
+        (event) => {
+          if (event?.type === 'agent_tool_done') {
+            toolCalls.push({ tool: event.tool, ok: event.ok !== false });
+          }
+        },
+        { signal, gate: this.gate, turnId }
+      ),
+      timeoutMs,
+      `runAgentJobTurn timeout ${timeoutMs}ms (${agentId})`
+    );
+    if (response?.rawText) {
+      response.text = this.processAgentTaskCommands(agentId, response.rawText);
+    }
+    return {
+      text: response?.text || '',
+      usedMock: !!response?.usedMock,
+      toolCalls,
+      ms: Date.now() - t0,
+      turnId
+    };
   }
 
   async processContextualFollowups(turnId, originalText, route, signal) {
