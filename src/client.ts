@@ -136,6 +136,7 @@ export interface PublicSettings {
     deepgramKeySet: boolean;
     deepgramKeyMasked: string;
     language: string;
+    minConfidence: number;
   };
   tts: { engine: string; language: string; url: string };
 }
@@ -296,8 +297,9 @@ export class Client {
   }
 
   /** Telemetría de voz del cliente (VAD/barge por turno): para afinar
-   *  umbrales con datos reales en vez de adivinar. Fire-and-forget. */
-  voiceStats(stats: Record<string, number>): void {
+   *  umbrales con datos reales en vez de adivinar. Fire-and-forget.
+   *  §3a: valores mixtos (números + reopened:boolean + hintEnd:string). */
+  voiceStats(stats: Record<string, number | string | boolean>): void {
     this.ws?.send(JSON.stringify({ type: 'client_stats', stats }));
   }
 

@@ -102,6 +102,19 @@ export function getSttLanguage() {
   return dbValue('stt.language') || 'auto';
 }
 
+// Umbral de confianza STT (0..1, default 0.55): debajo de min(setting,
+// 0.4) con turno corto y key de Deepgram, stt.js reintenta una vez en
+// la nube (§2e mínimo). stt.order NO existe: orden fijo local→groq→
+// deepgram→hint (ver transcribeWithFallback).
+export function getSttMinConfidence() {
+  const raw = dbValue('stt.minConfidence');
+  if (raw === null || raw === undefined || raw === '') {
+    return 0.55;
+  }
+  const value = Number(raw);
+  return (Number.isFinite(value) && value >= 0 && value <= 1) ? value : 0.55;
+}
+
 // ── TTS (voz) ────────────────────────────────────────────────────────────
 
 export function getTtsLanguage() {
@@ -126,6 +139,7 @@ const EDITABLE_KEYS = new Set([
   'stt.groqKey',
   'stt.deepgramKey',
   'stt.language',
+  'stt.minConfidence',
   'tts.language'
 ]);
 
@@ -164,7 +178,8 @@ export function publicSettings() {
       groqKeyMasked: mask(getGroqKey()),
       deepgramKeySet: Boolean(getDeepgramKey()),
       deepgramKeyMasked: mask(getDeepgramKey()),
-      language: getSttLanguage()
+      language: getSttLanguage(),
+      minConfidence: getSttMinConfidence()
     },
     tts: {
       engine: 'supertonic',
@@ -197,6 +212,12 @@ export function applySettings(patch) {
     }
     if (key === 'stt.whisperModel' && value && !WHISPER_MODEL_OPTIONS.includes(value)) {
       continue;
+    }
+    if (key === 'stt.minConfidence' && value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0 || n > 1) {
+        continue;
+      }
     }
     if (value) {
       store.setSetting(key, value);

@@ -164,6 +164,10 @@ export interface TurnVoiceStats {
   bargeInterrupts: number;
   floor: number;
   startEff: number;
+  // Fase 1 (§3a): los completa app.ts al resolver la gracia, cuando ya
+  // se sabe si el habla se reabrió dentro de la ventana.
+  reopened?: boolean;
+  hintEnd?: string;
 }
 
 export interface LiveMicOptions {
@@ -180,6 +184,10 @@ export interface LiveMicOptions {
   isAgentSpeaking: () => boolean;
   hintText: () => string;
   resetHint: () => void;
+  // Endpointing adaptativo (§3a): ¿hubo barge/interrupt en los últimos
+  // 2 turnos? Lo lleva app.ts (ve los dos caminos de corte). Sin esto,
+  // el VAD asume que no (default conservador).
+  recentBarge?: () => boolean;
 }
 
 export interface MicTuning {
@@ -189,6 +197,124 @@ export interface MicTuning {
 }
 
 export const MIC_NORMAL: MicTuning = { sensitivity: 55, endSilenceMs: 800, minSpeechMs: 600 };
+
+// ── Endpointing adaptativo (§3a) ────────────────────────────────────
+// Decisión pura y testeable: cuánto silencio cierra el habla y cuánta
+// gracia espera después, según lo que se lleva escuchado del turno.
+// Defaults idénticos a los históricos (800/1200); solo se mueve el
+// umbral cuando la señal es clara. Ante la duda, no cortar.
+
+export const END_SILENCE_BASE_MS = 800;
+export const END_SILENCE_FAST_MS = 575;
+export const END_SILENCE_SLOW_MS = 1100;
+export const GRACE_BASE_MS = 1200;
+export const GRACE_FAST_MS = 600;
+
+// Habla clara para acortar: RMS muy por encima del piso y con nivel mínimo.
+const FAST_MIN_SNR = 3;
+const FAST_MIN_MAX_RMS = 0.05;
+const FAST_MAX_FLOOR = 0.025;
+// Piso alto: el silencio medido es poco fiable, no se acorta nada.
+const FLOOR_HIGH = 0.03;
+// Palabras de cierre: la frase ya está completa aunque no haya punto.
+const CLOSING_WORDS = new Set(['gracias', 'chau', 'dale']);
+// Funcionales: la frase está a medio armar, seguro sigue.
+const FUNCTION_WORDS = new Set(['el', 'la', 'de', 'que', 'y', 'para', 'un']);
+
+/** Últimos 20 chars del hint: telemetría compacta para calibrar. */
+export function hintTail(hint: string): string {
+  return hint.slice(-20);
+}
+
+// Normaliza para comparar palabras (el ASR a veces manda "si" sin tilde).
+function normWord(word: string): string {
+  return word
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+}
+
+function tailWords(hintEnd: string): string[] {
+  return hintEnd.trim().split(/\s+/).map(normWord).filter(Boolean);
+}
+
+/** ¿El hint suena a frase terminada? Punto/signo, cierre o sí-no aislado. */
+export function isTerminalHint(hintEnd: string): boolean {
+  const trimmed = hintEnd.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/[.!?…?!]$/.test(trimmed)) {
+    return true;
+  }
+  const words = tailWords(trimmed);
+  if (words.length === 0) {
+    return false;
+  }
+  const last = words[words.length - 1];
+  if (CLOSING_WORDS.has(last)) {
+    return true;
+  }
+  // sí/no aislado: el turno entero es la respuesta.
+  return words.length === 1 && (last === 'si' || last === 'no');
+}
+
+/** ¿El hint quedó en palabra funcional? La frase sigue, no cortar. */
+export function endsFunctional(hintEnd: string): boolean {
+  const words = tailWords(hintEnd);
+  if (words.length === 0) {
+    return false;
+  }
+  return FUNCTION_WORDS.has(words[words.length - 1]);
+}
+
+export interface EndpointingInput {
+  speechMs: number;
+  hintEnd: string;
+  floor: number;
+  maxRms: number;
+  recentBarge: boolean;
+}
+
+export interface EndpointingDecision {
+  endSilenceMs: number;
+  graceMs: number;
+}
+
+/**
+ * Umbrales de cierre para el turno en curso. Rápido solo cuando TODO
+ * acompaña (turno largo + frase completa + habla clara); lento ante
+ * cualquier duda (turno corto, frase a medias, cortes recientes o ruido).
+ */
+export function computeEndpointing(input: EndpointingInput): EndpointingDecision {
+  const { speechMs, hintEnd, floor, maxRms, recentBarge } = input;
+  const terminal = isTerminalHint(hintEnd);
+  const longTurn = speechMs > 2500;
+
+  // Lento gana: ante la duda, no cortar.
+  const slow = speechMs < 1500
+    || endsFunctional(hintEnd)
+    || recentBarge
+    || floor >= FLOOR_HIGH;
+  if (slow) {
+    return { endSilenceMs: END_SILENCE_SLOW_MS, graceMs: GRACE_BASE_MS };
+  }
+
+  // Rápido solo con habla clara además de frase completa + turno largo.
+  const clearSpeech = floor <= FAST_MAX_FLOOR
+    && maxRms >= FAST_MIN_MAX_RMS
+    && maxRms >= floor * FAST_MIN_SNR;
+  if (longTurn && terminal && clearSpeech) {
+    return { endSilenceMs: END_SILENCE_FAST_MS, graceMs: GRACE_FAST_MS };
+  }
+  // Gracia corta con frase completa + turno largo aunque el audio no sea
+  // nítido: el VAD ya cerró, solo se acorta la espera posterior.
+  if (longTurn && terminal) {
+    return { endSilenceMs: END_SILENCE_BASE_MS, graceMs: GRACE_FAST_MS };
+  }
+  return { endSilenceMs: END_SILENCE_BASE_MS, graceMs: GRACE_BASE_MS };
+}
 
 function thresholds(sensitivity: number): { start: number; cont: number } {
   const s = Math.max(10, Math.min(90, sensitivity));
@@ -464,7 +590,17 @@ export class LiveMic {
       this.silenceMs = 0;
     }
 
-    if (this.silenceMs >= this.tuning.endSilenceMs) {
+    // Endpointing adaptativo (§3a): el silencio que cierra se decide por
+    // frame según habla acumulada + hint + piso. La base (800) es idéntica
+    // a MIC_NORMAL; solo se mueve con señal clara.
+    const endpointing = computeEndpointing({
+      speechMs: this.speechMs,
+      hintEnd: hintTail(this.opts.hintText()),
+      floor: this.floor,
+      maxRms: this.turnMaxRms,
+      recentBarge: this.opts.recentBarge?.() ?? false
+    });
+    if (this.silenceMs >= endpointing.endSilenceMs) {
       this.endSpeech(this.opts.hintText());
     }
   }

@@ -153,7 +153,7 @@ export type ClientMessage =
   | { type: 'audio_stop' }
   // Telemetría de voz del cliente (VAD/barge por turno): sin este case el
   // servidor respondía error en cada turno de voz.
-  | { type: 'client_stats'; stats: Record<string, number> }
+  | { type: 'client_stats'; stats: Record<string, number | string | boolean> }
   // El cliente declara si QUIERE voz. Fuera del modo llamada no la quiere: sin
   // esto el servidor sintetizaba en todos los turnos igual, gastaba Supertonic
   // y serializaba las respuestas por el SpeakerGate para un audio que nadie oía.
@@ -479,7 +479,8 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     }
 
     case 'client_stats': {
-      // Telemetría VAD del cliente: record chico de números finitos.
+      // Telemetría VAD del cliente: record chico de números finitos,
+      // strings cortos (hintEnd) y booleanos (reopened).
       if (!isRecord(value.stats)) {
         return { ok: false, error: 'client_stats requiere stats.' };
       }
@@ -487,16 +488,27 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       if (keys.length > 20) {
         return { ok: false, error: 'client_stats con demasiadas claves.' };
       }
-      const stats: Record<string, number> = {};
+      const stats: Record<string, number | string | boolean> = {};
       for (const key of keys) {
         if (cappedString(key, 64) === null) {
           return { ok: false, error: 'client_stats con clave inválida.' };
         }
-        const num = (value.stats as Record<string, unknown>)[key];
-        if (typeof num !== 'number' || !Number.isFinite(num)) {
-          return { ok: false, error: 'client_stats solo acepta números finitos.' };
+        const val = (value.stats as Record<string, unknown>)[key];
+        if (typeof val === 'number') {
+          if (!Number.isFinite(val)) {
+            return { ok: false, error: 'client_stats con número no finito.' };
+          }
+          stats[key] = val;
+        } else if (typeof val === 'string') {
+          if (val.length > 80) {
+            return { ok: false, error: 'client_stats con string demasiado largo.' };
+          }
+          stats[key] = val;
+        } else if (typeof val === 'boolean') {
+          stats[key] = val;
+        } else {
+          return { ok: false, error: 'client_stats solo acepta número|string|boolean.' };
         }
-        stats[key] = num;
       }
       return { ok: true, message: { type: 'client_stats', stats } };
     }

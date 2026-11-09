@@ -16,7 +16,7 @@ import {
   type Agent,
   type PublicSettings
 } from './client.ts';
-import { BrowserSpeech, LiveMic, VoiceOut } from './voice.ts';
+import { BrowserSpeech, LiveMic, VoiceOut, computeEndpointing, hintTail, type TurnVoiceStats } from './voice.ts';
 
 const $ = (id: string): HTMLElement => {
   const el = document.getElementById(id);
@@ -135,6 +135,27 @@ const GRACE_MS = 1200;
 let graceTimer: number | null = null;
 let graceHint = '';
 let audioEndSent = false;
+// §3a fase 1: stats del turno en espera (salen al resolver la gracia,
+// cuando ya se sabe si se reabrió habla) + historial de cortes.
+let pendingTurnStats: TurnVoiceStats | null = null;
+let turnHadInterrupt = false;
+const bargeHistory: boolean[] = [];
+
+/** Manda la telemetría pendiente con reopened + hintEnd. Siempre que hay datos. */
+function flushTurnStats(reopened: boolean): void {
+  if (!pendingTurnStats) return;
+  const stats = pendingTurnStats;
+  pendingTurnStats = null;
+  const fresh = browserSpeech.latestUtterance() || graceHint;
+  client.voiceStats({ ...stats, reopened, hintEnd: hintTail(fresh) });
+}
+
+/** Cierra el turno en el historial de cortes (últimos 2). */
+function pushBargeHistory(): void {
+  bargeHistory.push(turnHadInterrupt);
+  while (bargeHistory.length > 2) bargeHistory.shift();
+  turnHadInterrupt = false;
+}
 // Un solo interrupt por turno del usuario: el barge-in acústico y la
 // confirmación de habla son dos caminos al mismo corte; sin esto el
 // segundo manda un duplicado siempre.
@@ -164,6 +185,7 @@ function cutAgent(): void {
   }
   noteLocalInterrupt();
   interruptSentForTurn = true;
+  turnHadInterrupt = true;
   voiceOut.flush();
   voiceOut.restoreGain();
   speakingAgent = '';
@@ -197,6 +219,9 @@ const liveMic = new LiveMic({
       window.clearTimeout(graceTimer);
       graceTimer = null;
       graceHint = '';
+      // §3a: la gracia salvó un corte — el turno sigue, la telemetría sale
+      // marcada y el historial de cortes espera al cierre real.
+      flushTurnStats(true);
       setStatus('Recording…');
       return;
     }
@@ -204,6 +229,7 @@ const liveMic = new LiveMic({
     // cuando el habla se sostiene — una tos o un "eh" que el VAD apenas
     // abre y minSpeechMs descarta jamás debe cortar al agente.
     interruptSentForTurn = false;
+    turnHadInterrupt = false;
     voiceOut.flush();
     voiceOut.restoreGain();
     setStatus('Recording…');
@@ -232,8 +258,8 @@ const liveMic = new LiveMic({
     }, CUT_OVER_AUDIO_MS - ms);
   },
   onTurnStats: (stats) => {
-    // Telemetría al servidor (DB): con esto afino umbrales con datos reales.
-    client.voiceStats({ ...stats });
+    // §3a: se guardan; salen al resolver la gracia (con reopened + hintEnd).
+    pendingTurnStats = { ...stats };
   },
   onSpeechEnd: (hint) => {
     // Fin de habla: se marca el tiempo (TTFV); el cierre del turno espera
@@ -246,17 +272,33 @@ const liveMic = new LiveMic({
     audioEndSent = false;
     setStatus('Finished?…');
     if (graceTimer !== null) window.clearTimeout(graceTimer);
+    // §3a fase 2: gracia dinámica (frase completa + turno largo → corta).
+    const s = pendingTurnStats;
+    const graceMs = s
+      ? computeEndpointing({
+          speechMs: s.speechMs,
+          hintEnd: hintTail(hint),
+          floor: s.floor,
+          maxRms: s.maxRms,
+          recentBarge: bargeHistory.some(Boolean)
+        }).graceMs
+      : GRACE_MS;
     graceTimer = window.setTimeout(() => {
       graceTimer = null;
       if (audioEndSent) return;
       audioEndSent = true;
+      pushBargeHistory();
+      flushTurnStats(false);
       // Hint más fresco no-vacío: el actual del navegador o el guardado.
       const best = browserSpeech.latestUtterance() || graceHint;
       client.audioEnd(best);
       setStatus('Transcribing…');
-    }, GRACE_MS);
+    }, graceMs);
   },
   onDiscarded: () => {
+    // Ruido descartado: igual sale la telemetría (no es un turno real,
+    // no entra al historial de cortes).
+    flushTurnStats(false);
     client.audioCancel('too_short', 0);
     setStatus('Noise skipped.');
     window.setTimeout(() => {
@@ -271,6 +313,7 @@ const liveMic = new LiveMic({
     if (interruptSentForTurn) return;
     cancelPendingCut();
     interruptSentForTurn = true;
+    turnHadInterrupt = true;
     client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
     noteLocalInterrupt();
     voiceOut.flush();
@@ -289,7 +332,9 @@ const liveMic = new LiveMic({
   },
   isAgentSpeaking: agentSpeaking,
   hintText: () => browserSpeech.latestUtterance(),
-  resetHint: () => browserSpeech.resetUtterance()
+  resetHint: () => browserSpeech.resetUtterance(),
+  // §3a: el VAD alarga el cierre si el usuario viene peleando con los cortes.
+  recentBarge: () => bargeHistory.some(Boolean)
 });
 
 // ── Orbes (upstream, tema dark) ──────────────────────────────────────
@@ -537,6 +582,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
       graceTimer = null;
     }
     graceHint = '';
+    flushTurnStats(false);
     liveMic.stop(true);
     browserSpeech.stop();
     client.audioStop();
@@ -927,6 +973,16 @@ async function renderSettings(): Promise<void> {
   langSel.setAttribute('aria-label', 'Listening language');
   langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
   box.appendChild(settingRow('🗣️ Listening language', langSel));
+
+  // Umbral de confianza STT (§2e): debajo reintenta una vez en Deepgram
+  // (turno corto + key). El valor guardado manda aunque no esté en la lista.
+  const CONF_LABELS: Record<string, string> = { '0.3': 'Bajo (0.3)', '0.4': 'Medio (0.4)', '0.55': 'Default (0.55)', '0.7': 'Alto (0.7)' };
+  const confCur = String(s.stt.minConfidence ?? 0.55);
+  const confOpts = Object.keys(CONF_LABELS).includes(confCur) ? Object.keys(CONF_LABELS) : [confCur, ...Object.keys(CONF_LABELS)];
+  const confSel = settingSelect(confOpts, confCur, { ...CONF_LABELS, [confCur]: CONF_LABELS[confCur] || `Guardado (${confCur})` });
+  confSel.setAttribute('aria-label', 'STT min confidence');
+  confSel.addEventListener('change', () => save({ 'stt.minConfidence': confSel.value }));
+  box.appendChild(settingRow('🎯 Min confidence', confSel));
 
   box.appendChild(settingGroup('Voice'));
   const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en')

@@ -16,6 +16,7 @@ import { isMeetingLive } from './meeting-session.js';
 import { applySuggestion } from './reflection.js';
 import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
 import { applySettings, getLlmKeys, getLlmModels, getLlmProvider, getLlmProviderConfig, publicSettings } from './settings.js';
+import { getSidecarStatus } from './sidecars.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
@@ -139,6 +140,12 @@ export function createApp({ store }) {
   app.put('/api/settings', (req, res) => {
     const applied = applySettings(req.body?.settings || req.body || {});
     res.json({ applied, settings: publicSettings() });
+  });
+
+  // Estado del watchdog de sidecars STT/TTS (§3b): lo sirve el registro
+  // en memoria del watcher activo, o 'unknown' si aún no tickeó.
+  app.get('/api/sidecars', (_req, res) => {
+    res.json({ sidecars: getSidecarStatus() });
   });
 
   app.get('/api/settings/status', async (_req, res) => {

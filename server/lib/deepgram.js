@@ -37,7 +37,9 @@ function authHeaders(extra = {}) {
 
 // Transcribe un WAV 16kHz (base64). Nova-3 + idioma de settings +
 // formato inteligente + keyterm "Pablo" para que el nombre propio entre
-// siempre (antes Sofia, renombrado 2026-11-08).
+// siempre (antes Sofia, renombrado 2026-11-08). Devuelve { text,
+// confidence }: la confianza es la del mejor alternative (0..1) o null
+// si la respuesta no la trae — stt.js la usa para el reintento §2e.
 export async function transcribeDeepgram(wavBase64) {
   // 'auto' (default): detect_language del lado Deepgram — el usuario mezcla
   // ES/EN y forzar un idioma hace que el otro salga basura ('and' por una
@@ -62,7 +64,10 @@ export async function transcribeDeepgram(wavBase64) {
   }
   const body = await response.json();
   const alt = body?.results?.channels?.[0]?.alternatives?.[0];
-  return String(alt?.transcript || '').trim();
+  const confidence = (typeof alt?.confidence === 'number' && Number.isFinite(alt.confidence))
+    ? alt.confidence
+    : null;
+  return { text: String(alt?.transcript || '').trim(), confidence };
 }
 
 // Sintetiza una oración. Devuelve [{ data: base64 PCM 16k, mimeType }] en

@@ -484,7 +484,8 @@ export class MeetingSession {
 
     if (message.type === 'client_stats' && message.stats && typeof message.stats === 'object') {
       // Telemetría de voz del cliente (VAD/barge por turno): números para
-      // afinar umbrales con datos reales. Se guarda tal cual llega.
+      // afinar umbrales + reopened (la gracia salvó un corte) + hintEnd
+      // (cola del hint al cerrar). Se guarda tal cual llega (§3a).
       this.logTelemetry('client_voice', message.stats);
       return;
     }

@@ -3,12 +3,17 @@
 Corre 100% en la máquina; descarga el modelo de Hugging Face en el primer
 arranque. API:
   GET  /health                → {"ok": true, "model": "small"}
-  POST /v1/transcribe         → {"text": "...", "language": "es", "durationMs": 1234}
+  POST /v1/transcribe         → {"text": "...", "language": "es", "durationMs": 1234, "confidence": 0.87}
        body JSON: {"audio_base64": "<wav>", "language": "es"|null}
+
+confidence: promedio de exp(avg_logprob) por segmento ponderado por
+  duración (avg_logprob ∈ (-inf, 0]; exp lo lleva a (0, 1]). None si no
+  hubo segmentos. stt.js reintenta en Deepgram si es MUY baja (§2e).
 """
 
 import base64
 import io
+import math
 import os
 import time
 
@@ -72,11 +77,22 @@ def transcribe(request: TranscribeRequest):
         vad_filter=True,
         beam_size=1,
     )
-    text = " ".join(segment.text.strip() for segment in segments).strip()
+    # segments es generador: se materializa para texto + confianza.
+    seg_list = list(segments)
+    text = " ".join(s.text.strip() for s in seg_list).strip()
+    confidence = None
+    total_dur = sum(max(0.0, (s.end or 0.0) - (s.start or 0.0)) for s in seg_list)
+    if seg_list and total_dur > 0:
+        weighted = sum(
+            math.exp(max(-20.0, s.avg_logprob or -20.0)) * max(0.0, (s.end or 0.0) - (s.start or 0.0))
+            for s in seg_list
+        )
+        confidence = round(weighted / total_dur, 4)
     return {
         "text": text,
         "language": info.language,
         "durationMs": round((time.monotonic() - started) * 1000),
+        "confidence": confidence,
     }
 
 
