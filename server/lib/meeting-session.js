@@ -20,6 +20,7 @@ import {
   shouldCeoClose
 } from './groupchat.js';
 import { completeChat, parseJsonFromModel, withTimeout } from './llm.js';
+import { getDefaultSession, setDefaultSession } from './driver.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
 import { renderMemorySection } from './pablo-memory.js';
@@ -232,6 +233,8 @@ export class MeetingSession {
     for (const agent of this.sessionAgents) {
       ensureAgentConventions(this.company.id, agent);
     }
+    // Driver autónomo: esta sesión (con runtimes vivos) atiende /api/team/jobs.
+    setDefaultSession(this);
 
     telemetry.add({
       type: 'meeting_session_created',
@@ -2146,6 +2149,7 @@ export class MeetingSession {
   }
 
   close() {
+    if (getDefaultSession() === this) setDefaultSession(null);
     if (this.sessionCounted) {
       unregisterSession();
       this.sessionCounted = false;
