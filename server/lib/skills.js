@@ -5,7 +5,8 @@
 //   name: investigacion-web
 //   description: Buscar y citar información de la web.
 //   keywords: buscar, precio, docs, documentación, web, investigar
-//   scope: all            (chat | work | all)
+//   scope: all            (chat | work | all, más lista con comas:
+//                          role:<rol> | agent:<id> para skills por agente)
 //   ---
 //   <cuerpo markdown breve, imperativo>
 //
@@ -40,6 +41,9 @@ function parseSkill(filename, raw) {
     description: meta.description || '',
     keywords: (meta.keywords || '').split(',').map((k) => k.trim().toLowerCase()).filter(Boolean),
     scope: (meta.scope || 'all').toLowerCase(),
+    // Entradas del scope (lista con comas): 'all', 'chat', 'work',
+    // 'role:<rol>', 'agent:<id>'. Desconocidas se ignoran al matchear.
+    scopes: (meta.scope || 'all').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     body: match[2].trim().slice(0, 1500) // D6: cuerpo acotado (antes 4000)
   };
 }
@@ -106,8 +110,31 @@ function scoreSkill(skill, words) {
   return score;
 }
 
-export function matchSkills(text, { scope = 'chat', max = 2 } = {}) {
-  const skills = loadSkills().filter((s) => s.scope === 'all' || s.scope === scope);
+// ¿La skill le toca a este turno/agente? Sin agent: conducta histórica
+// (scope 'all' o == scope del turno; skills solo rol/agente NO matchean).
+// Con agent { id, role }: además matchean 'role:<rol>' y 'agent:<id>'.
+export function skillAppliesTo(skill, scope, agent = null) {
+  const entries = Array.isArray(skill.scopes) && skill.scopes.length > 0
+    ? skill.scopes
+    : [skill.scope];
+  const agentId = String(agent?.id || '').trim().toLowerCase();
+  const agentRole = String(agent?.role || '').trim().toLowerCase();
+  for (const entry of entries) {
+    if (entry === 'all' || entry === scope) {
+      return true;
+    }
+    if (entry.startsWith('role:') && agentRole && entry.slice(5).trim() === agentRole) {
+      return true;
+    }
+    if (entry.startsWith('agent:') && agentId && entry.slice(6).trim() === agentId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function matchSkills(text, { scope = 'chat', max = 2, agent = null } = {}) {
+  const skills = loadSkills().filter((s) => skillAppliesTo(s, scope, agent));
   if (skills.length === 0) {
     return [];
   }
@@ -120,8 +147,8 @@ export function matchSkills(text, { scope = 'chat', max = 2 } = {}) {
     .map((entry) => entry.skill);
 }
 
-export function renderSkillsSection(text, { scope = 'chat', max = 2 } = {}) {
-  const matched = matchSkills(text, { scope, max });
+export function renderSkillsSection(text, { scope = 'chat', max = 2, agent = null } = {}) {
+  const matched = matchSkills(text, { scope, max, agent });
   if (matched.length === 0) {
     return '';
   }

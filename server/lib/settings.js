@@ -298,6 +298,17 @@ export function getSalaAgentTimeoutMs() {
   return (Number.isFinite(value) && value >= 1000 && value <= 60000) ? value : 20000;
 }
 
+// ── Llamada grupal: réplicas entre agentes (R2 + cierre CEO) ────────────────
+// Flag default OFF: con off el turno es byte a byte el de siempre.
+export function getSalaGroupchat() {
+  const raw = dbValue('sala.groupchat');
+  if (raw === null || raw === undefined || raw === '') {
+    return false;
+  }
+  const value = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value);
+}
+
 // ── Lectura/escritura desde la UI ───────────────────────────────────────
 
 const EDITABLE_KEYS = new Set([
@@ -322,7 +333,8 @@ const EDITABLE_KEYS = new Set([
   'sala.timeoutMs',
   'sala.v2',
   'sala.sop',
-  'sala.agentTimeoutMs'
+  'sala.agentTimeoutMs',
+  'sala.groupchat'
 ]);
 
 const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
@@ -380,7 +392,8 @@ export function publicSettings() {
       timeoutMs: getSalaTimeoutMs(),
       v2: getSalaV2(),
       sop: getSalaSop(),
-      agentTimeoutMs: getSalaAgentTimeoutMs()
+      agentTimeoutMs: getSalaAgentTimeoutMs(),
+      groupchat: getSalaGroupchat()
     }
   };
 }
@@ -453,6 +466,10 @@ export function applySettings(patch) {
       if (!Number.isFinite(n) || n < 1000 || n > 60000) {
         continue;
       }
+    }
+    // Llamada grupal: flag booleano como sala.v1/v2.
+    if (key === 'sala.groupchat' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
     }
     if (value) {
       store.setSetting(key, value);

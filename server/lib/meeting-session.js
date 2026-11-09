@@ -6,8 +6,19 @@ import {
   ROUTER_TIMEOUT_MS,
   TELEMETRY_MAX_EVENTS
 } from './config.js';
-import { getMinimaxModels, getTtsLanguage } from './settings.js';
+import { getMinimaxModels, getSalaGroupchat, getTtsLanguage } from './settings.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
+import { ensureAgentConventions, renderAgentConventions } from './agent-conventions.js';
+import {
+  MAX_VOICES,
+  capTargets,
+  ceoCloseTurnText,
+  groupRequested,
+  looksLikeDisenso,
+  replicaTurnText,
+  selectReplicaTargets,
+  shouldCeoClose
+} from './groupchat.js';
 import { completeChat, parseJsonFromModel } from './llm.js';
 import { LearningObserver, renderLearningsSection } from './learning.js';
 import { MeetingMemory } from './memory.js';
@@ -215,6 +226,11 @@ export class MeetingSession {
     this.agents = new Map(
       this.sessionAgents.map((agent) => [agent.id, this.createAgentRuntime(agent)])
     );
+    // Convenciones por agente: crea workspace/<empresa>/agentes/<id>/AGENTS.md
+    // si falta (seed por rol). Solo toca disco, cero cambio de conducta.
+    for (const agent of this.sessionAgents) {
+      ensureAgentConventions(this.company.id, agent);
+    }
 
     telemetry.add({
       type: 'meeting_session_created',
@@ -284,7 +300,16 @@ export class MeetingSession {
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
       // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
       // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 })
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 }),
+      // Convenciones propias del agente (top ~15 líneas, ≤900ch): van a SU
+      // system prompt y a ningún otro. buildSystemInstruction lo inyecta
+      // (integración main); mientras tanto el campo se ignora sin daño.
+      conventionsSection: agentId
+        ? renderAgentConventions(
+            this.company?.id || 'pablo',
+            this.sessionAgents.find((a) => a.id === agentId) || { id: agentId }
+          )
+        : ''
     };
   }
 
@@ -326,7 +351,16 @@ export class MeetingSession {
       learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
       // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
       // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 })
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 }),
+      // Convenciones propias del agente (top ~15 líneas, ≤900ch): van a SU
+      // system prompt y a ningún otro. buildSystemInstruction lo inyecta
+      // (integración main); mientras tanto el campo se ignora sin daño.
+      conventionsSection: agentId
+        ? renderAgentConventions(
+            this.company?.id || 'pablo',
+            this.sessionAgents.find((a) => a.id === agentId) || { id: agentId }
+          )
+        : ''
     };
   }
 
@@ -1259,6 +1293,24 @@ export class MeetingSession {
     if (signal?.aborted) {
       return;
     }
+    // Llamada grupal (flag sala.groupchat): sin grupo convocado, max 3
+    // voces por turno. El recorte va ANTES del route_decision para que lo
+    // emitido coincida con lo que sale. Flag OFF: intacto.
+    try {
+      if (getSalaGroupchat()) {
+        const { targets, capped } = capTargets(route.targets, route);
+        if (capped > 0) {
+          route.targets = targets;
+          this.logTelemetry('groupchat_capped', {
+            turnId,
+            dropped: capped,
+            kept: targets.map((t) => t.agentId)
+          }, turnId);
+        }
+      }
+    } catch {
+      // Settings caidos: el turno sigue sin tope.
+    }
     this.send({ type: 'route_decision', turnId, route });
     this.logTelemetry('route_decision', {
       turnId,
@@ -1367,11 +1419,172 @@ export class MeetingSession {
       }
     }
 
+    // Llamada grupal (flag sala.groupchat): réplicas R2 + cierre CEO entre
+    // la ronda 1 y los followups contextuales. Flag OFF: intacto.
+    if (!route.closing && !signal?.aborted) {
+      await this.processReplicaRounds(turnId, text, route, signal);
+    }
+
     if (!route.closing && !signal?.aborted) {
       await this.processContextualFollowups(turnId, text, route, signal);
     }
 
     this.learningObserver.observeCycle(this.meeting.id, this.memory, this.sessionAgents, text);
+  }
+
+  // Llamada grupal R2 (flag sala.groupchat, default OFF): tras la ronda 1,
+  // los agentes ALUDIDOS por un compañero (mención por nombre/alias)
+  // responden en R2 (máx 2 rondas + cierre CEO, máx 3 voces/turno salvo
+  // grupo convocado). Cada réplica ve priorResponses ("nombre: texto")
+  // y le habla AL compañero citado; SILENCIO sigue válido.
+  async processReplicaRounds(turnId, originalText, route, signal) {
+    let enabled = false;
+    try {
+      enabled = getSalaGroupchat();
+    } catch {
+      return;
+    }
+    if (!enabled || signal?.aborted) {
+      return;
+    }
+    // Solo las respuestas de R1: en este punto route.responses no tiene
+    // ni réplicas ni followups (ambos corren después).
+    const responsesR1 = [...(route.responses || [])];
+    if (responsesR1.length === 0) {
+      return;
+    }
+    const replicaTargets = selectReplicaTargets({
+      responsesR1,
+      agents: this.sessionAgents,
+      spokenIds: (route.targets || []).map((t) => t.agentId),
+      totalSpoken: responsesR1.length,
+      route
+    });
+    let replicaSpoke = false;
+    for (const target of replicaTargets) {
+      if (signal?.aborted) {
+        return;
+      }
+      const agent = this.agents.get(target.agentId);
+      if (!agent) {
+        continue;
+      }
+      route.targets.push(target);
+      this.logTelemetry('groupchat_replica', {
+        turnId,
+        agentId: target.agentId,
+        citedBy: target.citedBy,
+        disenso: looksLikeDisenso(target.citedText || '')
+      }, turnId);
+      const response = await this.runGroupchatTurn({
+        turnId,
+        agent,
+        speaker: target.citedBy || 'Otro agente',
+        text: replicaTurnText({
+          citedBy: target.citedBy || 'Un compañero',
+          citedText: target.citedText,
+          originalText
+        }),
+        route,
+        target,
+        signal
+      });
+      if (response?.text) {
+        replicaSpoke = true;
+      }
+    }
+    // Cierre CEO: R2 tuvo ≥1 voz, CEO activa sin hablar este turno, y
+    // queda cupo de voces (salvo grupo convocado, que no tiene tope).
+    const ceo = shouldCeoClose({
+      replicaSpoke,
+      agents: this.sessionAgents,
+      spokenIds: (route.targets || []).map((t) => t.agentId)
+    });
+    if (!ceo || signal?.aborted) {
+      return;
+    }
+    if (!groupRequested(route) && (route.responses || []).length >= MAX_VOICES) {
+      return;
+    }
+    const agent = this.agents.get(ceo.id);
+    if (!agent) {
+      return;
+    }
+    const closeTarget = {
+      agentId: ceo.id,
+      name: ceo.name,
+      score: 5,
+      directMention: false,
+      matchedDomains: ['cierre grupal']
+    };
+    route.targets.push(closeTarget);
+    this.logTelemetry('groupchat_ceo_close', { turnId, agentId: ceo.id }, turnId);
+    await this.runGroupchatTurn({
+      turnId,
+      agent,
+      speaker: 'La reunión',
+      text: ceoCloseTurnText({ originalText }),
+      route,
+      target: closeTarget,
+      signal
+    });
+  }
+
+  // Un turno de llamada grupal (réplica R2 o cierre CEO): mismo protocolo
+  // que los followups contextuales (tareas desde rawText, memoria, eventos
+  // de turno). R1 no pasa por acá: su loop no se toca.
+  async runGroupchatTurn({ turnId, agent, speaker, text, route, target, signal }) {
+    this.send({ type: 'agent_turn_start', turnId, agentId: agent.id });
+    this.logTelemetry('agent_turn_start', {
+      turnId,
+      agentId: agent.id,
+      agentName: agent.name,
+      groupchat: true,
+      matchedDomains: target.matchedDomains || []
+    }, turnId);
+    const response = await agent.respond({
+      speaker,
+      text,
+      route,
+      target,
+      priorResponses: route.responses || [],
+      isContextualFollowup: true
+    }, (event) => {
+      this.send({ ...event, turnId, agentId: agent.id });
+    }, { signal, gate: this.gate, turnId });
+    if (response.rawText) {
+      const cleanedText = this.processAgentTaskCommands(agent.id, response.rawText);
+      response.text = response.text ? cleanedText : '';
+    }
+    if (response.text) {
+      this.memory.add('agent', agent.name, response.text, agent.id, turnId);
+      route.responses = [
+        ...(route.responses || []),
+        {
+          agentId: agent.id,
+          name: agent.name,
+          text: response.text
+        }
+      ];
+    }
+    this.send({
+      type: 'agent_turn_complete',
+      turnId,
+      agentId: agent.id,
+      text: response.text,
+      usedMock: response.usedMock,
+      keyStatus: this.keyRing.snapshot()
+    });
+    this.logTelemetry('agent_turn_complete', {
+      turnId,
+      agentId: agent.id,
+      agentName: agent.name,
+      text: response.text,
+      usedMock: response.usedMock,
+      spoke: Boolean(response.text?.trim()),
+      groupchat: true
+    }, turnId);
+    return response;
   }
 
   async processContextualFollowups(turnId, originalText, route, signal) {

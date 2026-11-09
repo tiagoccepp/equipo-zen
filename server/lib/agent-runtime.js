@@ -609,7 +609,7 @@ export class LiveAgentRuntime {
     lines.push(T('Tus tareas actuales:', 'Your current tasks:'));
     lines.push(tasksFormatted);
     lines.push('');
-    const skills = renderSkillsSection(turn.text || '', { scope: 'chat' });
+    const skills = renderSkillsSection(turn.text || '', { scope: 'chat', agent: this.agent });
     if (skills) {
       lines.push(skills);
     }
@@ -778,6 +778,10 @@ export function buildSystemInstruction(agent, context = {}) {
     ? [context.learningsSection, '']
     : [];
 
+  const conventionsBlock = context.conventionsSection
+    ? [context.conventionsSection, '']
+    : [];
+
   return [
     T(`Sos ${agent.name}, ${agent.title}. Estás en una reunión de trabajo con el usuario y otros compañeros.`, `You are ${agent.name}, ${agent.title}. You are in a work meeting with the user and other teammates.`),
     '',
@@ -804,6 +808,7 @@ export function buildSystemInstruction(agent, context = {}) {
     ...boundariesBlock,
     ...memoryBlock,
     ...learningsBlock,
+    ...conventionsBlock,
     '---',
     '',
     T('TUS TAREAS ACTUALES:', 'YOUR CURRENT TASKS:'),

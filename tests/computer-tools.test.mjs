@@ -435,3 +435,22 @@ test('regresión: clasificarComando permite xdg-open/brave en vivo (ya andaba)',
     assert.equal(r.permitido, true, `${cmd} permitido en vivo`);
   }
 });
+
+test('xauthEnv: respeta XAUTHORITY existente y descubre cookie mutter si falta', async () => {
+  const { xauthEnv } = await import('../server/lib/manos.js');
+  const prev = process.env.XAUTHORITY;
+  try {
+    process.env.XAUTHORITY = '/tmp/fake-cookie';
+    assert.equal(xauthEnv(), undefined, 'con XAUTHORITY respeta y hereda');
+    delete process.env.XAUTHORITY;
+    const env = xauthEnv();
+    if (env) {
+      assert.match(env.XAUTHORITY, /mutter-Xwaylandauth/, 'descubre cookie mutter');
+    } else {
+      assert.ok(true, 'sin cookie visible: hereda (el comando degrada claro)');
+    }
+  } finally {
+    if (prev === undefined) delete process.env.XAUTHORITY;
+    else process.env.XAUTHORITY = prev;
+  }
+});

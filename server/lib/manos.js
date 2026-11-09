@@ -14,6 +14,7 @@
 // - Salidas truncadas: nada de volcar archivos enteros al prompt.
 
 import { spawn } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -397,11 +398,30 @@ const COMPUTER_RUN_TIMEOUT_MS = 15000;
 const WINDOW_LIST_MAX = 50;
 const OPEN_URL_MAX_CHARS = 500;
 
+// XAUTHORITY bajo GNOME/Wayland: el cookie de XWayland vive en
+// /run/user/$UID/.mutter-Xwaylandauth.* (sufijo aleatorio por sesión).
+// Sin esto, xwininfo/scrot fallan con 'Authorization required' cuando el
+// backend no heredó XAUTHORITY (lanzamientos sin sesión gráfica completa).
+// Si ya hay XAUTHORITY, se respeta (retorna undefined = heredar todo).
+export function xauthEnv() {
+  if (process.env.XAUTHORITY) return undefined;
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
+    const dir = `/run/user/${uid}`;
+    const f = readdirSync(dir).find((n) => n.startsWith('.mutter-Xwaylandauth.'));
+    if (f) return { ...process.env, XAUTHORITY: path.join(dir, f) };
+  } catch {
+    // Sin cookie visible: heredar y que el comando degrade con error claro.
+  }
+  return undefined;
+}
+
 function spawnSinShell(cmd, args, { timeoutMs = COMPUTER_RUN_TIMEOUT_MS, cwd = undefined } = {}) {
   return new Promise((resolve) => {
     let hijo;
     try {
-      hijo = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const env = xauthEnv();
+      hijo = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
     } catch (error) {
       resolve({ ok: false, codigo: -1, salida: '', error: errorClaro(error) });
       return;
