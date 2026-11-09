@@ -186,6 +186,18 @@ export function listSkillNames() {
   return loadSkills().map((s) => s.name);
 }
 
+// Track B (flujo de equipo): skills inyectables para un rol — las que le
+// aplican por scope (all o role:<rol>). Aditivo: usa loadSkills +
+// skillAppliesTo existentes, no cambia su conducta.
+export function skillsForRole(rol) {
+  const agent = { id: null, role: String(rol || '').trim().toLowerCase() };
+  // Aplica si le toca en ALGÚN turno (chat o work): cubre scopes 'all',
+  // 'chat', 'work', 'role:<rol>' y 'agent:<id>' sin cambiar su semántica.
+  return loadSkills()
+    .filter((s) => skillAppliesTo(s, 'chat', agent) || skillAppliesTo(s, 'work', agent))
+    .map((s) => s.name);
+}
+
 // Solo tests.
 export function __resetSkillsCache() {
   cache = null;

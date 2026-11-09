@@ -29,6 +29,7 @@ import { logEvent } from './session-log.js';
 import { AgentRouter } from './router.js';
 import { inferirArchivo } from './inferir-archivo.js';
 import { disponible as disenoDisponible, esAgenteDeDiseno } from './openpencil.js';
+import { voicePayload as teamVoicePayload } from './orchestrator.js';
 import { listProjectFilesFor, renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
@@ -1585,6 +1586,42 @@ export class MeetingSession {
       groupchat: true
     }, turnId);
     return response;
+  }
+
+  // Flujo de equipo (track A): anuncia un evento del flujo (plan_listo,
+  // dispatch, entrega, devolucion, aprobado) en la llamada viva. ADITIVO:
+  // no-op sin reunión/socket, no toca R1/R2/CEO. Con sala.groupchat ON el
+  // cliente puede vocalizarlo (team_event lleva speaker+texto listos);
+  // con OFF solo queda visible en el chat. El encolado real de audio lo
+  // cablea main cuando integre (conoce gate/cola); el payload sale listo.
+  announceTeamEvent(evento) {
+    if (!this.meeting || !this.socket) {
+      return null;
+    }
+    let payload = null;
+    try {
+      payload = teamVoicePayload(evento);
+    } catch {
+      return null;
+    }
+    if (!payload) {
+      return null;
+    }
+    let groupchat = false;
+    try {
+      groupchat = getSalaGroupchat();
+    } catch {
+      groupchat = false;
+    }
+    this.send({
+      type: 'team_event',
+      evento: evento?.tipo || null,
+      speaker: payload.speaker,
+      texto: payload.texto,
+      voice: groupchat && this.voiceEnabled
+    });
+    this.logTelemetry('team_event', { evento: evento?.tipo || null, speaker: payload.speaker });
+    return payload;
   }
 
   async processContextualFollowups(turnId, originalText, route, signal) {

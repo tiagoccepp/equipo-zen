@@ -247,3 +247,129 @@ export function renderLearningsSection(store, agentId) {
     enLearn ? 'Apply this naturally; do not recite or mention it.' : 'Aplicá esto con naturalidad; no lo recites ni lo menciones.'
   ].join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Hook aditivo track C (flujo de equipo, 09/11): learnings de cierre de laburo
+// + contexto previo por rol. No toca nada existente: solo nuevos exports que
+// usan store.insertLearning / activeLearnings / reinforceLearning.
+// ---------------------------------------------------------------------------
+
+const LABURO_CONFIDENCE = 0.8;
+const LABURO_MAX_ITEMS = 8;
+
+// laburo: { meetingId?, agentePorRol?: { rol: agentId }, juicioFinal?,
+//   rondas?, fallosRecurrentes?: string[], reusar?: string[], vigilar?: string[] }
+// juicioFinal: salida de tester.juzgar (veredicto devolucion/aprobado).
+// Idempotente: dedup Jaccard ≥ DEDUP_JACCARD contra activos → 2ª llamada = 0 creados.
+// -> { creados, reforzados }
+export function registrarLearningsDeLaburo(store, laburo = {}) {
+  const out = { creados: 0, reforzados: 0 };
+  if (!store || typeof store.insertLearning !== 'function') {
+    return out;
+  }
+  const items = laburoLearnings(laburo).slice(0, LABURO_MAX_ITEMS);
+  const activos = typeof store.activeLearnings === 'function' ? store.activeLearnings() : [];
+  for (const item of items) {
+    const content = String(item.content || '').trim().slice(0, LEARNING_ITEM_MAX_CHARS);
+    if (!content) continue;
+    const sig = tokenSet(content);
+    const dup = activos.find((a) => jaccard(sig, tokenSet(a.content)) >= DEDUP_JACCARD);
+    if (dup) {
+      try {
+        store.reinforceLearning(dup.id, LABURO_CONFIDENCE);
+        out.reforzados += 1;
+      } catch { /* store parcial en tests: no rompe */ }
+      continue;
+    }
+    try {
+      const id = store.insertLearning({
+        agentId: item.agentId || null,
+        meetingId: laburo.meetingId || null,
+        type: 'skill_note',
+        content,
+        confidence: LABURO_CONFIDENCE,
+        sourceTurnIds: []
+      });
+      activos.push({ id, content });
+      out.creados += 1;
+    } catch { /* store parcial: se ignora el item */ }
+  }
+  return out;
+}
+
+function laburoLearnings(laburo) {
+  const items = [];
+  const porRol = laburo.agentePorRol || {};
+  const juicio = laburo.juicioFinal || {};
+  const push = (rol, content) => {
+    if (String(content || '').trim()) items.push({ agentId: porRol[rol] || null, content });
+  };
+  if (juicio.veredicto === 'aprobado') {
+    const cob = juicio.cobertura || {};
+    push('tester', `Laburo aprobado: ${cob.checksPasados ?? 0}/${cob.checksTotales ?? 0} checks en verde (${(cob.personas || []).length} personas × ${(cob.dimensiones || []).length} dims).`);
+    for (const t of (juicio.arregladoEnRondas || []).slice(0, 3)) {
+      push('tester', `Se detectó y arregló en rondas: ${t}.`);
+    }
+    for (const l of (juicio.limitaciones || []).slice(0, 2)) {
+      push('tester', `Limitación conocida a cubrir la próxima: ${l}.`);
+    }
+  } else if (juicio.veredicto === 'devolucion') {
+    for (const f of (juicio.fallos || []).slice(0, 4)) {
+      push('tester', `[${f.severidad}] lo encontró ${f.persona} (${f.dimension}): ${f.titulo}.`);
+    }
+  }
+  if (Number.isFinite(laburo.rondas) && laburo.rondas > 1) {
+    push(null, `El laburo llevó ${laburo.rondas} rondas de test: reforzar definición de done en el brief.`);
+  }
+  for (const f of (laburo.fallosRecurrentes || []).slice(0, 3)) {
+    push('tester', `Fallo recurrente a vigilar siempre: ${f}.`);
+  }
+  for (const r of (laburo.reusar || []).slice(0, 2)) {
+    push(null, `Reusar en próximos laburos: ${r}.`);
+  }
+  for (const v of (laburo.vigilar || []).slice(0, 2)) {
+    push(null, `Vigilar en próximos laburos: ${v}.`);
+  }
+  return items;
+}
+
+const STOPWORDS = new Set('de la el en y a los las un una para con por como más mas qué que se su sus al del esto esta este estos estas'.split(' '));
+
+function temaTokens(tema) {
+  return normalize(String(tema || '')).split(' ').filter((t) => t.length > 2 && !STOPWORDS.has(t));
+}
+
+// Bloque a inyectar en el prompt del rol antes de producir (el cableado en
+// runtime lo hace el main). '' si no hay nada relevante (sin ruido).
+export function contextoPrevio(store, rol, tema, opts = {}) {
+  const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : 800;
+  if (!store || typeof store.activeLearnings !== 'function') return '';
+  const tokens = temaTokens(tema);
+  if (tokens.length === 0) return '';
+  const agentId = opts.agentId || null;
+  let learnings;
+  try {
+    learnings = store.activeLearnings(agentId || undefined);
+  } catch {
+    return '';
+  }
+  if (!Array.isArray(learnings) || learnings.length === 0) return '';
+  const scored = [];
+  for (const l of learnings) {
+    const contenido = normalize(String(l.content || ''));
+    const hits = tokens.filter((t) => contenido.includes(t)).length;
+    if (hits === 0) continue;
+    scored.push({ l, score: hits * 10 + (Number(l.confidence) || 0) });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const lines = [];
+  let used = 0;
+  for (const { l } of scored) {
+    const line = `- ${String(l.content).slice(0, LEARNING_ITEM_MAX_CHARS)}`;
+    if (used + line.length > maxChars) break;
+    lines.push(line);
+    used += line.length;
+  }
+  if (lines.length === 0) return '';
+  return [`CONTEXTO PREVIO (${rol}, de laburos anteriores):`, ...lines].join('\n');
+}
