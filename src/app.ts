@@ -5,6 +5,11 @@ import './app.css';
 import type { OrbAgent, OrbSlot } from './lib/call-orbs.ts';
 import { OrbMorph, type AgentVisualState } from './fx/orb-morph.ts';
 import { createOrb3D, probeWebGL2, type Orb3D } from './fx/orb3d.ts';
+// Glifos B (T2b): side-effect que registra los 50 en el lookup de A.
+import './fx/glyphs-index.ts';
+import { mountJobs } from './jobs/view.ts';
+import { mountManager } from './manager/view.ts';
+import './manager/manager.css';
 import { mountMissionControl } from './mission/view.ts';
 import './mission/mission.css';
 import './fx/motion.css';
@@ -14,14 +19,19 @@ import { mountMesh } from './fx/mesh.ts';
 import { isTauri, tinvoke } from './lib/tauri.ts';
 import {
   Client,
+  apiJson,
   decir,
   findOrCreatePabloSpace,
   firstProject,
+  getAudioDevices,
   getSettings,
   getSidecars,
   listCompanies,
   resolveBase,
   saveSettings,
+  setAudioMute,
+  setAudioVolume,
+  testAudioOutput,
   type Agent,
   type PublicSettings,
   type SidecarStatus
@@ -33,6 +43,10 @@ const $ = (id: string): HTMLElement => {
   if (!el) throw new Error(`falta #${id}`);
   return el;
 };
+
+// Pelado defensivo de tags [[...]] (el backend ya limpia; esto cubre
+// mocks y textos viejos para que nunca se vean literales en el chat).
+const stripGestoTags = (s: string): string => s.replace(/\[\[[^\]]*\]\]/g, '');
 
 const greetEl = $('greet');
 const statusEl = $('status');
@@ -57,6 +71,79 @@ function setConn(state: 'connecting' | 'live' | 'offline'): void {
   connEl.classList.toggle('live', state === 'live');
   connEl.classList.toggle('offline', state === 'offline');
   connTextEl.textContent = state === 'live' ? 'Live' : state === 'offline' ? 'Offline' : 'Connecting';
+}
+
+// ── Vistas (T3 minimal: 1 columna, tabs + hash) ─────────────────────────
+// #view-jobs y #view-manager los monta main (T4/T5); acá solo switch + tabs.
+type ViewName = 'console' | 'jobs' | 'manager' | 'settings';
+const VIEW_ORDER: ViewName[] = ['console', 'jobs', 'manager', 'settings'];
+let currentView: ViewName = 'console';
+let jobsMounted = false;
+let managerMounted = false;
+
+function switchView(name: ViewName): void {
+  if (!VIEW_ORDER.includes(name)) name = 'console';
+  currentView = name;
+  for (const v of VIEW_ORDER) {
+    document.getElementById(`view-${v}`)?.toggleAttribute('hidden', v !== name);
+  }
+  document.querySelectorAll('.tabs [data-view]').forEach((btn) => {
+    const on = (btn as HTMLElement).dataset.view === name;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+    (btn as HTMLButtonElement).tabIndex = on ? 0 : -1;
+  });
+  try {
+    history.replaceState(null, '', `#/${name}`);
+  } catch {
+    // Sin history (file://, webview vieja): las vistas igual andan.
+  }
+  // Montaje perezoso v2 (integración main): jobs/manager se montan una
+  // sola vez al visitar su tab (boot rápido, fetch con apiBase correcto).
+  if (name === 'jobs' && !jobsMounted) {
+    const el = document.getElementById('view-jobs');
+    if (el) {
+      try {
+        mountJobs(el, { fetchJson: (path: string, init?: RequestInit) => apiJson(path, init) });
+        jobsMounted = true;
+      } catch (err) {
+        console.warn('[jobs] mount falló:', err);
+      }
+    }
+  }
+  if (name === 'manager' && !managerMounted) {
+    const el = document.getElementById('view-manager');
+    if (el) {
+      try {
+        mountManager(el, { fetchJson: (path: string, init?: RequestInit) => apiJson(path, init) });
+        managerMounted = true;
+      } catch (err) {
+        console.warn('[manager] mount falló:', err);
+      }
+    }
+  }
+  if (name === 'console') {
+    // El canvas vuelve a tener tamaño: re-layout vía el listener existente.
+    window.dispatchEvent(new Event('resize'));
+  }
+}
+
+function initViews(): void {
+  const nav = document.querySelector('.tabs') as HTMLElement | null;
+  nav?.querySelectorAll('[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => switchView((btn as HTMLElement).dataset.view as ViewName));
+  });
+  // Roving tabindex: ←/→ se mueven entre tabs, el foco entra con Tab.
+  nav?.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    e.preventDefault();
+    const idx = VIEW_ORDER.indexOf(currentView);
+    const next = VIEW_ORDER[(idx + (e.key === 'ArrowRight' ? 1 : VIEW_ORDER.length - 1)) % VIEW_ORDER.length];
+    switchView(next);
+    (nav.querySelector(`[data-view="${next}"]`) as HTMLButtonElement | null)?.focus();
+  });
+  const hash = window.location.hash.replace(/^#\/?/, '') as ViewName;
+  switchView(VIEW_ORDER.includes(hash) ? hash : 'console');
 }
 
 function addMsg(who: string, text: string, cls = '', title = ''): void {
@@ -562,7 +649,9 @@ const client = new Client({
   },
   onAgentEnd: (agentId, text, turnId) => {
     if (turnId) activeTurns.delete(turnId);
-    const full = text || turnText.get(agentId) || '';
+    // Cinturón + tirantes: el backend pela los tags, pero si alguno llega
+    // (mock, replay viejo), no se muestra literal en el chat.
+    const full = stripGestoTags(text || turnText.get(agentId) || '');
     turnText.delete(agentId);
     if (full.trim()) {
       addMsg(agentName(agentId).toLowerCase(), full);
@@ -604,6 +693,15 @@ const client = new Client({
     } else if ((state === 'idle' || state === 'interrupted') && speakingAgent === agentId && !audioSegment) {
       speakingAgent = '';
       setSpeaking('');
+    }
+  },
+  // Gesto v2: el backend ya peló el tag del texto/habla; acá solo morphéa.
+  // Gesto inválido = lookup null = setGlyph ignora (nunca rompe la vista).
+  onGesto: (agentId, gesto) => {
+    try {
+      field.setGlyph(agentId, gesto);
+    } catch (err) {
+      console.warn('[gesto] setGlyph falló:', err);
     }
   },
   onInterrupted: (agentId, turnId) => {
@@ -1143,7 +1241,7 @@ async function renderSettings(): Promise<void> {
   // Volumen/mute son vivos e independientes del routing: siempre activos.
   box.appendChild(settingGroup('Audio'));
   const audioSel = s.audio || { output: 'default', input: 'default', followDefault: true };
-  const { getAudioDevices, setAudioVolume, setAudioMute, testAudioOutput } = await import('./client.ts');
+  // (audio fns: import estático arriba; el dinámico duplicaba el chunk core).
   let audioDev = null;
   try {
     audioDev = await getAudioDevices();
@@ -1334,6 +1432,17 @@ document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
     stopSidecarRefresh();
   }
 });
+// T3: Companies y Settings arrancan abiertos en su vista → render inicial
+// sin esperar el primer toggle (que ya no llega solo).
+{
+  const companiesBox = document.querySelector('.companies') as HTMLDetailsElement | null;
+  if (companiesBox?.open) void renderCompanies();
+  const settingsBox = document.getElementById('settings-box') as HTMLDetailsElement | null;
+  if (settingsBox?.open) {
+    void renderSettings();
+    startSidecarRefresh();
+  }
+}
 if (isTauri()) {
   $('perms-box').hidden = false;
 }
@@ -1356,26 +1465,77 @@ mountMotion();
   window.addEventListener('resize', sizeMesh);
   sizeMesh();
 }
-mountPalette({
+// ── Command bar Ctrl+K (T3): vistas, voz, jobs, MCP ────────────────────
+// helpers de acciones (usan estado existente; sin tocar región visual).
+function newMeeting(): void {
+  if (!currentCompany || !currentGoal) {
+    setStatus('No company yet — pick one in Settings first.');
+    switchView('settings');
+    return;
+  }
+  try {
+    window.localStorage.removeItem(meetingKey(currentCompany, currentGoal));
+  } catch {
+    // Sin storage: el servidor igual crea reunión nueva sin meetingId.
+  }
+  switchView('console');
+  client.connect(currentCompany, currentGoal);
+  setStatus('New meeting started…');
+}
+
+async function mcpReconnect(): Promise<void> {
+  setStatus('Reconnecting MCP…');
+  try {
+    const res = await fetch('/api/mcp/reconnect', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setStatus('MCP reconnect requested ✓');
+  } catch (err) {
+    setStatus('MCP reconnect not available yet');
+    addMsg('system', `MCP reconnect failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
+  }
+}
+
+function openMission(): void {
+  switchView('settings');
+  const box = document.getElementById('settings-box') as HTMLDetailsElement | null;
+  if (box) {
+    box.open = true;
+    document.getElementById('mission-list')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+const palette = mountPalette({
   actions: [
-    { id: 'mic', label: 'Mic on/off', hint: 'sesión de voz' },
-    { id: 'call', label: 'Llamada grupal on/off', hint: 'todos escuchan' },
-    { id: 'voice', label: 'Voz on/off', hint: 'mute salida' },
-    { id: 'mission', label: 'Abrir Mission Control', hint: 'dashboard' }
+    { id: 'go-console', label: 'Go to Console', group: 'Views', kbd: '1' },
+    { id: 'go-jobs', label: 'Go to Jobs', group: 'Views', kbd: '2' },
+    { id: 'go-manager', label: 'Go to Manager', group: 'Views', kbd: '3' },
+    { id: 'go-settings', label: 'Go to Settings', group: 'Views', kbd: '4' },
+    { id: 'mic', label: 'Mic on/off', group: 'Voice', hint: 'voice session' },
+    { id: 'call', label: 'Group call on/off', group: 'Voice', hint: 'everyone listens' },
+    { id: 'voice', label: 'Spoken replies on/off', group: 'Voice', hint: 'mute output' },
+    { id: 'voice-check', label: 'Voice check', group: 'Voice', hint: 'test playback' },
+    { id: 'new-meeting', label: 'New meeting', group: 'Session', hint: 'fresh round' },
+    { id: 'jobs-recent', label: 'Recent jobs', group: 'Session', hint: 'history + replay' },
+    { id: 'mcp-reconnect', label: 'Reconnect MCP', group: 'Session', hint: 'retry servers' },
+    { id: 'mission', label: 'Open Mission Control', group: 'Session', hint: 'dashboard' }
   ],
   onAction: (id) => {
-    if (id === 'mic') micBtn.click();
+    if (id === 'go-console') switchView('console');
+    else if (id === 'go-jobs') switchView('jobs');
+    else if (id === 'go-manager') switchView('manager');
+    else if (id === 'go-settings') switchView('settings');
+    else if (id === 'mic') micBtn.click();
     else if (id === 'call') callBtn.click();
     else if (id === 'voice') voiceBtn.click();
-    else if (id === 'mission') {
-      const box = document.getElementById('settings-box') as HTMLDetailsElement | null;
-      if (box) {
-        box.open = true;
-        document.getElementById('mission-list')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }
+    else if (id === 'voice-check') $('btn-test-voice').click();
+    else if (id === 'new-meeting') newMeeting();
+    else if (id === 'jobs-recent') switchView('jobs');
+    else if (id === 'mcp-reconnect') void mcpReconnect();
+    else if (id === 'mission') openMission();
   }
 });
+$('btn-palette').addEventListener('click', () => palette.toggle());
+initViews();
 {
   const settingsBox = document.getElementById('settings-box');
   if (settingsBox) {
@@ -1416,7 +1576,14 @@ mountPalette({
 
 // ── Arranque ────────────────────────────────────────────────────────
 layoutOrbs();
-void upgradeTo3D();
+// 3D diferido (opt 09/11 #7): three.js = 85% del bundle y se parseaba en
+// cada boot. El 2D arranca al instante; el upgrade a WebGL corre idle.
+const idleCall = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+if (idleCall) {
+  idleCall(() => { void upgradeTo3D(); }, { timeout: 4000 });
+} else {
+  window.setTimeout(() => { void upgradeTo3D(); }, 1200);
+}
 
 (async () => {
   try {

@@ -12,8 +12,9 @@ import {
 import { buildSystemInstruction } from './agent-runtime.js';
 import { applyAudioSettings, listDevices, playTestTone, setNodeMute, setNodeVolume } from './audio.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
-import { enqueueJob, getDefaultSession, getJob } from './driver.js';
+import { enqueueJob, findJobRecord, getDefaultSession, getJob, listJobHistory, listJobs, loadJobBrief, loadJobRecord } from './driver.js';
 import { renderLearningsSection } from './learning.js';
+import { getMcpStatus, setMcpStatusSnapshot } from './mcp-status.js';
 import { isMeetingLive } from './meeting-session.js';
 import { buildLiveSnapshot } from './mission.js';
 import { renderMemorySection } from './pablo-memory.js';
@@ -824,19 +825,145 @@ export function createApp({ store }) {
       return res.status(400).json({ error: 'brief requerido (objeto con objetivo, criteriosExito, ...)' });
     }
     try {
-      const { jobId, estado } = enqueueJob(session, brief, {});
+      // T4: el job creado por HTTP siempre deja historial en disco (replay).
+      const slug = typeof req.body?.slug === 'string' ? req.body.slug : undefined;
+      const { jobId, estado } = enqueueJob(session, brief, { recordHistory: true, ...(slug ? { slug } : {}) });
       res.json({ jobId, estado });
     } catch (error) {
       res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
     }
   });
 
-  app.get('/api/team/jobs/:id', (req, res) => {
+  // T4: lista recientes (vivos del registry + historial en disco).
+  app.get('/api/team/jobs', async (req, res) => {
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
+    const slug = typeof req.query.slug === 'string' ? req.query.slug : null;
+    let disk = [];
+    try {
+      disk = await listJobHistory({ slug, limit });
+    } catch {
+      disk = [];
+    }
+    const merged = new Map(disk.map((j) => [j.id, j]));
+    for (const j of listJobs()) {
+      if (!merged.has(j.id)) merged.set(j.id, { ...j, slug: slug || 'general', source: 'live' });
+    }
+    const jobs = [...merged.values()]
+      .sort((a, b) => (b.actualizadoEn || 0) - (a.actualizadoEn || 0))
+      .slice(0, limit);
+    res.json({ jobs });
+  });
+
+  app.get('/api/team/jobs/:id', async (req, res) => {
     const job = getJob(req.params.id);
-    if (!job) {
+    const slug = typeof req.query.slug === 'string' ? req.query.slug : null;
+    let record = null;
+    try {
+      record = slug
+        ? await loadJobRecord(slug, req.params.id)
+        : (await findJobRecord(req.params.id))?.record || null;
+    } catch {
+      record = null;
+    }
+    if (!job && !record) {
       return res.status(404).json({ error: 'job not found' });
     }
-    res.json({ job });
+    // Si el job ya no vive en memoria, se sintetiza una vista honesta desde
+    // el record (fromDisk) para que el detalle siga funcionando.
+    const fases = Array.isArray(record?.fases) ? record.fases : [];
+    const view = job || {
+      id: record.id,
+      estado: record.estado || 'desconocido',
+      motivo: record.motivo || null,
+      fromDisk: true,
+      progreso: {
+        estado: record.estado || 'desconocido',
+        fase: 'done',
+        fasesTotal: fases.length,
+        fasesCompletadas: fases.length,
+        ronda: record.rondas ?? 0,
+        maxRondas: 0,
+        dispatches: { total: fases.length, entregados: fases.length },
+        tests: record.tests || { celdas: 0, pasadas: 0, fallidas: 0, mecanicas: 0, turnos: 0 },
+        actualizadoEn: record.updatedAt ? Date.parse(record.updatedAt) || 0 : 0,
+        anuncios: (record.history || []).slice(-20).map((h) => ({ at: h.at, texto: h.texto || h.tipo || '' }))
+      },
+      resumen: {
+        objetivo: record.objetivo || record.brief?.objetivo || '',
+        fases: fases.length,
+        entregas: [],
+        tests: record.tests || {},
+        rondas: record.rondas ?? 0,
+        preguntas: null,
+        escalado: null
+      }
+    };
+    res.json({ job: view, history: record?.history || [], brief: record?.brief || null, fases });
+  });
+
+  // T4: replay — re-encola el brief guardado como un job nuevo.
+  app.post('/api/team/jobs/:id/replay', async (req, res) => {
+    const session = getDefaultSession();
+    if (!session || typeof session.runAgentJobTurn !== 'function') {
+      return res.status(503).json({ error: 'sin sesión viva: el driver necesita una reunión con agentes' });
+    }
+    const slug = typeof req.body?.slug === 'string' ? req.body.slug : null;
+    let brief = null;
+    let foundSlug = slug;
+    try {
+      if (slug) {
+        brief = await loadJobBrief(slug, req.params.id);
+      } else {
+        const found = await findJobRecord(req.params.id);
+        brief = found?.record?.brief || null;
+        foundSlug = found?.slug || null;
+      }
+    } catch {
+      brief = null;
+    }
+    if (!brief) {
+      return res.status(404).json({ error: 'job sin brief guardado: no se puede re-ejecutar' });
+    }
+    try {
+      const { jobId, estado } = enqueueJob(session, brief, { recordHistory: true, slug: foundSlug || 'general' });
+      res.json({ jobId, estado, replayOf: req.params.id });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // ── Manager MCP/skills v2 (T5, integración main) ──────────────────────
+  // GET expone el status puro (config + snapshot vivo + gaps honestos);
+  // POST ejecuta el planReconnect (releer config → shutdown → recargar
+  // tools → refrescar snapshot) y devuelve el status fresco.
+  app.get('/api/mcp/status', (req, res) => {
+    try {
+      res.json({ status: getMcpStatus() });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  app.post('/api/mcp/reconnect', async (req, res) => {
+    try {
+      const mcp = await import('./manos-mcp.js');
+      mcp.readMcpConfig();
+      await mcp.shutdown();
+      const tools = await mcp.getMcpTools();
+      const names = (tools || []).map((t) => String(t?.name || t));
+      setMcpStatusSnapshot({ alive: true, tools: names });
+      // El runtime también cachea tools MCP: Invalidar para que el próximo
+      // turno relea. Best-effort: si manos no expone reload, el turno igual
+      // funciona (loadMcpTools es idempotente por diseño).
+      res.json({ status: getMcpStatus(), reconnected: names.length });
+    } catch (error) {
+      try {
+        setMcpStatusSnapshot({ alive: false, tools: [] });
+      } catch {
+        // Snapshot caído: el status igual se intenta devolver.
+      }
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
   });
 
   if (process.env.NODE_ENV === 'production') {

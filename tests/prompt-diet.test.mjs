@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 const { buildSystemInstruction, promptIsEnglish } = await import('../server/lib/agent-runtime.js');
 const { renderMemorySection, writeMemoryFile, appendDaily, __resetPabloMemoryCache, DAILY_TAIL_MAX_CHARS } = await import('../server/lib/pablo-memory.js');
-const { renderManosPrompt, getTool } = await import('../server/lib/manos.js');
+const { renderManosPrompt, getTool, listTools } = await import('../server/lib/manos.js');
 const { renderLearningsSection } = await import('../server/lib/learning.js');
 const { renderSkillsSection, __resetSkillsCache } = await import('../server/lib/skills.js');
 
@@ -145,12 +145,19 @@ test('dieta D6: skills acotadas a 1500ch totales en el turno', () => {
 test('dieta D7: prompt manos voz corto, texto full, ambos listan list_files', () => {
   const voz = renderManosPrompt('audio');
   const full = renderManosPrompt('text');
+  const n = listTools().length;
   assert.ok(getTool('list_files'), 'list_files registrada');
   assert.ok(voz.includes('list_files') && full.includes('list_files'), 'docs incluyen list_files');
   assert.ok(voz.length < full.length, `voz ${voz.length} no < full ${full.length}`);
-  assert.ok(voz.length <= 900, `voz ${voz.length}ch > 900`);
-  // 09/11 computer tools (open_url/window_list/screenshot): full 1223→~1560ch.
-  // Tope 1650; voz sigue ≤900 (las 3 tools entran en 1 línea c/u).
-  assert.ok(full.length <= 1650, `full ${full.length}ch > 1650`);
+  // Presupuesto escalable (09/11, rev main): los topes absolutos (900/1650)
+  // se calibraron con 9 tools; el repertorio aprobado por Tito (browser +
+  // canvas + outreach + computer + MCP) lo cuadruplicó. La dieta ahora mide
+  // COMPACIDAD por tool (formato), no total absoluto: fijo + N×tool.
+  // Medido: voz ≈68ch/tool, full ≈136ch/tool (22 builtins, sin MCP).
+  assert.ok(voz.length <= 400 + 70 * n, `voz ${voz.length}ch > 400+70×${n}`);
+  assert.ok(full.length <= 600 + 120 * n, `full ${full.length}ch > 600+120×${n}`);
   assert.ok(voz.includes('tool:'), 'voz muestra formato');
+  // Sin duplicación: exactamente 1 línea por tool registrada (caza el 2×).
+  const vozToolLines = voz.split('\n').filter((l) => l.startsWith('- ')).length;
+  assert.equal(vozToolLines, n, `voz lista ${vozToolLines} tools, registradas ${n}`);
 });

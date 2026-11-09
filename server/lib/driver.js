@@ -15,7 +15,10 @@
 //
 // Decisiones finas: /home/tito/research/flujo-driver-plan.md (addendum A1-A8).
 
-import { access } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { rootDir } from './config.js';
 
 import {
   MAX_RONDAS_DEFAULT,
@@ -231,6 +234,9 @@ function decir(prep, evento, textoLog) {
     entry.anuncios.splice(0, entry.anuncios.length - MAX_ANUNCIOS * 2);
   }
   entry.progreso.actualizadoEn = Date.now();
+  // T4: cada anuncio queda en el historial del job (encolado, fire-and-forget;
+  // el historial nunca rompe el flujo). Sin prep.jobs es un no-op.
+  record(prep, { tipo: evento?.tipo || 'anuncio', texto: trunc(textoLog || evento?.tipo || '', 500) });
 }
 
 function setFase(prep, fase) {
@@ -300,6 +306,13 @@ function prepareJob(session, brief, opts = {}) {
     controller, turnTimeoutMs, jobTimeoutMs, maxRondas,
     preguntas: intake.estado === 'preguntas'
   };
+  // T4: historial en disco SOLO si se pide explícito (rutas HTTP pasan
+  // recordHistory:true) o con baseDir inyectado (tests). Sin esto: cero
+  // writes, conducta idéntica a antes.
+  prep.jobs = (merged.recordHistory === true || merged.jobsBaseDir)
+    ? { slug: slugForJob(session, brief, merged), baseDir: merged.jobsBaseDir || null }
+    : null;
+  record(prep, { tipo: 'brief', texto: trunc(entry.objetivo || 'brief', 200) }, { brief: detachBrief(brief) });
   if (prep.preguntas) {
     decir(prep, { tipo: 'preguntas', preguntas: entry.preguntas },
       `Intake: faltan datos — ${entry.preguntas.length} pregunta(s). Pablo las habla con Tito.`);
@@ -782,6 +795,8 @@ async function executeJob(prep) {
   checkVivo(prep);
   const plan = prep.job.plan;
   prep.entry.progreso.fasesTotal = plan.fases.length;
+  // T4: snapshot del plan para el historial (fases + dueños + done). Aditivo.
+  prep.entry.planFases = plan.fases.map((f) => ({ titulo: f.titulo, dueño: f.dueño, doneCriteria: f.doneCriteria }));
   const researchUsado = plan.research.some(
     (r) => r.decision !== 'se construye desde cero' && r.hallazgo !== 'sin pre-hecho usable encontrado'
   );
@@ -847,6 +862,7 @@ export async function runJob(session, brief, opts = {}) {
     if (error?.code !== 'JOB_MUERTO') markFallo(prep, error);
     else markFallo(prep, new Error('timeout job (cancelado entre pasos)'));
   }
+  await flushJobHistory().catch(() => {});
   return getJob(prep.entry.id);
 }
 
@@ -857,11 +873,229 @@ export function enqueueJob(session, brief, opts = {}) {
   if (prep.preguntas) return { jobId: prep.entry.id, estado: 'preguntas' };
   prep.entry.estado = 'encolado';
   prep.entry.progreso.estado = 'encolado';
+  record(prep, { tipo: 'encolado', texto: trunc(prep.entry.objetivo || 'job encolado', 200) });
   setImmediate(() => {
     withJobTimeout(executeJob(prep), prep).catch((error) => {
       if (error?.code !== 'JOB_MUERTO') markFallo(prep, error);
       else markFallo(prep, new Error('timeout job (cancelado entre pasos)'));
-    });
+    }).finally(() => flushJobHistory().catch(() => {}));
   });
   return { jobId: prep.entry.id, estado: 'encolado' };
+}
+
+// ── Historial de jobs en disco (T4, aditivo) ─────────────────────────────
+//
+// Un JSON por job: `<workspace>/<slug>/jobs/<id>.json` con brief, fases,
+// veredictos/tests, estado y `history` (eventos estilo JSONL: brief, plan,
+// dispatch, entrega, devolución, aprobado...). El replay re-encola el brief
+// guardado. Todo failable-silent desde el loop: el historial nunca rompe
+// un job. Funciones puras extraíbles + baseDir inyectable para tests.
+
+function jobsBaseDir(override) {
+  if (override) return String(override);
+  if (process.env.PABLO_JOBS_DIR) return String(process.env.PABLO_JOBS_DIR);
+  if (process.env.WORKSPACE_ROOT) return String(process.env.WORKSPACE_ROOT);
+  return path.join(rootDir, 'workspace');
+}
+
+// Segmento seguro para paths: sin ../ ni separadores ni rarezas.
+function safeSegment(s, fallback = 'general') {
+  const c = String(s ?? '').trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return c || fallback;
+}
+
+export function jobRecordPath(slug, id, baseDir) {
+  return path.join(jobsBaseDir(baseDir), safeSegment(slug), 'jobs', `${safeSegment(id, 'job')}.json`);
+}
+
+function slugForJob(session, brief, opts = {}) {
+  return safeSegment(
+    opts.slug ?? brief?.companySlug ?? brief?.slug
+    ?? session?.company?.id ?? session?.meeting?.companyId ?? 'general'
+  );
+}
+
+function detachBrief(brief) {
+  if (!brief || typeof brief !== 'object') return {};
+  try {
+    return JSON.parse(JSON.stringify(brief));
+  } catch {
+    return { ...brief };
+  }
+}
+
+function snapshotJobState(prep) {
+  const e = prep?.entry;
+  if (!e) return {};
+  return {
+    objetivo: e.objetivo || '',
+    estado: e.estado,
+    motivo: e.motivo || null,
+    fases: Array.isArray(e.planFases) ? e.planFases : [],
+    tests: { ...(e.progreso?.tests || {}) },
+    rondas: e.progreso?.ronda ?? 0
+  };
+}
+
+// Agrega un evento al historial del job (crea el record si no existe).
+// Retorna { file, eventos }. Escritura atómica vía tmp+rename.
+export async function appendJobHistory(slug, id, event = {}, opts = {}) {
+  const file = jobRecordPath(slug, id, opts.baseDir);
+  let rec = null;
+  try {
+    rec = JSON.parse(await readFile(file, 'utf8'));
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) rec = null;
+  } catch {
+    rec = null;
+  }
+  const now = new Date().toISOString();
+  if (!rec) {
+    rec = { id: safeSegment(id, 'job'), slug: safeSegment(slug), createdAt: now, history: [] };
+  }
+  if (!Array.isArray(rec.history)) rec.history = [];
+  if (opts.brief && typeof opts.brief === 'object' && !rec.brief) rec.brief = opts.brief;
+  if (opts.patch && typeof opts.patch === 'object') {
+    for (const [k, v] of Object.entries(opts.patch)) {
+      if (k === 'history' || k === 'brief' || k === 'id' || k === 'createdAt') continue;
+      rec[k] = v;
+    }
+  }
+  rec.history.push({ at: now, ...(event && typeof event === 'object' ? event : { texto: String(event ?? '') }) });
+  if (rec.history.length > 400) rec.history.splice(0, rec.history.length - 400);
+  rec.updatedAt = now;
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(rec));
+  try {
+    await rename(tmp, file);
+  } catch {
+    await writeFile(file, JSON.stringify(rec));
+  }
+  return { file, eventos: rec.history.length };
+}
+
+// Jobs recientes en disco, más nuevos primero. Con slug: solo ese proyecto;
+// sin slug: barre todos (acotado). Nunca lanza: error → [].
+export async function listJobHistory({ slug = null, limit = 20, baseDir } = {}) {
+  const base = jobsBaseDir(baseDir);
+  const files = [];
+  const collect = async (dir, slugName) => {
+    let entries = [];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries.slice(0, 500)) {
+      if (e.isFile() && e.name.endsWith('.json')) files.push({ file: path.join(dir, e.name), slug: slugName });
+    }
+  };
+  if (slug) {
+    await collect(path.join(base, safeSegment(slug), 'jobs'), safeSegment(slug));
+  } else {
+    let dirs = [];
+    try {
+      dirs = await readdir(base, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    for (const d of dirs.slice(0, 300)) {
+      if (!d.isDirectory() || d.name.startsWith('.')) continue;
+      await collect(path.join(base, d.name, 'jobs'), d.name);
+      if (files.length > 500) break;
+    }
+  }
+  const out = [];
+  for (const { file, slug: sg } of files.slice(0, 500)) {
+    try {
+      const rec = JSON.parse(await readFile(file, 'utf8'));
+      out.push({
+        id: rec.id || path.basename(file, '.json'),
+        slug: rec.slug || sg,
+        objetivo: rec.objetivo || rec.brief?.objetivo || '',
+        estado: rec.estado || 'desconocido',
+        actualizadoEn: rec.updatedAt ? Date.parse(rec.updatedAt) || 0 : 0,
+        rondas: rec.rondas ?? null,
+        tests: rec.tests ?? null,
+        source: 'disk'
+      });
+    } catch {
+      // Registro roto: se ignora, no frena la lista.
+    }
+  }
+  out.sort((a, b) => b.actualizadoEn - a.actualizadoEn);
+  return out.slice(0, Math.max(1, Math.min(100, Number(limit) || 20)));
+}
+
+export async function loadJobBrief(slug, id, { baseDir } = {}) {
+  try {
+    const rec = JSON.parse(await readFile(jobRecordPath(slug, id, baseDir), 'utf8'));
+    return rec?.brief && typeof rec.brief === 'object' ? rec.brief : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadJobRecord(slug, id, { baseDir } = {}) {
+  try {
+    const rec = JSON.parse(await readFile(jobRecordPath(slug, id, baseDir), 'utf8'));
+    return rec && typeof rec === 'object' ? rec : null;
+  } catch {
+    return null;
+  }
+}
+
+// Busca un job por id en todos los slugs (para replay sin slug). Acotado.
+export async function findJobRecord(id, { baseDir } = {}) {
+  const base = jobsBaseDir(baseDir);
+  let dirs = [];
+  try {
+    dirs = await readdir(base, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const name = `${safeSegment(id, 'job')}.json`;
+  for (const d of dirs.slice(0, 300)) {
+    if (!d.isDirectory() || d.name.startsWith('.')) continue;
+    try {
+      const rec = JSON.parse(await readFile(path.join(base, d.name, 'jobs', name), 'utf8'));
+      if (rec && typeof rec === 'object') return { slug: rec.slug || d.name, record: rec };
+    } catch {
+      // Siguiente slug.
+    }
+  }
+  return null;
+}
+
+// Cola por archivo: serializa los appends fire-and-forget del loop para que
+// el read-modify-write no pierda eventos. Solo hay entradas in-flight.
+const historyQueues = new Map();
+
+function record(prep, event, extra = {}) {
+  const cfg = prep?.jobs;
+  if (!cfg || !prep?.entry?.id) return Promise.resolve();
+  const file = jobRecordPath(cfg.slug, prep.entry.id, cfg.baseDir);
+  const prev = historyQueues.get(file) || Promise.resolve();
+  const next = prev
+    .then(() => appendJobHistory(cfg.slug, prep.entry.id, event, {
+      baseDir: cfg.baseDir,
+      brief: extra.brief,
+      patch: { ...snapshotJobState(prep), ...(extra.patch || {}) }
+    }))
+    .catch(() => {});
+  historyQueues.set(file, next);
+  const cleanup = () => {
+    if (historyQueues.get(file) === next) historyQueues.delete(file);
+  };
+  next.then(cleanup, cleanup);
+  return next;
+}
+
+// Espera a que terminen los appends pendientes. runJob/enqueueJob lo llaman
+// al cerrar; los tests también pueden llamarlo directo.
+export async function flushJobHistory() {
+  await Promise.allSettled([...historyQueues.values()]);
 }

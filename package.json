@@ -13,7 +13,7 @@
     "build:desktop": "sh scripts/desktop/build.sh",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test --test-concurrency=2 tests/*.test.mjs",
     "dev:tts": "sh -c '$HOME/.local/share/equipo/supertonic-venv/bin/supertonic serve --host 127.0.0.1 --port 7788 || echo \"[tts] Supertonic no instalado (ver README); la reunión corre sin voz\"'",
     "dev:stt": "sh -c 'WHISPER_MODEL=tiny WHISPER_PRELOAD=0 HF_HUB_OFFLINE=1 $HOME/.local/share/equipo/whisper-venv/bin/python server/stt/whisper_server.py || echo \"[stt] Whisper local no instalado (Parakeet es el STT local; ver README)\"'",
     "dev:parakeet": "sh -c 'python3 server/stt/parakeet_server.py || echo \"[parakeet] no disponible (pip install sherpa-onnx + modelo en ~/.local/share/equipo/sherpa); cae a Whisper\"'",

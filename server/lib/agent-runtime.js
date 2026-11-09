@@ -7,6 +7,7 @@ import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
+import { parseGesto } from './gestos.js';
 
 // ── Manos v1: fase tools (two-phase) ───────────────────────────────────
 //
@@ -133,6 +134,15 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   // Best-effort: si falla, el turno sigue con las builtins.
   try {
     await manos.loadMcpTools?.();
+    // Manager v2 (T5): publica el snapshot vivo para GET /api/mcp/status.
+    // Best-effort: si falla, el turno sigue y el manager muestra gap honesto.
+    try {
+      const st = await import('./mcp-status.js');
+      const tools = typeof manos.listTools === 'function' ? manos.listTools().filter((t) => String(t.name || t).startsWith('mcp_')) : [];
+      st.setMcpStatusSnapshot({ alive: true, tools: tools.map((t) => String(t.name || t)) });
+    } catch {
+      // Snapshot caído: el manager lo informa, el turno no se entera.
+    }
   } catch {
     // MCP roto no rompe el turno.
   }
@@ -287,6 +297,22 @@ export class LiveAgentRuntime {
       return gateToken;
     };
 
+    // Gestos v2: 1 por turno (el primero válido gana). Emite agent_gesto
+    // al WS; el frontend morphéa el orbe. Nunca lanza.
+    let gestoEmitted = false;
+    const maybeEmitGesto = (text) => {
+      if (gestoEmitted || !text || !text.includes('[[')) return;
+      try {
+        const { gesto } = parseGesto(text);
+        if (gesto) {
+          gestoEmitted = true;
+          emit({ type: 'agent_gesto', turnId, agentId: this.id, gesto });
+        }
+      } catch {
+        // El gesto es decorativo: jamás rompe el turno.
+      }
+    };
+
     const speakSentence = async (sentence) => {
       // Sin modo llamada no hay voz. Antes se sintetizaba SIEMPRE: gastaba
       // Supertonic en cada turno, sumaba latencia y —lo peor— tomaba el
@@ -295,6 +321,11 @@ export class LiveAgentRuntime {
       if (!this.meetingSession?.voiceEnabled) {
         return;
       }
+      // Gestos v2: el tag [[gesto:X]] nunca se habla. Se parsea (emite el
+      // evento visual) y se pela de la oración; cualquier [[...]] residual
+      // también se quita para que un tag inválido no se lea en voz alta.
+      maybeEmitGesto(sentence);
+      sentence = parseGesto(sentence).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
       const spoken = stripSpeechLeaks(sentence).trim();
       if (!spoken || signal?.aborted) {
         return;
@@ -372,7 +403,9 @@ export class LiveAgentRuntime {
       const visible = tagFilter.push(text);
       if (visible) {
         seq += 1;
-        emit({ type: 'agent_transcript_delta', delta: visible, seq });
+        // Gestos v2: los tags completos no flashean en el transcript vivo
+        // (si el tag llegó partido entre deltas, igual se pela al final).
+        emit({ type: 'agent_transcript_delta', delta: visible.replace(/\[\[gesto:[^\]]*\]\]/gi, ''), seq });
       }
 
       sentenceBuffer += text;
@@ -499,11 +532,16 @@ export class LiveAgentRuntime {
     // las [TAREA_*] se conservan para el parser de tareas.
     const rawText = cleanAgentText(stripProgressBlocks(stripPrivateBlocks(result.text)), this.name);
     const spokenText = stripTaskTags(rawText);
+    // Gestos v2: backup por si el tag no pasó por speakSentence (sin modo
+    // llamada, tag al final sin punto, etc.). El texto guardado/mostrado
+    // queda limpio; el evento sale una sola vez por turno.
+    maybeEmitGesto(rawText);
+    const cleanText = parseGesto(rawText).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
 
     if (!rawText || silenced || isSilenceResponse(spokenText)) {
       emit({ type: 'agent_silence', reason: `${this.name} declined to answer by protocol.` });
       emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
-      return { ...emptyAgentResponse(), rawText, backend: 'stream' };
+      return { ...emptyAgentResponse(), rawText: cleanText, backend: 'stream' };
     }
 
     // Última oración pendiente + cierre del gate cuando termine el audio.
@@ -520,8 +558,8 @@ export class LiveAgentRuntime {
     });
 
     return {
-      rawText,
-      text: rawText,
+      rawText: cleanText,
+      text: cleanText,
       audioChunks: [],
       usedMock: false,
       backend: 'stream',
@@ -588,10 +626,6 @@ export class LiveAgentRuntime {
     const en = promptIsEnglish();
     const T = (es, enText) => (en ? enText : es);
 
-    const tasksFormatted = (this.agent.tasks && this.agent.tasks.length > 0)
-      ? this.agent.tasks.map((task, idx) => `#${idx + 1}: ${task.text} (${task.completed ? T('Completada', 'Done') : T('Pendiente', 'Pending')})`).join('\n')
-      : T('No tenés tareas por el momento.', 'You have no tasks right now.');
-
     const lines = [
       turn.isContextualFollowup
         ? T(`Tu compañero dijo algo y te toca responder: "${turn.text}"`, `Your teammate said something and it's your turn to answer: "${turn.text}"`)
@@ -634,9 +668,6 @@ export class LiveAgentRuntime {
       lines.push('');
     }
 
-    lines.push(T('Tus tareas actuales:', 'Your current tasks:'));
-    lines.push(tasksFormatted);
-    lines.push('');
     const skills = renderSkillsSection(turn.text || '', { scope: 'chat', agent: this.agent });
     if (skills) {
       lines.push(skills);

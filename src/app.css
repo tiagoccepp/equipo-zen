@@ -756,3 +756,229 @@ body {
   .conn-dot { animation: none; }
   * { transition: none !important; }
 }
+
+/* ── T3 minimal: tabs, views, command bar ───────────────────────────── */
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Segmented tabs: 1 control, 4 vistas. Solo la activa lleva acento. */
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--depth);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.tabs [data-view] {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 180ms var(--ease), background 180ms var(--ease);
+}
+
+.tabs [data-view]:hover {
+  color: var(--ink);
+}
+
+.tabs [data-view].active {
+  background: var(--card-2);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tabs [data-view]:focus-visible,
+.kbd-hint:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Affordance del command bar: kbd clickeable. */
+.kbd-hint {
+  appearance: none;
+  background: var(--depth);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: color 180ms var(--ease), border-color 180ms var(--ease);
+}
+
+.kbd-hint:hover {
+  color: var(--ink);
+  border-color: var(--accent-line);
+}
+
+/* Vistas: la consola conserva el stack; jobs/manager los monta main. */
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: rise 220ms var(--ease);
+}
+
+.view[hidden] {
+  display: none;
+}
+
+.settings-tools {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+/* ── Command bar: estética consola ────────────────────────────────────
+   Base en motion.css (.fx-palette*); acá el tema consola con
+   especificidad mayor (body …) para ganarle a la base. */
+body .fx-palette-backdrop {
+  background: rgba(11, 12, 14, 0.7);
+  backdrop-filter: blur(2px);
+}
+
+body .fx-palette {
+  top: 14vh;
+  width: min(520px, calc(100vw - 48px));
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(95, 180, 156, 0.12);
+  color: var(--ink);
+  font-family: var(--font);
+}
+
+body .fx-palette input {
+  font-family: var(--mono);
+  font-size: 14px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink);
+}
+
+body .fx-palette input::placeholder {
+  color: var(--faint);
+}
+
+body .fx-palette ul {
+  padding: 8px;
+  max-height: 320px;
+}
+
+body .fx-palette li[role="option"] {
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  border: 1px solid transparent;
+}
+
+body .fx-palette li[role="option"][aria-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+body .fx-palette .fx-label {
+  font-weight: 550;
+}
+
+body .fx-palette li[aria-selected="true"] .fx-label {
+  color: var(--accent-strong);
+}
+
+body .fx-palette .fx-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--faint);
+  font-family: var(--mono);
+}
+
+body .fx-palette .fx-kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--depth);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 7px;
+  opacity: 1;
+}
+
+body .fx-palette .fx-hint.fx-kbd {
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+}
+
+body .fx-palette .fx-group {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 10px 12px 4px;
+  cursor: default;
+}
+
+body .fx-palette .fx-empty {
+  color: var(--faint);
+  font-size: 13px;
+  text-align: center;
+  padding: 18px 12px;
+  cursor: default;
+}
+
+body .fx-palette .fx-danger .fx-label {
+  color: var(--warn);
+}
+
+body .fx-palette .fx-foot {
+  border-top: 1px solid var(--line-soft);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 9px 18px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .tabs {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .tabs [data-view] {
+    flex: 1;
+    padding: 7px 6px;
+    text-align: center;
+  }
+
+  .kbd-hint {
+    display: none;
+  }
+
+  body .fx-palette {
+    top: 8vh;
+  }
+}

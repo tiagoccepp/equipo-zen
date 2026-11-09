@@ -5,8 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Orb</title>
     <style>
-      /* Mini ventana: tarjeta glass oscura con el mismo OrbField vivo.
-         Ventana 200x264 (ver ORB_W/H en Rust): la tarjeta respira 6px. */
+      /* Mini ventana 200x264 (ORB_W/H en Rust): la tarjeta respira 6px.
+         Layout medido: card 188x252 = stage flexible + status 18px +
+         controles 46px. El canvas LLENA el stage (absolute inset 0) y
+         orb.ts centra el orbe en el rect real: encuadre perfecto siempre,
+         sin recortes ni adivinanzas de píxeles. */
       * { box-sizing: border-box; }
       html, body {
         margin: 0; height: 100%; overflow: hidden;
@@ -14,6 +17,7 @@
         font-family: "Inter Tight", "Sora", -apple-system, BlinkMacSystemFont,
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
+        -webkit-tap-highlight-color: transparent;
       }
       body {
         padding: 6px;
@@ -23,8 +27,8 @@
         position: relative;
         width: 100%; height: 100%;
         display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        gap: 2px;
+        align-items: stretch;
+        padding: 8px 10px 10px;
         border-radius: 26px;
         overflow: hidden;
         cursor: pointer;
@@ -49,41 +53,58 @@
           radial-gradient(90px 70px at 80% 12%, rgba(244,191,117,0.08), transparent 70%);
       }
       .orb-card > * { position: relative; z-index: 1; }
+      /* El stage come todo el alto libre: el orbe respira centrado. */
+      .orb-stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+      }
+      /* !important: OrbField.resize() escribe width/height inline en px
+         (medidos del viewport anterior). Sin esto, achicar la ventana deja
+         el canvas gigante y el orbe se dibuja fuera del área visible. */
       #orb-canvas {
-        width: 148px; height: 148px;
+        position: absolute; inset: 0;
+        width: 100% !important; height: 100% !important;
+        display: block;
         filter: drop-shadow(0 4px 18px rgba(0,0,0,0.5));
       }
+      /* Status: 1 línea, legible a 200px, nunca empuja el layout. */
       .status {
+        flex: none;
+        margin-top: 6px;
         font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 10px; letter-spacing: 0.16em;
-        color: rgba(245,244,239,0.85);
+        font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+        color: rgba(245,244,239,0.92);
         text-transform: uppercase;
-        min-height: 14px; text-align: center;
+        text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+        min-height: 18px; line-height: 18px; text-align: center;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         pointer-events: none;
       }
-      .status .dot {
-        color: #fd49a8;
-      }
       .row {
-        display: flex; gap: 10px; margin-top: 6px;
+        flex: none;
+        display: flex; gap: 12px; justify-content: center;
+        margin-top: 6px;
       }
-      /* Píldoras táctiles: insets layerados, firma Lovable. */
+      /* Controles táctiles: 46px de alto, área generosa, firma Lovable. */
       .btn {
         appearance: none; cursor: pointer;
-        min-width: 62px; height: 38px; border-radius: 19px;
-        padding: 0 16px;
+        flex: 1 1 0; max-width: 84px; height: 46px; border-radius: 23px;
+        padding: 0;
         border: 1px solid rgba(255,255,255,0.16);
         background: linear-gradient(180deg, #3a3a3e, #262628 60%, #1c1c1e);
-        color: #f5f4ef; font-size: 16px;
+        color: #f5f4ef; font-size: 19px; line-height: 1;
         display: flex; align-items: center; justify-content: center;
         box-shadow:
           inset 0 1px 1px rgba(255,255,255,0.25),
           inset 0 -2px 4px rgba(0,0,0,0.5),
           0 4px 12px rgba(0,0,0,0.45);
         transition: border-color 180ms ease, box-shadow 180ms ease, transform 120ms ease;
+        touch-action: manipulation;
       }
       .btn:hover { border-color: rgba(253,73,168,0.6); }
-      .btn:active { transform: translateY(1px); }
+      .btn:active { transform: translateY(1px) scale(0.98); }
       .btn:focus-visible {
         outline: 2px solid #fd49a8;
         outline-offset: 2px;
@@ -102,8 +123,10 @@
   </head>
   <body>
     <div class="orb-card" id="orb-card">
-      <canvas id="orb-canvas"></canvas>
-      <div class="status" id="orb-status">Pablo</div>
+      <div class="orb-stage">
+        <canvas id="orb-canvas"></canvas>
+      </div>
+      <div class="status" id="orb-status" role="status" aria-live="polite">Pablo</div>
       <div class="row">
         <button class="btn" id="micBtn" aria-label="Talk">🎤</button>
         <button class="btn" id="expandBtn" aria-label="Open Pablo">⤢</button>

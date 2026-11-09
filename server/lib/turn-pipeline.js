@@ -1,4 +1,5 @@
 import { withTimeout } from './llm.js';
+import { ADDRESSING_ACTION, classifyAddressing } from './addressing.js';
 import { beginUserTurn, endUserTurn } from './priority.js';
 import { consult as salaConsult, runSalaV2 } from './sala.js';
 import { getSalaV2 } from './settings.js';
@@ -232,6 +233,31 @@ export async function maybeConsultSala({ text, route = null, deps = {} } = {}) {
       return sala ? sala.note : null;
     }
     return await salaConsult({ text, route, deps });
+  } catch {
+    return null;
+  }
+}
+
+// ── Gate pre-respuesta addressing (Equipo v2, T1) ───────────────────────────
+// Punto ÚNICO de direccionamiento: se llama ANTES del respond normal con el
+// texto del usuario y contexto (chatActive, lastTurn, …). Devuelve
+// { decision, action, confidence, source } donde action ∈
+// responder | solo-contexto | ignorar, o null si el turno sigue legacy
+// (modo off, error, timeout). Nunca lanza: degradación segura.
+// El cableado (llamarla desde meeting-session/agent-runtime) es integración
+// posterior (main); este helper es el punto de gate testeable y documentado.
+export async function maybeClassifyAddressing({ text, context = {}, deps = {} } = {}) {
+  try {
+    const result = await classifyAddressing({ text, context }, deps);
+    if (!result || result.source === 'bypass') {
+      return null;
+    }
+    return {
+      decision: result.decision,
+      action: ADDRESSING_ACTION[result.decision] || 'responder',
+      confidence: result.confidence,
+      source: result.source
+    };
   } catch {
     return null;
   }

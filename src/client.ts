@@ -28,6 +28,8 @@ export interface ClientEvents {
   onAudioStart: (turnId: string, agentId: string) => void;
   onAudioEnd: (turnId: string, agentId: string) => void;
   onAgentState: (agentId: string, state: string) => void;
+  // Gesto semántico v2: el modelo pidió morphéar el orbe a un glifo.
+  onGesto: (agentId: string, gesto: string) => void;
   onInterrupted: (agentId: string, turnId?: string) => void;
   onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
   onLiveTranscript: (text: string) => void;
@@ -49,7 +51,7 @@ export function apiBase(): string {
   return httpBase;
 }
 
-async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(httpBase + path, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -311,6 +313,9 @@ export class Client {
           break;
         case 'agent_state':
           this.ev.onAgentState(String(m.agentId || ''), String(m.state || ''));
+          break;
+        case 'agent_gesto':
+          if (m.gesto) this.ev.onGesto(String(m.agentId || ''), String(m.gesto));
           break;
         case 'agent_interrupted':
         case 'turn_cancelled':

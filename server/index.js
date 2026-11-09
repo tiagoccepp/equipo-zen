@@ -14,6 +14,7 @@ import { firstNonEmpty, loadWarmupWavBase64, pcmToWav16kBase64, startSidecarWatc
 import { Store } from './lib/store.js';
 import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable, synthesize } from './lib/supertonic.js';
+import { speechVerdict } from './lib/silero.js';
 
 // WAV 16k mono, 0.5s de silencio, en base64. Último recurso si no hay
 // fixture ni Piper: calentar con algo siempre gana.
@@ -88,7 +89,7 @@ async function prewarmLocalModels() {
     }
   })(), 10000, { status: 'down', wav: fallbackWav });
   const sttWav = ttsPiper.wav || fallbackWav;
-  const [sttParakeet, sttWhisper, ttsSupertonic] = await Promise.all([
+  const [sttParakeet, sttWhisper, ttsSupertonic, vadSilero] = await Promise.all([
     warmStt(parakeetUrl, sttWav),
     warmStt(whisperUrl, sttWav),
     (async () => {
@@ -98,9 +99,21 @@ async function prewarmLocalModels() {
       } catch {
         return 'down';
       }
+    })(),
+    // Silero VAD (opt 09/11 #8): estaba fuera del prewarm y el primer
+    // turno de voz pagaba import ONNX + modelo (1-3s). 512 samples de
+    // silencio alcanzan para cargar runtime + sesión.
+    (async () => {
+      try {
+        const silence = Buffer.alloc(512 * 2).toString('base64');
+        const verdict = await speechVerdict([silence]);
+        return verdict ? 'warm' : 'unavailable';
+      } catch {
+        return 'down';
+      }
     })()
   ]);
-  return { ttsPiper: ttsPiper.status, sttParakeet, sttWhisper, ttsSupertonic };
+  return { ttsPiper: ttsPiper.status, sttParakeet, sttWhisper, ttsSupertonic, vadSilero };
 }
 import { telemetry } from './lib/telemetry.js';
 import { Workforce } from './lib/workforce.js';

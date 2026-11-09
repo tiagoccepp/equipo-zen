@@ -14,12 +14,22 @@
         <span class="brand-name">Pablo</span>
         <span class="brand-sub">team</span>
       </div>
-      <div class="conn" id="conn" role="status">
-        <span class="conn-dot" aria-hidden="true"></span>
-        <span id="conn-text">Connecting</span>
+      <nav class="tabs" aria-label="Views">
+        <button type="button" data-view="console" aria-selected="true">Console</button>
+        <button type="button" data-view="jobs" aria-selected="false" tabindex="-1">Jobs</button>
+        <button type="button" data-view="manager" aria-selected="false" tabindex="-1">Manager</button>
+        <button type="button" data-view="settings" aria-selected="false" tabindex="-1">Settings</button>
+      </nav>
+      <div class="top-right">
+        <button type="button" id="btn-palette" class="kbd-hint" title="Command bar (Ctrl+K)">Ctrl+K</button>
+        <div class="conn" id="conn" role="status">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span id="conn-text">Connecting</span>
+        </div>
       </div>
     </header>
     <main class="shell">
+      <section id="view-console" class="view" aria-label="Console">
       <section class="stage">
         <div class="orbs" id="orbs" aria-hidden="true">
           <canvas id="orb-canvas"></canvas>
@@ -47,31 +57,40 @@
         </div>
       </section>
 
-      <section class="quick">
-        <button class="chip" type="button" data-say="Please introduce yourselves.">Introduce team</button>
-        <button class="chip" type="button" data-say="What is the team working on?">Work status</button>
-        <button class="chip" type="button" id="btn-test-voice">Voice check</button>
-      </section>
-
       <section class="stream-wrap">
         <div class="stream-head" aria-hidden="true"><span>Activity</span></div>
         <section class="stream" id="stream" aria-live="polite"><div class="stream-empty" id="stream-empty">No activity yet — messages and tool runs will appear here.</div></section>
       </section>
+      </section>
 
-      <details class="companies">
-        <summary>Companies</summary>
-        <div id="companies-list"></div>
-      </details>
+      <section id="view-jobs" class="view" aria-label="Jobs" hidden>
+        <!-- T4 monta mountJobs(el) acá (main integra) -->
+      </section>
 
-      <details class="companies" id="perms-box" hidden>
-        <summary>Computer permissions</summary>
-        <div id="perms-list"></div>
-      </details>
+      <section id="view-manager" class="view" aria-label="Manager" hidden>
+        <!-- T5 monta mountManager(el) acá (main integra) -->
+      </section>
 
-      <details class="companies" id="settings-box">
-        <summary>Settings</summary>
-        <div id="settings-list"></div>
-      </details>
+      <section id="view-settings" class="view" aria-label="Settings" hidden>
+        <details class="companies" open>
+          <summary>Companies</summary>
+          <div id="companies-list"></div>
+        </details>
+
+        <details class="companies" id="perms-box" hidden>
+          <summary>Computer permissions</summary>
+          <div id="perms-list"></div>
+        </details>
+
+        <details class="companies" id="settings-box" open>
+          <summary>Settings</summary>
+          <div id="settings-list"></div>
+        </details>
+
+        <div class="settings-tools">
+          <button class="chip" type="button" id="btn-test-voice">Voice check</button>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/app.ts"></script>
   </body>

@@ -35,7 +35,7 @@ import { listProjectFilesFor, renderWorkSection } from './workforce.js';
 import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { CaptureTranscriberRuntime } from './transcriber.js';
-import { maybeConsultSala } from './turn-pipeline.js';
+import { maybeClassifyAddressing, maybeConsultSala } from './turn-pipeline.js';
 import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
@@ -315,95 +315,6 @@ export class MeetingSession {
           )
         : ''
     };
-  }
-
-  closeCurrentMeeting(reason) {
-    if (!this.meeting) {
-      return;
-    }
-    const closingMeetingId = this.meeting.id;
-    this.store.closeMeeting(closingMeetingId);
-    this.reflection.runNow(closingMeetingId);
-    if (activeSessionsByMeeting.get(this.meeting.id) === this) {
-      activeSessionsByMeeting.delete(this.meeting.id);
-    }
-    this.logTelemetry('meeting_closed', { meetingId: this.meeting.id, reason });
-    this.meeting = null;
-    this.memory?.reset();
-    this.transcriber.reset();
-    for (const agent of this.agents.values()) {
-      agent.reset();
-    }
-  }
-
-  promptContext(agentId = null) {
-    const enPrompt = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
-    const scenarioText = this.company
-      ? [
-          this.company.scenario,
-          this.meeting?.scenario_text ? `${enPrompt ? 'Meeting goal' : 'Objetivo de esta reunión'}: ${this.meeting.scenario_text}` : ''
-        ].filter(Boolean).join('\n')
-      : this.meeting?.scenario_text || '';
-    return {
-      agents: this.sessionAgents,
-      scenario: this.company
-        ? { name: `${this.company.name} (${this.company.industry})`, text: scenarioText }
-        : null,
-      workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
-      // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
-      stack: this.project?.stack || this.company?.stack || null,
-      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
-      // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
-      // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 }),
-      // Convenciones propias del agente (top ~15 líneas, ≤900ch): van a SU
-      // system prompt y a ningún otro. buildSystemInstruction lo inyecta
-      // (integración main); mientras tanto el campo se ignora sin daño.
-      conventionsSection: agentId
-        ? renderAgentConventions(
-            this.company?.id || 'pablo',
-            this.sessionAgents.find((a) => a.id === agentId) || { id: agentId }
-          )
-        : ''
-    };
-  }
-
-  // Qué está produciendo el equipo AHORA. Sin esto, preguntarle a la CEO cómo
-  // viene un proyecto que su propio equipo está construyendo daba un "no sé".
-  renderWorkSection() {
-    if (!this.company) {
-      return '';
-    }
-    const goals = this.store.listGoals(this.company.id, 'active').slice(0, 3);
-    if (goals.length === 0) {
-      return '';
-    }
-    const nameOf = (agentId) => this.store.getAgent(agentId)?.name || 'alguien del equipo';
-    const ESTADOS = {
-      pending: 'en cola',
-      in_progress: 'trabajando ahora',
-      done: 'terminada',
-      blocked: 'trabada',
-      noted: 'anotada como acuerdo'
-    };
-
-    const lines = [];
-    for (const goal of goals) {
-      const tasks = this.store.tasksForGoal(goal.id);
-      lines.push(`Proyecto "${goal.title}":`);
-      for (const task of tasks.slice(0, 8)) {
-        const estado = ESTADOS[task.status] || task.status;
-        const revision = task.review_status === 'cambios'
-          ? ' (le pidieron cambios)'
-          : task.review_status === 'aprobado' ? ' (revisada y aprobada)' : '';
-        lines.push(`- ${nameOf(task.agent_id)}: ${task.text.slice(0, 120)} — ${estado}${revision}`);
-      }
-    }
-    return [
-      'TRABAJO EN CURSO DE LA EMPRESA (esto está pasando de verdad ahora mismo;',
-      'si te preguntan cómo viene algo, respondé con esto y no digas que no sabés):',
-      ...lines
-    ].join('\n');
   }
 
   publicAgents() {
@@ -1293,6 +1204,34 @@ export class MeetingSession {
   }
 
   async processUserTurn(turnId, text, signal, source = 'text') {
+    // Direccionamiento v2 (T1): con mic abierto, no toda frase es para
+    // Pablo. El clasificador decide responder / solo-contexto / ignorar.
+    // Texto tipeado = intención explícita: pasa directo. null = modo off
+    // o error → conducta legacy. Shadow loguea y deja pasar.
+    if (source !== 'text') {
+      try {
+        const lastTurn = this.memory?.lastAgentTurn?.() || null;
+        const gate = await maybeClassifyAddressing({
+          text,
+          context: { source, lastTurn: lastTurn ? { speaker: lastTurn.speaker, text: String(lastTurn.text || '').slice(0, 500) } : null },
+          deps: {}
+        });
+        if (gate && gate.action === 'ignorar') {
+          this.logTelemetry('addressing_ignorar', { turnId, decision: gate.decision, confidence: gate.confidence, source: gate.source }, turnId);
+          return;
+        }
+        if (gate && gate.action === 'solo-contexto') {
+          this.memory.add('user', 'You', text, null, turnId);
+          this.logTelemetry('addressing_contexto', { turnId, decision: gate.decision, confidence: gate.confidence, source: gate.source }, turnId);
+          return;
+        }
+        if (gate) {
+          this.logTelemetry('addressing_responder', { turnId, decision: gate.decision, confidence: gate.confidence, source: gate.source }, turnId);
+        }
+      } catch {
+        // Gate caído: el turno sigue legacy, como si no existiera.
+      }
+    }
     const route = await this.routeUserTurn(turnId, text);
     if (signal?.aborted) {
       return;

@@ -79,6 +79,19 @@ export class Store {
     this.db = openDatabase(dbPath);
   }
 
+  // Statements cacheados (opt 09/11 #5): node:sqlite compila en cada
+  // prepare; con 131 prepares inline el turno pagaba compilación siempre.
+  // La key es el SQL literal (los dinámicos son strings fijos por tabla).
+  _prepare(sql) {
+    let st = this._stmtCache?.get(sql);
+    if (!st) {
+      st = this.db.prepare(sql);
+      if (!this._stmtCache) this._stmtCache = new Map();
+      this._stmtCache.set(sql, st);
+    }
+    return st;
+  }
+
   close() {
     this.db.close();
   }
@@ -90,7 +103,7 @@ export class Store {
     let deleted = 0;
     for (const t of ['telemetry_events', 'turns', 'meeting_agents', 'tasks', 'tasks_nuevo', 'session_summaries', 'router_suggestions', 'meetings']) {
       try {
-        deleted += this.db.prepare(`DELETE FROM ${t}`).run().changes;
+        deleted += this._prepare(`DELETE FROM ${t}`).run().changes;
       } catch {
         // Tabla ausente en DB viejas: seguir con las demás.
       }
@@ -105,13 +118,13 @@ export class Store {
   // reuniones huérfanos (además de migrar voces Gemini → Supertonic).
   ensureCompanies(companyTemplates, legacyVoiceMap = {}) {
     for (const [from, to] of Object.entries(legacyVoiceMap)) {
-      this.db.prepare('UPDATE agents SET voice = ? WHERE voice = ?').run(to, from);
+      this._prepare('UPDATE agents SET voice = ? WHERE voice = ?').run(to, from);
     }
 
-    const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM companies').get();
+    const { count } = this._prepare('SELECT COUNT(*) AS count FROM companies').get();
     if (count === 0) {
       const template = companyTemplates.templates.find((item) => item.id === 'web') || companyTemplates.templates[0];
-      const orphanAgents = this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE company_id IS NULL").get().count;
+      const orphanAgents = this._prepare("SELECT COUNT(*) AS count FROM agents WHERE company_id IS NULL").get().count;
       if (orphanAgents > 0) {
         // DB pre-v2: adoptar lo existente bajo la empresa default.
         const company = this.insertCompany({
@@ -121,8 +134,8 @@ export class Store {
           color: template.color,
           scenario: template.scenario
         }, 'migration');
-        this.db.prepare('UPDATE agents SET company_id = ? WHERE company_id IS NULL').run(company.id);
-        this.db.prepare('UPDATE meetings SET company_id = ? WHERE company_id IS NULL').run(company.id);
+        this._prepare('UPDATE agents SET company_id = ? WHERE company_id IS NULL').run(company.id);
+        this._prepare('UPDATE meetings SET company_id = ? WHERE company_id IS NULL').run(company.id);
         return company;
       }
       return this.createCompanyFromTemplate(template, 'seed');
@@ -135,7 +148,7 @@ export class Store {
   insertCompany(data, actor) {
     const id = nanoid(10);
     const at = now();
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO companies (id, name, industry, emoji, color, scenario, stack, status, created_at, last_active_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
     `).run(id, data.name, data.industry || '', data.emoji || '🏢', data.color || '#4c6ef5', data.scenario || '', data.stack || 'web', at, at);
@@ -176,11 +189,11 @@ export class Store {
   // que corrió antes de este relleno): quedan en 'general', que es donde se
   // mudan sus archivos al arrancar. Idempotente.
   slugTaken(companyId, slug) {
-    return Boolean(this.db.prepare('SELECT 1 FROM goals WHERE company_id = ? AND slug = ? LIMIT 1').get(companyId, slug));
+    return Boolean(this._prepare('SELECT 1 FROM goals WHERE company_id = ? AND slug = ? LIMIT 1').get(companyId, slug));
   }
 
   ensureGoalSlugs() {
-    const result = this.db.prepare(
+    const result = this._prepare(
       "UPDATE goals SET slug = 'general' WHERE slug IS NULL OR slug = ''"
     ).run();
     return result.changes;
@@ -234,7 +247,7 @@ export class Store {
       for (const template of companyTemplates?.templates || []) {
         for (const employee of template.employees || []) {
           if (employee.craft) {
-            this.db.prepare(
+            this._prepare(
               "UPDATE agents SET craft = ? WHERE company_id = ? AND name = ? AND (craft IS NULL OR craft = '')"
             ).run(employee.craft, company.id, employee.name);
           }
@@ -242,10 +255,10 @@ export class Store {
       }
 
       // El resto del equipo reporta al CEO si no tiene jefe.
-      this.db.prepare("UPDATE agents SET manager_id = ? WHERE company_id = ? AND role != 'ceo' AND (manager_id IS NULL OR manager_id = '')")
+      this._prepare("UPDATE agents SET manager_id = ? WHERE company_id = ? AND role != 'ceo' AND (manager_id IS NULL OR manager_id = '')")
         .run(ceo.id, company.id);
       // Y sumar a los nuevos a las reuniones activas existentes de la empresa.
-      for (const meeting of this.db.prepare("SELECT id FROM meetings WHERE company_id = ? AND status = 'active'").all(company.id)) {
+      for (const meeting of this._prepare("SELECT id FROM meetings WHERE company_id = ? AND status = 'active'").all(company.id)) {
         for (const agent of this.listAgents({ companyId: company.id })) {
           this.addAgentToMeeting(meeting.id, agent.id);
         }
@@ -254,11 +267,11 @@ export class Store {
   }
 
   getCompany(companyId) {
-    return rowToCompany(this.db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId));
+    return rowToCompany(this._prepare('SELECT * FROM companies WHERE id = ?').get(companyId));
   }
 
   listCompanies() {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT c.*, (SELECT COUNT(*) FROM agents a WHERE a.company_id = c.id AND a.status = 'active') AS team_size,
              (SELECT COUNT(*) FROM meetings m WHERE m.company_id = c.id) AS meeting_count
       FROM companies c WHERE c.status = 'active' ORDER BY c.last_active_at DESC
@@ -270,7 +283,7 @@ export class Store {
     if (!company) {
       return null;
     }
-    this.db.prepare('UPDATE companies SET name = ?, industry = ?, emoji = ?, color = ?, scenario = ?, status = ? WHERE id = ?').run(
+    this._prepare('UPDATE companies SET name = ?, industry = ?, emoji = ?, color = ?, scenario = ?, status = ? WHERE id = ?').run(
       patch.name ?? company.name,
       patch.industry ?? company.industry,
       patch.emoji ?? company.emoji,
@@ -285,25 +298,25 @@ export class Store {
 
   listCompaniesByStatus(status) {
     if (status === 'all') {
-      return this.db.prepare('SELECT * FROM companies ORDER BY last_active_at DESC').all().map(rowToCompany);
+      return this._prepare('SELECT * FROM companies ORDER BY last_active_at DESC').all().map(rowToCompany);
     }
-    return this.db.prepare('SELECT * FROM companies WHERE status = ? ORDER BY last_active_at DESC')
+    return this._prepare('SELECT * FROM companies WHERE status = ? ORDER BY last_active_at DESC')
       .all(status)
       .map(rowToCompany);
   }
 
   archiveCompany(companyId, actor = 'user') {
-    this.db.prepare("UPDATE companies SET status = 'archived' WHERE id = ?").run(companyId);
+    this._prepare("UPDATE companies SET status = 'archived' WHERE id = ?").run(companyId);
     this.logChange(actor, 'company', companyId, 'archive', {});
   }
 
   touchCompany(companyId) {
-    this.db.prepare('UPDATE companies SET last_active_at = ? WHERE id = ?').run(now(), companyId);
+    this._prepare('UPDATE companies SET last_active_at = ? WHERE id = ?').run(now(), companyId);
   }
 
   insertAgent(profile, origin, actor) {
     const at = now();
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO agents (id, origin, status, name, title, voice, color, style,
         aliases_json, domains_json, boundaries_json, knowledge, craft, company_id, role, manager_id, learning_enabled, version, created_at, updated_at)
       VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
@@ -331,7 +344,7 @@ export class Store {
   }
 
   getAgent(agentId) {
-    return rowToAgent(this.db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId));
+    return rowToAgent(this._prepare('SELECT * FROM agents WHERE id = ?').get(agentId));
   }
 
   listAgents({ includeArchived = false, companyId = null } = {}) {
@@ -349,7 +362,7 @@ export class Store {
       query += ' WHERE ' + conditions.join(' AND ');
     }
     query += ' ORDER BY created_at';
-    return this.db.prepare(query).all(...params).map(rowToAgent);
+    return this._prepare(query).all(...params).map(rowToAgent);
   }
 
   updateAgent(agentId, patch, actor, note = null) {
@@ -358,7 +371,7 @@ export class Store {
       return null;
     }
 
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO agent_profile_versions (agent_id, version, profile_json, changed_by, change_note, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(agentId, current.version, JSON.stringify(current), actor, note, now());
@@ -377,7 +390,7 @@ export class Store {
       learningEnabled: patch.learningEnabled ?? current.learningEnabled
     };
 
-    this.db.prepare(`
+    this._prepare(`
       UPDATE agents SET name = ?, title = ?, voice = ?, color = ?, style = ?,
         aliases_json = ?, domains_json = ?, boundaries_json = ?, knowledge = ?, craft = ?, learning_enabled = ?,
         version = version + 1, updated_at = ?
@@ -403,12 +416,12 @@ export class Store {
   }
 
   archiveAgent(agentId, actor) {
-    this.db.prepare("UPDATE agents SET status = 'archived', updated_at = ? WHERE id = ?").run(now(), agentId);
+    this._prepare("UPDATE agents SET status = 'archived', updated_at = ? WHERE id = ?").run(now(), agentId);
     this.logChange(actor, 'agent', agentId, 'archive', {});
   }
 
   listAgentVersions(agentId, limit = 20) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT id, agent_id, version, profile_json, changed_by, change_note, created_at
       FROM agent_profile_versions WHERE agent_id = ? ORDER BY id DESC LIMIT ?
     `).all(agentId, limit).map((row) => ({ ...row, profile: parseJsonColumn(row.profile_json, null) }));
@@ -419,13 +432,13 @@ export class Store {
   createMeeting({ companyId, goalId = null, scenarioName = null, scenarioText = null } = {}) {
     const id = nanoid(10);
     const at = now();
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO meetings (id, company_id, goal_id, scenario_name, scenario_text, status, created_at, last_active_at)
       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
     `).run(id, companyId || null, goalId, scenarioName, scenarioText, at, at);
 
     for (const agent of this.listAgents({ companyId })) {
-      this.db.prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agent.id);
+      this._prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agent.id);
     }
     if (companyId) {
       this.touchCompany(companyId);
@@ -434,14 +447,14 @@ export class Store {
   }
 
   getMeeting(meetingId) {
-    return this.db.prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId) || null;
+    return this._prepare('SELECT * FROM meetings WHERE id = ?').get(meetingId) || null;
   }
 
   findResumableMeeting(meetingId, companyId = null) {
     if (!meetingId) {
       return null;
     }
-    const meeting = this.db.prepare("SELECT * FROM meetings WHERE id = ? AND status = 'active'").get(meetingId) || null;
+    const meeting = this._prepare("SELECT * FROM meetings WHERE id = ? AND status = 'active'").get(meetingId) || null;
     if (meeting && companyId && meeting.company_id !== companyId) {
       return null;
     }
@@ -450,12 +463,12 @@ export class Store {
 
   listMeetings(limit = 30, companyId = null) {
     if (companyId) {
-      return this.db.prepare(`
+      return this._prepare(`
         SELECT id, company_id, title, scenario_name, status, created_at, last_active_at, closed_at, turn_count, summary
         FROM meetings WHERE company_id = ? ORDER BY last_active_at DESC LIMIT ?
       `).all(companyId, limit);
     }
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT id, company_id, title, scenario_name, status, created_at, last_active_at, closed_at, turn_count, summary
       FROM meetings ORDER BY last_active_at DESC LIMIT ?
     `).all(limit);
@@ -466,7 +479,7 @@ export class Store {
     if (!meeting) {
       return null;
     }
-    this.db.prepare('UPDATE meetings SET title = ?, scenario_name = ?, scenario_text = ?, summary = ? WHERE id = ?').run(
+    this._prepare('UPDATE meetings SET title = ?, scenario_name = ?, scenario_text = ?, summary = ? WHERE id = ?').run(
       patch.title ?? meeting.title,
       patch.scenarioName ?? meeting.scenario_name,
       patch.scenarioText ?? meeting.scenario_text,
@@ -480,23 +493,23 @@ export class Store {
   // del proyecto en el que se está trabajando. Solo si no tenía: nunca se le
   // roba una reunión a otro proyecto.
   attachMeetingToGoal(meetingId, goalId) {
-    const result = this.db.prepare('UPDATE meetings SET goal_id = ? WHERE id = ? AND goal_id IS NULL')
+    const result = this._prepare('UPDATE meetings SET goal_id = ? WHERE id = ? AND goal_id IS NULL')
       .run(goalId, meetingId);
     return result.changes === 1;
   }
 
   closeMeeting(meetingId) {
-    this.db.prepare("UPDATE meetings SET status = 'closed', closed_at = ? WHERE id = ?").run(now(), meetingId);
+    this._prepare("UPDATE meetings SET status = 'closed', closed_at = ? WHERE id = ?").run(now(), meetingId);
   }
 
   touchMeeting(meetingId) {
-    this.db.prepare('UPDATE meetings SET last_active_at = ? WHERE id = ?').run(now(), meetingId);
+    this._prepare('UPDATE meetings SET last_active_at = ? WHERE id = ?').run(now(), meetingId);
   }
 
   // ── Roster por reunión ─────────────────────────────────────────────────
 
   rosterForMeeting(meetingId) {
-    const rows = this.db.prepare(`
+    const rows = this._prepare(`
       SELECT a.*, ma.enabled AS meeting_enabled
       FROM meeting_agents ma JOIN agents a ON a.id = ma.agent_id
       WHERE ma.meeting_id = ? AND a.status = 'active'
@@ -506,31 +519,31 @@ export class Store {
   }
 
   addAgentToMeeting(meetingId, agentId) {
-    this.db.prepare('INSERT OR IGNORE INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(meetingId, agentId);
+    this._prepare('INSERT OR IGNORE INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(meetingId, agentId);
   }
 
   removeAgentFromMeeting(meetingId, agentId) {
-    this.db.prepare('DELETE FROM meeting_agents WHERE meeting_id = ? AND agent_id = ?').run(meetingId, agentId);
+    this._prepare('DELETE FROM meeting_agents WHERE meeting_id = ? AND agent_id = ?').run(meetingId, agentId);
   }
 
   setAgentEnabled(meetingId, agentId, enabled) {
-    this.db.prepare('UPDATE meeting_agents SET enabled = ? WHERE meeting_id = ? AND agent_id = ?').run(enabled ? 1 : 0, meetingId, agentId);
+    this._prepare('UPDATE meeting_agents SET enabled = ? WHERE meeting_id = ? AND agent_id = ?').run(enabled ? 1 : 0, meetingId, agentId);
   }
 
   // ── Turnos ─────────────────────────────────────────────────────────────
 
   appendTurn(meetingId, { turnId = null, kind, speaker, agentId = null, text }) {
     const at = now();
-    const result = this.db.prepare(`
+    const result = this._prepare(`
       INSERT INTO turns (meeting_id, turn_id, at, kind, speaker, agent_id, text)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(meetingId, turnId, at, kind, speaker, agentId, text);
-    this.db.prepare('UPDATE meetings SET turn_count = turn_count + 1, last_active_at = ? WHERE id = ?').run(at, meetingId);
+    this._prepare('UPDATE meetings SET turn_count = turn_count + 1, last_active_at = ? WHERE id = ?').run(at, meetingId);
     return result.lastInsertRowid;
   }
 
   recentTurns(meetingId, limit = 80) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT * FROM (
         SELECT id, turn_id, at, kind, speaker, agent_id, text
         FROM turns WHERE meeting_id = ? ORDER BY id DESC LIMIT ?
@@ -548,21 +561,21 @@ export class Store {
       return null;
     }
 
-    const turnos = this.db.prepare('SELECT COUNT(*) AS c FROM turns WHERE meeting_id = ?').get(meetingId).c;
-    const sueltas = this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').get(meetingId).c;
-    const conservadas = this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NOT NULL').get(meetingId).c;
+    const turnos = this._prepare('SELECT COUNT(*) AS c FROM turns WHERE meeting_id = ?').get(meetingId).c;
+    const sueltas = this._prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').get(meetingId).c;
+    const conservadas = this._prepare('SELECT COUNT(*) AS c FROM tasks WHERE meeting_id = ? AND goal_id IS NOT NULL').get(meetingId).c;
 
     this.db.exec('BEGIN');
     try {
-      this.db.prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
+      this._prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
+      this._prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
       // Las que sí produjeron trabajo se desligan de la reunión, no se borran.
-      this.db.prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('UPDATE goals SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
-      this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meetingId);
+      this._prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+      this._prepare('UPDATE goals SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+      this._prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
+      this._prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
+      this._prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
+      this._prepare('DELETE FROM meetings WHERE id = ?').run(meetingId);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -574,14 +587,14 @@ export class Store {
   }
 
   closedMeetings(companyId) {
-    return this.db.prepare("SELECT id FROM meetings WHERE company_id = ? AND status != 'active' ORDER BY created_at").all(companyId).map((row) => row.id);
+    return this._prepare("SELECT id FROM meetings WHERE company_id = ? AND status != 'active' ORDER BY created_at").all(companyId).map((row) => row.id);
   }
 
   // ── Tareas ─────────────────────────────────────────────────────────────
 
   insertTask(meetingId, agentId, { id = null, text, completed = false, createdAt = null, kind = 'entregable', parentTaskId = null, reviewerId = null, phase = null }) {
     const taskId = id || 'task-' + nanoid(6);
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, completed_at, kind, parent_task_id, reviewer_id, phase)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(taskId, meetingId, agentId, text, completed ? 1 : 0, createdAt || now(), completed ? now() : null, kind, parentTaskId, reviewerId, phase ?? 2);
@@ -589,15 +602,15 @@ export class Store {
   }
 
   setTaskKind(taskId, kind) {
-    this.db.prepare('UPDATE tasks SET kind = ? WHERE id = ?').run(kind, taskId);
+    this._prepare('UPDATE tasks SET kind = ? WHERE id = ?').run(kind, taskId);
   }
 
   getTask(taskId) {
-    return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) || null;
+    return this._prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) || null;
   }
 
   setReviewStatus(taskId, reviewStatus, reviewerId = null) {
-    this.db.prepare('UPDATE tasks SET review_status = ?, reviewer_id = COALESCE(?, reviewer_id) WHERE id = ?')
+    this._prepare('UPDATE tasks SET review_status = ?, reviewer_id = COALESCE(?, reviewer_id) WHERE id = ?')
       .run(reviewStatus, reviewerId, taskId);
   }
 
@@ -605,7 +618,7 @@ export class Store {
 
   addTaskComment({ taskId, companyId, authorId, kind = 'nota', text }) {
     const id = 'cmt-' + nanoid(8);
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO task_comments (id, task_id, company_id, author_id, kind, text, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(id, taskId, companyId, authorId, kind, String(text).slice(0, 4000), now());
@@ -613,30 +626,30 @@ export class Store {
   }
 
   taskComments(taskId) {
-    return this.db.prepare('SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at').all(taskId);
+    return this._prepare('SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at').all(taskId);
   }
 
   recentComments(companyId, limit = 40) {
-    return this.db.prepare(
+    return this._prepare(
       'SELECT * FROM task_comments WHERE company_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
     ).all(companyId, limit);
   }
 
   reassignTask(taskId, agentId) {
-    this.db.prepare('UPDATE tasks SET agent_id = ? WHERE id = ?').run(agentId, taskId);
+    this._prepare('UPDATE tasks SET agent_id = ? WHERE id = ?').run(agentId, taskId);
   }
 
   setTaskCompleted(taskId, completed) {
-    this.db.prepare('UPDATE tasks SET completed = ?, completed_at = ? WHERE id = ?')
+    this._prepare('UPDATE tasks SET completed = ?, completed_at = ? WHERE id = ?')
       .run(completed ? 1 : 0, completed ? now() : null, taskId);
   }
 
   deleteTask(taskId) {
-    this.db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+    this._prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
   }
 
   tasksForMeeting(meetingId) {
-    return this.db.prepare('SELECT * FROM tasks WHERE meeting_id = ? ORDER BY created_at').all(meetingId)
+    return this._prepare('SELECT * FROM tasks WHERE meeting_id = ? ORDER BY created_at').all(meetingId)
       .map((row) => ({
         id: row.id,
         agentId: row.agent_id,
@@ -659,7 +672,7 @@ export class Store {
     for (let suffix = 2; this.slugTaken(companyId, folder); suffix += 1) {
       folder = `${base}-${suffix}`;
     }
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO goals (id, company_id, meeting_id, title, description, status, created_at, kind, slug)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, companyId, meetingId, title, description, kind === 'acuerdo' ? 'done' : 'active', now(), kind, folder);
@@ -668,14 +681,14 @@ export class Store {
   }
 
   getGoal(goalId) {
-    return this.db.prepare('SELECT * FROM goals WHERE id = ?').get(goalId) || null;
+    return this._prepare('SELECT * FROM goals WHERE id = ?').get(goalId) || null;
   }
 
   listGoals(companyId, status = null) {
     if (status) {
-      return this.db.prepare('SELECT * FROM goals WHERE company_id = ? AND status = ? ORDER BY created_at DESC').all(companyId, status);
+      return this._prepare('SELECT * FROM goals WHERE company_id = ? AND status = ? ORDER BY created_at DESC').all(companyId, status);
     }
-    return this.db.prepare('SELECT * FROM goals WHERE company_id = ? ORDER BY created_at DESC').all(companyId);
+    return this._prepare('SELECT * FROM goals WHERE company_id = ? ORDER BY created_at DESC').all(companyId);
   }
 
   // Un proyecto se da por CUMPLIDO solo si además de no quedar nada en curso,
@@ -683,7 +696,7 @@ export class Store {
   // las tareas se trabaron se anunciaba como "meta cumplida" — el peor aviso
   // posible: dice que salió bien justo cuando no salió nada.
   completeGoalIfDone(goalId) {
-    const { pendientes, hechas } = this.db.prepare(`
+    const { pendientes, hechas } = this._prepare(`
       SELECT
         SUM(CASE WHEN status IN ('pending','in_progress') THEN 1 ELSE 0 END) AS pendientes,
         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS hechas
@@ -692,7 +705,7 @@ export class Store {
     if ((pendientes || 0) > 0 || (hechas || 0) === 0) {
       return false;
     }
-    this.db.prepare("UPDATE goals SET status = 'done', completed_at = ? WHERE id = ? AND status = 'active'").run(now(), goalId);
+    this._prepare("UPDATE goals SET status = 'done', completed_at = ? WHERE id = ? AND status = 'active'").run(now(), goalId);
     return this.getGoal(goalId)?.status === 'done';
   }
 
@@ -700,7 +713,7 @@ export class Store {
   // registradas como 'noted': se ven en el tablero pero nadie las "trabaja".
   assignTaskToGoal(taskId, goalId, { kind = 'entregable', phase = null, targetFile = null } = {}) {
     const status = kind === 'decision' || kind === 'seguimiento' ? 'noted' : 'pending';
-    this.db.prepare('UPDATE tasks SET goal_id = ?, status = ?, kind = ?, phase = ?, target_file = ? WHERE id = ?')
+    this._prepare('UPDATE tasks SET goal_id = ?, status = ?, kind = ?, phase = ?, target_file = ? WHERE id = ?')
       .run(goalId, status, kind, phase ?? 2, targetFile, taskId);
   }
 
@@ -708,7 +721,7 @@ export class Store {
   // quedó repartido. Es lo que se le muestra a cada uno para que no invente
   // archivos al lado de los que ya tienen dueño.
   fileOwnersForGoal(goalId) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT t.target_file AS file, t.agent_id, t.status, a.name
       FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
       WHERE t.goal_id = ? AND t.target_file IS NOT NULL AND t.kind = 'entregable'
@@ -718,14 +731,14 @@ export class Store {
 
   // Checkout atómico: un solo worker puede tomar la tarea (semántica issue).
   checkoutTask(taskId) {
-    const result = this.db.prepare(
+    const result = this._prepare(
       "UPDATE tasks SET status = 'in_progress', run_count = run_count + 1 WHERE id = ? AND status = 'pending'"
     ).run(taskId);
     return result.changes === 1;
   }
 
   finishTask(taskId, { status, summary = null, blockedReason = null }) {
-    this.db.prepare(`
+    this._prepare(`
       UPDATE tasks SET status = ?, result_summary = ?, blocked_reason = ?,
         completed = CASE WHEN ? = 'done' THEN 1 ELSE completed END,
         completed_at = CASE WHEN ? = 'done' THEN ? ELSE completed_at END
@@ -737,7 +750,7 @@ export class Store {
   // de contrato que se comía una corrida entera produciendo documentos; se
   // eliminó. La columna queda porque sirve para priorizar sin migrar.)
   workQueue(companyId) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id
       WHERE g.company_id = ? AND g.status = 'active' AND t.status = 'pending'
         AND t.kind IN ('entregable', 'revision', 'refinamiento')
@@ -756,7 +769,7 @@ export class Store {
   //
   // Las tareas 'blocked' y 'done' no cuentan: una ola trabada se abre sola.
   faseAbierta(goalId) {
-    const fila = this.db.prepare(`
+    const fila = this._prepare(`
       SELECT MIN(phase) AS fase FROM tasks
       WHERE goal_id = ? AND status IN ('pending','in_progress')
         AND kind IN ('entregable','spec')
@@ -765,7 +778,7 @@ export class Store {
   }
 
   tasksForGoal(goalId) {
-    return this.db.prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY created_at').all(goalId);
+    return this._prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY created_at').all(goalId);
   }
 
   // ── Proyectos (la unidad de trabajo) ───────────────────────────────────
@@ -785,13 +798,13 @@ export class Store {
     // estudio Android no hace proyectos web salvo que se lo pidan. Se normaliza
     // para que un valor inventado no deje al equipo sin playbook.
     const elegido = normalizeStack(stack || this.getCompany(companyId)?.stack);
-    this.db.prepare('UPDATE goals SET brief = ?, stack = ? WHERE id = ?')
+    this._prepare('UPDATE goals SET brief = ?, stack = ? WHERE id = ?')
       .run(String(brief).slice(0, 4000), elegido, goal.id);
     return this.getGoal(goal.id);
   }
 
   listProjects(companyId, { includeArchived = false } = {}) {
-    const rows = this.db.prepare(`
+    const rows = this._prepare(`
       SELECT g.*,
         (SELECT COUNT(*) FROM meetings m WHERE m.goal_id = g.id)                        AS meeting_count,
         (SELECT COUNT(*) FROM tasks t WHERE t.goal_id = g.id)                           AS task_count,
@@ -815,7 +828,7 @@ export class Store {
     // title.trim()) borraba el nombre y el proyecto quedaba sin nada que
     // mostrar en la lista. Vacío = "no lo toques", no "dejalo sin nombre".
     const titulo = String(patch.title ?? '').trim() || goal.title;
-    this.db.prepare('UPDATE goals SET title = ?, brief = ?, description = ?, stack = ? WHERE id = ?').run(
+    this._prepare('UPDATE goals SET title = ?, brief = ?, description = ?, stack = ? WHERE id = ?').run(
       titulo,
       patch.brief ?? goal.brief,
       patch.brief ?? goal.description,
@@ -831,7 +844,7 @@ export class Store {
   // tarea es una derivación y se pierde el matiz ("de sushi", "con parallax",
   // "súper animada"). Sin esto el equipo inventaba un proyecto genérico.
   userRequestForGoal(goalId, limit = 12) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT t.text FROM turns t
       JOIN meetings m ON m.id = t.meeting_id
       WHERE m.goal_id = ? AND t.kind = 'user'
@@ -840,7 +853,7 @@ export class Store {
   }
 
   meetingsForProject(goalId) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT id, company_id, goal_id, title, scenario_name, status, created_at,
              last_active_at, closed_at, turn_count, summary
       FROM meetings WHERE goal_id = ? ORDER BY last_active_at DESC
@@ -848,7 +861,7 @@ export class Store {
   }
 
   runsForProject(goalId, limit = 30) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT w.id, w.task_id, w.agent_id, w.started_at, w.ended_at, w.status, w.summary, w.artifacts_json
       FROM work_runs w JOIN tasks t ON t.id = w.task_id
       WHERE t.goal_id = ? ORDER BY w.id DESC LIMIT ?
@@ -856,7 +869,7 @@ export class Store {
   }
 
   commentsForProject(goalId, limit = 60) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT c.* FROM task_comments c JOIN tasks t ON t.id = c.task_id
       WHERE t.goal_id = ? ORDER BY c.created_at DESC, c.rowid DESC LIMIT ?
     `).all(goalId, limit);
@@ -870,7 +883,7 @@ export class Store {
     if (!goal) {
       return false;
     }
-    return Boolean(this.db.prepare(
+    return Boolean(this._prepare(
       'SELECT 1 FROM goals WHERE company_id = ? AND slug = ? AND id != ? LIMIT 1'
     ).get(goal.company_id, goal.slug, goalId));
   }
@@ -884,11 +897,11 @@ export class Store {
     if (!goal) {
       return null;
     }
-    const meetingIds = this.db.prepare('SELECT id FROM meetings WHERE goal_id = ?').all(goalId).map((r) => r.id);
+    const meetingIds = this._prepare('SELECT id FROM meetings WHERE goal_id = ?').all(goalId).map((r) => r.id);
     const conteos = {
       reuniones: meetingIds.length,
-      tareas: this.db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE goal_id = ?').get(goalId).c,
-      corridas: this.db.prepare(
+      tareas: this._prepare('SELECT COUNT(*) AS c FROM tasks WHERE goal_id = ?').get(goalId).c,
+      corridas: this._prepare(
         'SELECT COUNT(*) AS c FROM work_runs WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)'
       ).get(goalId).c
     };
@@ -896,28 +909,28 @@ export class Store {
 
     this.db.exec('BEGIN');
     try {
-      this.db.prepare('DELETE FROM task_comments WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
-      this.db.prepare('DELETE FROM work_runs WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
-      this.db.prepare('DELETE FROM tasks WHERE goal_id = ?').run(goalId);
+      this._prepare('DELETE FROM task_comments WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
+      this._prepare('DELETE FROM work_runs WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)').run(goalId);
+      this._prepare('DELETE FROM tasks WHERE goal_id = ?').run(goalId);
       for (const meetingId of meetingIds) {
-        this.db.prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
+        this._prepare('DELETE FROM turns WHERE meeting_id = ?').run(meetingId);
         // Tareas de esa reunión que nunca llegaron a un proyecto. Las que sí
         // tienen meta (típicamente el registro de acuerdos que el cierre cuelga
         // de la misma reunión) NO son de este proyecto: se desligan de la
         // reunión, igual que en deleteMeeting. Sin el filtro, el registro de
         // acuerdos sobrevivía al borrado pero quedaba vacío.
-        this.db.prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
-        this.db.prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
-        this.db.prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
-        this.db.prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
-        this.db.prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
+        this._prepare('DELETE FROM tasks WHERE meeting_id = ? AND goal_id IS NULL').run(meetingId);
+        this._prepare('UPDATE tasks SET meeting_id = NULL WHERE meeting_id = ?').run(meetingId);
+        this._prepare('DELETE FROM telemetry_events WHERE meeting_id = ?').run(meetingId);
+        this._prepare('DELETE FROM session_summaries WHERE meeting_id = ?').run(meetingId);
+        this._prepare('DELETE FROM meeting_agents WHERE meeting_id = ?').run(meetingId);
       }
       // Otros goals que apuntaban a estas reuniones quedan sin ella, no rotos.
-      this.db.prepare(
+      this._prepare(
         `UPDATE goals SET meeting_id = NULL WHERE meeting_id IN (SELECT id FROM meetings WHERE goal_id = ?)`
       ).run(goalId);
-      this.db.prepare('DELETE FROM meetings WHERE goal_id = ?').run(goalId);
-      this.db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
+      this._prepare('DELETE FROM meetings WHERE goal_id = ?').run(goalId);
+      this._prepare('DELETE FROM goals WHERE id = ?').run(goalId);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -936,7 +949,7 @@ export class Store {
   }
 
   activeWorkCompanies() {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT DISTINCT g.company_id AS id FROM goals g
       JOIN tasks t ON t.goal_id = g.id
       WHERE g.status = 'active' AND t.status IN ('pending','in_progress')
@@ -944,7 +957,7 @@ export class Store {
   }
 
   startWorkRun(taskId, agentId, companyId) {
-    const result = this.db.prepare(`
+    const result = this._prepare(`
       INSERT INTO work_runs (task_id, agent_id, company_id, started_at, status)
       VALUES (?, ?, ?, ?, 'running')
     `).run(taskId, agentId, companyId, now());
@@ -952,14 +965,14 @@ export class Store {
   }
 
   finishWorkRun(runId, { status, summary = null, log = [], artifacts = [] }) {
-    this.db.prepare(`
+    this._prepare(`
       UPDATE work_runs SET ended_at = ?, status = ?, summary = ?, log_json = ?, artifacts_json = ?
       WHERE id = ?
     `).run(now(), status, summary, JSON.stringify(log).slice(0, 200000), JSON.stringify(artifacts), runId);
   }
 
   recentWorkRuns(companyId, limit = 30) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT id, task_id, agent_id, started_at, ended_at, status, summary, artifacts_json
       FROM work_runs WHERE company_id = ? ORDER BY id DESC LIMIT ?
     `).all(companyId, limit).map((row) => ({
@@ -971,14 +984,14 @@ export class Store {
   // ── Resúmenes, telemetría y changelog ──────────────────────────────────
 
   saveSessionSummary(meetingId, sessionId, startedAt, summary) {
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO session_summaries (meeting_id, session_id, started_at, ended_at, summary_json)
       VALUES (?, ?, ?, ?, ?)
     `).run(meetingId, sessionId, startedAt, now(), JSON.stringify(summary));
   }
 
   logTelemetryEvent(meetingId, turnId, type, payload) {
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO telemetry_events (meeting_id, turn_id, at, type, payload_json)
       VALUES (?, ?, ?, ?, ?)
     `).run(meetingId, turnId, now(), type, JSON.stringify(payload ?? {}));
@@ -986,17 +999,17 @@ export class Store {
 
   telemetryEventsForMeeting(meetingId, types = null) {
     const rows = types
-      ? this.db.prepare(`
+      ? this._prepare(`
           SELECT * FROM telemetry_events
           WHERE meeting_id = ? AND type IN (${types.map(() => '?').join(',')})
           ORDER BY id ASC
         `).all(meetingId, ...types)
-      : this.db.prepare('SELECT * FROM telemetry_events WHERE meeting_id = ? ORDER BY id ASC').all(meetingId);
+      : this._prepare('SELECT * FROM telemetry_events WHERE meeting_id = ? ORDER BY id ASC').all(meetingId);
     return rows.map((row) => ({ ...row, payload: parseJsonColumn(row.payload_json, {}) }));
   }
 
   logChange(actor, entity, entityId, action, detail) {
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO changelog (at, actor, entity, entity_id, action, detail_json)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(now(), actor, entity, entityId, action, JSON.stringify(detail ?? {}));
@@ -1005,12 +1018,12 @@ export class Store {
   listChangelog({ entity = null, entityId = null, limit = 50 } = {}) {
     let rows;
     if (entity && entityId) {
-      rows = this.db.prepare('SELECT * FROM changelog WHERE entity = ? AND entity_id = ? ORDER BY id DESC LIMIT ?')
+      rows = this._prepare('SELECT * FROM changelog WHERE entity = ? AND entity_id = ? ORDER BY id DESC LIMIT ?')
         .all(entity, entityId, limit);
     } else if (entity) {
-      rows = this.db.prepare('SELECT * FROM changelog WHERE entity = ? ORDER BY id DESC LIMIT ?').all(entity, limit);
+      rows = this._prepare('SELECT * FROM changelog WHERE entity = ? ORDER BY id DESC LIMIT ?').all(entity, limit);
     } else {
-      rows = this.db.prepare('SELECT * FROM changelog ORDER BY id DESC LIMIT ?').all(limit);
+      rows = this._prepare('SELECT * FROM changelog ORDER BY id DESC LIMIT ?').all(limit);
     }
     return rows.map((row) => ({ ...row, detail: parseJsonColumn(row.detail_json, {}) }));
   }
@@ -1019,7 +1032,7 @@ export class Store {
 
   insertLearning({ agentId = null, meetingId = null, type, content, confidence, sourceTurnIds = [] }) {
     const at = now();
-    const result = this.db.prepare(`
+    const result = this._prepare(`
       INSERT INTO learnings (agent_id, meeting_id, type, content, confidence, source_turn_ids, status, times_reinforced, created_at, last_reinforced_at)
       VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)
     `).run(agentId, meetingId, type, content, confidence, JSON.stringify(sourceTurnIds), at, at);
@@ -1027,7 +1040,7 @@ export class Store {
   }
 
   reinforceLearning(learningId, confidence) {
-    this.db.prepare(`
+    this._prepare(`
       UPDATE learnings SET times_reinforced = times_reinforced + 1,
         confidence = MAX(confidence, ?), last_reinforced_at = ?
       WHERE id = ?
@@ -1036,62 +1049,73 @@ export class Store {
 
   activeLearnings(agentId = null) {
     if (agentId) {
-      return this.db.prepare(`
+      return this._prepare(`
         SELECT * FROM learnings WHERE status = 'active' AND (agent_id = ? OR agent_id IS NULL)
         ORDER BY last_reinforced_at DESC
       `).all(agentId).map(this.#rowToLearning);
     }
-    return this.db.prepare("SELECT * FROM learnings WHERE status = 'active' ORDER BY last_reinforced_at DESC")
+    return this._prepare("SELECT * FROM learnings WHERE status = 'active' ORDER BY last_reinforced_at DESC")
       .all().map(this.#rowToLearning);
   }
 
   learningsForPanel(agentId) {
-    return this.db.prepare(`
+    return this._prepare(`
       SELECT * FROM learnings WHERE (agent_id = ? OR agent_id IS NULL) AND status != 'user_deleted'
       ORDER BY last_reinforced_at DESC
     `).all(agentId).map(this.#rowToLearning);
   }
 
   updateLearning(learningId, patch, actor) {
-    const row = this.db.prepare('SELECT * FROM learnings WHERE id = ?').get(learningId);
+    const row = this._prepare('SELECT * FROM learnings WHERE id = ?').get(learningId);
     if (!row) {
       return null;
     }
-    this.db.prepare('UPDATE learnings SET content = ?, status = ? WHERE id = ?').run(
+    this._prepare('UPDATE learnings SET content = ?, status = ? WHERE id = ?').run(
       patch.content ?? row.content,
       patch.status ?? row.status,
       learningId
     );
     this.logChange(actor, 'learning', String(learningId), 'update', { patch });
-    return this.db.prepare('SELECT * FROM learnings WHERE id = ?').get(learningId);
+    return this._prepare('SELECT * FROM learnings WHERE id = ?').get(learningId);
   }
 
   forgetAllLearnings(agentId, actor) {
-    this.db.prepare("UPDATE learnings SET status = 'user_deleted' WHERE agent_id = ? AND status = 'active'").run(agentId);
+    this._prepare("UPDATE learnings SET status = 'user_deleted' WHERE agent_id = ? AND status = 'active'").run(agentId);
     this.logChange(actor, 'learning', agentId, 'forget_all', {});
   }
 
   // ── Ajustes del usuario ────────────────────────────────────────────────
-
+  // Cache de settings (opt 09/11 #4, rev main): el turno lee settings ~15
+  // veces. Vive ACÁ (Store real) y no en settings.js: los tests usan stub
+  // stores mutados por fuera, y el cache de settings.js les mentía. Toda
+  // escritura por API (set/delete) invalida; cambios en caliente intactos.
   getSetting(key) {
-    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-    return row ? row.value : null;
+    if (!this._settingsCache) this._settingsCache = new Map();
+    if (this._settingsCache.has(key)) {
+      return this._settingsCache.get(key);
+    }
+    const row = this._prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    const value = row ? row.value : null;
+    this._settingsCache.set(key, value);
+    return value;
   }
 
   setSetting(key, value) {
-    this.db.prepare(`
+    this._prepare(`
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, String(value), now());
+    this._settingsCache?.delete(key);
   }
 
   deleteSetting(key) {
-    this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    this._prepare('DELETE FROM settings WHERE key = ?').run(key);
+    this._settingsCache?.delete(key);
   }
 
   allSettings() {
     const out = {};
-    for (const row of this.db.prepare('SELECT key, value FROM settings').all()) {
+    for (const row of this._prepare('SELECT key, value FROM settings').all()) {
       out[row.key] = row.value;
     }
     return out;
@@ -1100,7 +1124,7 @@ export class Store {
   // ── Sugerencias del tuner ──────────────────────────────────────────────
 
   insertSuggestion(agentId, kind, value, evidence = {}) {
-    const result = this.db.prepare(`
+    const result = this._prepare(`
       INSERT INTO router_suggestions (agent_id, kind, value, evidence_json, status, created_at)
       VALUES (?, ?, ?, ?, 'pending', ?)
     `).run(agentId, kind, value, JSON.stringify(evidence), now());
@@ -1108,7 +1132,7 @@ export class Store {
   }
 
   listSuggestions(status = 'pending') {
-    return this.db.prepare('SELECT * FROM router_suggestions WHERE status = ? ORDER BY id DESC LIMIT 50')
+    return this._prepare('SELECT * FROM router_suggestions WHERE status = ? ORDER BY id DESC LIMIT 50')
       .all(status)
       .map((row) => ({
         id: row.id,
@@ -1122,7 +1146,7 @@ export class Store {
   }
 
   getSuggestion(id) {
-    const row = this.db.prepare('SELECT * FROM router_suggestions WHERE id = ?').get(id);
+    const row = this._prepare('SELECT * FROM router_suggestions WHERE id = ?').get(id);
     if (!row) {
       return null;
     }
@@ -1137,7 +1161,7 @@ export class Store {
   }
 
   resolveSuggestion(id, status) {
-    this.db.prepare('UPDATE router_suggestions SET status = ?, resolved_at = ? WHERE id = ?').run(status, now(), id);
+    this._prepare('UPDATE router_suggestions SET status = ?, resolved_at = ? WHERE id = ?').run(status, now(), id);
   }
 
   #rowToLearning = (row) => ({

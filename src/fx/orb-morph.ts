@@ -28,6 +28,7 @@ import {
   generateShape,
   morphStep
 } from './morph.ts';
+import { lookupGlyph } from './glyphs-a.ts';
 
 // Estados visuales por agente (claves = protocolo orb.ts + work_event).
 export type AgentVisualState = 'idle' | 'escuchando' | 'hablando' | 'pensando' | 'trabajando';
@@ -78,6 +79,7 @@ type MorphOrb = {
   color: string;
   hue: number;
   shape: MorphShape;
+  glyph: string | null; // T2a: glifo activo (null = figura clásica)
   count: number;
   current: Float32Array;
   from: Float32Array;
@@ -91,6 +93,16 @@ type MorphOrb = {
   target: number;
   focus: number;
 };
+
+// Target de morph glyph-aware (T2a): si el orbe tiene glifo activo y el
+// nombre resuelve en el registro A+B, puntos del glifo; si no, figura.
+function orbTargetPoints(shape: MorphShape, glyph: string | null, count: number, seed: number, phase: number): Float32Array {
+  if (glyph) {
+    const found = lookupGlyph(glyph);
+    if (found) return found.points(count, seed);
+  }
+  return generateShape(shape, count, { seed, phase });
+}
 
 export class OrbMorph {
   private field: OrbField;
@@ -159,6 +171,7 @@ export class OrbMorph {
         color: orbColorFromHue(hues[index], this.theme),
         hue: hues[index],
         shape: 'sphere' as MorphShape,
+        glyph: null,
         count: 0,
         current: empty,
         from: empty,
@@ -186,7 +199,7 @@ export class OrbMorph {
       const count = particleCount(slot.r);
       if (count !== orb.count) {
         orb.count = count;
-        orb.current = generateShape(orb.shape, count, { seed: orb.phaseRot, phase: orb.wavePhase });
+        orb.current = orbTargetPoints(orb.shape, orb.glyph, count, orb.phaseRot, orb.wavePhase);
         orb.from = orb.current.slice();
         orb.to = orb.current.slice();
         orb.morphT0 = -1;
@@ -264,8 +277,9 @@ export class OrbMorph {
     const reduced = this.prefersReducedMotion;
     for (const orb of this.orbs) {
       if (agentId && orb.id !== agentId) continue;
-      if (orb.shape === shape && orb.morphT0 < 0) continue;
+      if (orb.shape === shape && orb.morphT0 < 0 && orb.glyph === null) continue;
       orb.shape = shape;
+      orb.glyph = null; // T2a: setShape vuelve a figura clásica (limpia glifo)
       if (orb.count === 0) continue;
       orb.from = orb.current.slice();
       orb.to = generateShape(shape, orb.count, { seed: orb.phaseRot, phase: orb.wavePhase });
@@ -290,12 +304,54 @@ export class OrbMorph {
     return this.orbs.find((o) => o.id === agentId)?.shape ?? null;
   }
 
+  // ── Glifos (T2a: motor de gestos) ────────────────────────────────────
+  // Muestra el glifo NOMBRE en un agente (morph con la misma curva y
+  // duración que setShape). Nombre desconocido o null → fallback a la
+  // figura de estado actual (el shape del orbe). Nunca tira: lookup
+  // miss = fallback. setShape/setAgentState limpian el glifo.
+  setGlyph(agentId: string, glyphName: string | null) {
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const reduced = this.prefersReducedMotion;
+    const glyph = glyphName ? lookupGlyph(glyphName) : null;
+    for (const orb of this.orbs) {
+      if (orb.id !== agentId) continue;
+      if (!glyph) {
+        if (orb.glyph === null && orb.morphT0 < 0) continue;
+        orb.glyph = null;
+        if (orb.count === 0) continue;
+        orb.from = orb.current.slice();
+        orb.to = generateShape(orb.shape, orb.count, { seed: orb.phaseRot, phase: orb.wavePhase });
+      } else {
+        if (orb.glyph === glyph.name && orb.morphT0 < 0) continue;
+        orb.glyph = glyph.name;
+        if (orb.count === 0) continue;
+        orb.from = orb.current.slice();
+        orb.to = glyph.points(orb.count, orb.phaseRot);
+      }
+      if (reduced) {
+        orb.current = orb.to.slice();
+        orb.from = orb.current.slice();
+        orb.morphT0 = -1;
+      } else {
+        orb.morphT0 = now;
+      }
+    }
+    this.updateMode();
+    this.kick();
+  }
+
+  getGlyph(agentId: string): string | null {
+    return this.orbs.find((o) => o.id === agentId)?.glyph ?? null;
+  }
+
   // ── Cambio de modo ───────────────────────────────────────────────────
   // Solo un loop dibuja a la vez. Si nadie pide figuras, el OrbField corre
   // solo (comportamiento upstream intacto).
 
   private useMorph() {
-    return this.orbs.some((o) => o.shape !== 'sphere' || o.morphT0 >= 0);
+    // T2a: un glifo activo también retiene el loop de morph (si no, un
+    // orbe idle volvería al upstream y el glifo se perdería al terminar).
+    return this.orbs.some((o) => o.shape !== 'sphere' || o.morphT0 >= 0 || o.glyph !== null);
   }
 
   private updateMode() {
@@ -381,7 +437,8 @@ export class OrbMorph {
         }
       }
       // La onda respira siempre (es su figura, no una transición).
-      if (orb.shape === 'wave' && !reduced) {
+      // T2a: salvo que haya un glifo activo (el glifo manda).
+      if (orb.shape === 'wave' && !reduced && orb.glyph === null) {
         orb.wavePhase += dt * WAVE_SPEED * (0.5 + orb.energy);
         if (orb.morphT0 < 0) {
           orb.current = generateShape('wave', orb.count, { phase: orb.wavePhase });
