@@ -5,6 +5,7 @@ import type {
   AudioDevices,
   AudioSettings,
   CompanyWork,
+  ConnectivityStatus,
   MissionGoal,
   MissionLive,
   MissionTask,
@@ -90,6 +91,15 @@ export async function fetchSidecars(): Promise<SidecarState[] | null> {
     return null;
   }
   return data.sidecars;
+}
+
+/** Monitor de conectividad (TC 09/11): snapshot del sondeo 30s del server. */
+export async function fetchConnectivity(): Promise<ConnectivityStatus | null> {
+  const data = await getJson<ConnectivityStatus>('/api/connectivity');
+  if (!data || !Array.isArray(data.checks)) {
+    return null;
+  }
+  return data;
 }
 
 export async function fetchLatency(): Promise<TelemetryAnalysis | null> {

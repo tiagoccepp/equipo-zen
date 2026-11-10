@@ -7,6 +7,7 @@ import type { MissionLiveHooks } from './types.ts';
 import {
   fetchAudio,
   fetchAudioDevices,
+  fetchConnectivity,
   fetchLatency,
   fetchLive,
   fetchLocalDevices,
@@ -16,6 +17,7 @@ import {
 } from './api.ts';
 import {
   renderAudio,
+  renderConnectivityBadge,
   renderEquipo,
   renderLatencia,
   renderSala,
@@ -55,7 +57,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
     refreshing = true;
     try {
       // Cada tarjeta fetch aislado: Promise.all con getters que nunca tiran.
-      const [live, work, sidecars, latency, audio, devices, audioRt, sala] = await Promise.all([
+      const [live, work, sidecars, latency, audio, devices, audioRt, sala, conn] = await Promise.all([
         fetchLive(),
         fetchWork(),
         fetchSidecars(),
@@ -63,12 +65,14 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
         fetchAudio(),
         fetchLocalDevices(),
         fetchAudioDevices(),
-        fetchSala()
+        fetchSala(),
+        fetchConnectivity()
       ]);
       if (!alive) {
         return;
       }
       container.innerHTML =
+        renderConnectivityBadge(conn) +
         renderEquipo(live, work, hooks) +
         renderTareas(work) +
         renderSidecars(sidecars) +
@@ -82,7 +86,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
 
   void refresh();
   const timer = setInterval(() => {
-    // Pausa en background: ahorra 7 fetches/5s por pestaña oculta.
+    // Pausa en background: ahorra 9 fetches/5s por pestaña oculta.
     if (!document.hidden) {
       void refresh();
     }

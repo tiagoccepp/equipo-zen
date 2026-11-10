@@ -104,3 +104,18 @@ export interface MissionLiveHooks {
   /** true si hay sesión de voz activa. */
   getVoiceActive?: () => boolean;
 }
+
+/** Monitor de conectividad (TC 09/11): snapshot de GET /api/connectivity. */
+export interface ConnectivityCheck {
+  name: string;
+  ok: boolean;
+  ms: number;
+  detail?: string;
+}
+
+export interface ConnectivityStatus {
+  online: boolean;
+  status: 'online' | 'degraded' | 'offline';
+  checks: ConnectivityCheck[];
+  ts: number;
+}

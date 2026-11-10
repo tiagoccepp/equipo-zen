@@ -8,6 +8,16 @@
   margin: 0;
 }
 
+/* Badge conectividad (TC 09/11): barra fina sobre las tarjetas. */
+.mc-conn {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  cursor: default;
+}
+
 .mc-card {
   background: var(--card, #232326);
   border: 1px solid var(--line, #333336);

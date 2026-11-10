@@ -11,6 +11,7 @@ import {
 } from './config.js';
 import { buildSystemInstruction } from './agent-runtime.js';
 import { applyAudioSettings, listDevices, playTestTone, setNodeMute, setNodeVolume } from './audio.js';
+import { CONNECTIVITY_INTERVAL_MS, ensureConnectivityLoop, getConnectivitySnapshot, isConnectivityTestEnv, refreshConnectivitySnapshot } from './connectivity.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
 import { enqueueJob, findJobRecord, getDefaultSession, getJob, listJobHistory, listJobs, loadJobBrief, loadJobRecord } from './driver.js';
 import { renderLearningsSection } from './learning.js';
@@ -939,6 +940,25 @@ export function createApp({ store }) {
   app.get('/api/mcp/status', (req, res) => {
     try {
       res.json({ status: getMcpStatus() });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // Monitor de conectividad (TC 09/11, aditivo): sirve el snapshot en
+  // memoria del sondeo periódico (30s, arranca lazy). Primer hit sin
+  // snapshot sondea en el momento; snapshot viejo se sirve y se refresca
+  // en fondo. En tests no hay loop ni refresh (snapshot inyectado).
+  app.get('/api/connectivity', async (_req, res) => {
+    try {
+      ensureConnectivityLoop();
+      let snap = getConnectivitySnapshot();
+      if (!snap) {
+        snap = await refreshConnectivitySnapshot();
+      } else if (Date.now() - snap.ts > CONNECTIVITY_INTERVAL_MS && !isConnectivityTestEnv()) {
+        void refreshConnectivitySnapshot().catch(() => {});
+      }
+      res.json(snap);
     } catch (error) {
       res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
     }

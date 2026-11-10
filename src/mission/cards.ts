@@ -5,6 +5,7 @@ import type {
   AudioDevices,
   AudioSettings,
   CompanyWork,
+  ConnectivityStatus,
   MissionLive,
   MissionLiveHooks,
   SalaSettings,
@@ -177,4 +178,20 @@ export function renderSala(sala: SalaSettings | null): string {
     `<p>${flags}</p><p class="mc-dim">SOP: ${sop.rules} reglas${knobs ? ` · ${esc(knobs)}` : ''}</p>` +
       (rules ? `<ul class="mc-list">${rules}</ul>` : '')
   );
+}
+
+/** Badge de conectividad (TC 09/11): pill + tooltip con los checks. */
+export function renderConnectivityBadge(conn: ConnectivityStatus | null): string {
+  if (!conn) {
+    return `<div class="mc-conn">${pill('CONN —', 'unknown')}</div>`;
+  }
+  const known = ['online', 'degraded', 'offline'].includes(conn.status) ? conn.status : 'degraded';
+  const label = known === 'online' ? 'CONN ONLINE' : known === 'degraded' ? 'CONN DEGRADADO' : 'CONN OFFLINE';
+  const cls = known === 'online' ? 'on' : known === 'degraded' ? 'warn' : 'off';
+  const downs = conn.checks.filter((c) => !c.ok).length;
+  const summary = `${conn.checks.length} checks${downs ? `, ${downs} caídos` : ''}`;
+  const lines = conn.checks
+    .map((c) => `${c.ok ? '✓' : '✗'} ${c.name} ${fmtMs(c.ms)}${c.detail ? ` — ${c.detail}` : ''}`)
+    .join('\n');
+  return `<div class="mc-conn" title="${esc(lines || 'sin checks')}">${pill(label, cls)} <span class="mc-dim">${esc(summary)}</span></div>`;
 }
