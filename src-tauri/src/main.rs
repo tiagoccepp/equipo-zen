@@ -56,6 +56,11 @@ struct Estado {
     aprobaciones: Mutex<HashMap<String, (String, Instant)>>,
     orbe: Mutex<EstadoOrbe>,
     cmd_orbe: Mutex<Option<String>>,
+    // TG orbe-mini: true si el orbe está visible PORQUE main se minimizó.
+    // Lo usa main_restored para ocultar solo ese orbe (el manual/hotkey
+    // se queda). Env Mutex como el resto: un bool no necesita AtomicBool
+    // con este tráfico (1 chequeo cada 500ms).
+    orb_por_minimizar: Mutex<bool>,
     datos: PathBuf,
 }
 
@@ -305,8 +310,19 @@ fn app_platform() -> String {
 
 fn show_main_inner(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // TG: restaurar también des-minimiza (la taskbar/bandeja/⤢ del
+        // orbe deben traer la ventana de vuelta aunque esté minimizada).
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+    }
+}
+
+// TG orbe-mini: apaga la marca "orbe por minimizar" (override manual:
+// si el usuario ocultó el orbe a mano, restore no lo toca).
+fn clear_min_flag(app: &AppHandle) {
+    if let Ok(mut guard) = app.state::<Estado>().orb_por_minimizar.try_lock() {
+        *guard = false;
     }
 }
 
@@ -328,6 +344,7 @@ fn toggle_orb_inner(app: &AppHandle) {
     if let Some(o) = app.get_webview_window("orb") {
         if o.is_visible().unwrap_or(false) {
             let _ = o.hide();
+            clear_min_flag(app);
         } else {
             place_orb(app);
         }
@@ -366,6 +383,7 @@ fn hide_orb(app: AppHandle) {
     if let Some(o) = app.get_webview_window("orb") {
         let _ = o.hide();
     }
+    clear_min_flag(&app);
 }
 
 #[tauri::command]
@@ -373,7 +391,53 @@ fn expand_from_orb(app: AppHandle) {
     if let Some(o) = app.get_webview_window("orb") {
         let _ = o.hide();
     }
+    clear_min_flag(&app);
     show_main_inner(&app);
+}
+
+// TG orbe-mini: el frontend main avisa transiciones de minimizado
+// (Tauri 2 no expone evento minimized: se detecta con isMinimized()
+// en el tick existente de 500ms, solo en transiciones).
+#[tauri::command]
+fn main_minimized(app: AppHandle) {
+    let minimizada = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_minimized().ok())
+        .unwrap_or(false);
+    if !minimizada {
+        return;
+    }
+    place_orb(&app);
+    if let Ok(mut guard) = app.state::<Estado>().orb_por_minimizar.try_lock() {
+        *guard = true;
+    }
+}
+
+#[tauri::command]
+fn main_restored(app: AppHandle) {
+    let main_ok = app.get_webview_window("main").map(|w| {
+        let min = w.is_minimized().unwrap_or(true);
+        let vis = w.is_visible().unwrap_or(false);
+        !min && vis
+    });
+    if main_ok != Some(true) {
+        return;
+    }
+    let era_por_minimizar = app
+        .state::<Estado>()
+        .orb_por_minimizar
+        .try_lock()
+        .map(|mut guard| {
+            let era = *guard;
+            *guard = false;
+            era
+        })
+        .unwrap_or(false);
+    if era_por_minimizar {
+        if let Some(o) = app.get_webview_window("orb") {
+            let _ = o.hide();
+        }
+    }
 }
 
 #[tauri::command]
@@ -521,6 +585,7 @@ fn main() {
                     nivel: 0.0,
                 }),
                 cmd_orbe: Mutex::new(None),
+                orb_por_minimizar: Mutex::new(false),
                 datos,
             });
 
@@ -594,6 +659,8 @@ fn main() {
             show_orb,
             hide_orb,
             expand_from_orb,
+            main_minimized,
+            main_restored,
             orb_drag,
             orb_poll,
             orb_report,

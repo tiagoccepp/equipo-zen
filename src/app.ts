@@ -998,7 +998,25 @@ function orbState(): string {
 }
 
 if (isTauri()) {
+  // TG orbe-mini: Tauri 2 no emite evento de minimizado; se detecta con
+  // isMinimized() en este tick y se avisa SOLO en transiciones.
+  let wasMinimized = false;
+  let minCheck: (() => Promise<boolean>) | null = null;
   const tick = async () => {
+    try {
+      if (!minCheck) {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const w = getCurrentWindow();
+        minCheck = () => w.isMinimized();
+      }
+      const minimized = await minCheck().catch(() => false);
+      if (minimized !== wasMinimized) {
+        wasMinimized = minimized;
+        await tinvoke(minimized ? 'main_minimized' : 'main_restored').catch(() => {});
+      }
+    } catch {
+      // Núcleo aún no listo.
+    }
     try {
       const cmd = await tinvoke<string | null>('main_poll');
       if (cmd === 'toggle-mic') {

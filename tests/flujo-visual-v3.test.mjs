@@ -96,6 +96,64 @@ test('v3: STATE_VIBRATION hablando>pensando>resto, idle=0', () => {
   assert.ok(num('escuchando') > 0, 'escuchando respira sutil');
 });
 
+test('v3/TG: gestos cool-only, sin cap duro max-1 (bilingüe)', () => {
+  const sys = buildSystemInstruction(AGENTE, {});
+  // El cap duro murió: ni ES ni EN pueden mencionarlo.
+  assert.ok(!sys.includes('máximo 1 por turno'), 'quedó cap duro ES');
+  assert.ok(!sys.includes('at most 1 per turn'), 'quedó cap duro EN');
+  assert.ok(!sys.includes('max-1') && !sys.includes('max 1'), 'quedó cap duro');
+  // La regla cool-only existe en los dos idiomas.
+  assert.ok(sys.includes('cool'), 'falta regla cool-only');
+  assert.ok(
+    sys.includes('Sin exagerar') || sys.includes('overdo'),
+    'falta regla sin-exagerar (ES/EN)'
+  );
+  assert.ok(
+    sys.includes('SOLO si queda cool') || sys.includes('ONLY if it looks cool'),
+    'falta condición solo-si-cool (ES/EN)'
+  );
+  // El protocolo [[gesto:…]] sigue enseñándose (placeholder no válido).
+  assert.ok(sys.includes('[[gesto:nombre]]') || sys.includes('[[gesto:name]]'), 'falta formato [[gesto:…]]');
+});
+
+test('TG: minimizar main ⇒ orbe (comandos Rust + handler + frontend)', () => {
+  // Nota: sin harness Rust; se verifica el cableado como texto, igual
+  // que los tests STATE_SHAPE/VIBRATION de arriba.
+  const main = readSrc('src-tauri/src/main.rs');
+  const app = readSrc('src/app.ts');
+  // Comandos nuevos existen y están registrados en el handler.
+  assert.ok(main.includes('fn main_minimized'), 'falta comando main_minimized');
+  assert.ok(main.includes('fn main_restored'), 'falta comando main_restored');
+  const handler = main.match(/generate_handler!\[([\s\S]+?)\]\)/);
+  assert.ok(handler, 'invoke_handler no encontrado');
+  assert.ok(handler[1].includes('main_minimized'), 'main_minimized no registrado');
+  assert.ok(handler[1].includes('main_restored'), 'main_restored no registrado');
+  // Restaurar des-minimiza (show y expand traen la ventana de vuelta).
+  const showFn = main.match(/fn show_main_inner[\s\S]*?\n\}/);
+  assert.ok(showFn && showFn[0].includes('unminimize'), 'show_main_inner debe des-minimizar');
+  assert.ok(main.includes('orb_por_minimizar'), 'falta flag orb_por_minimizar');
+  // Frontend detecta transiciones con isMinimized() y avisa al núcleo.
+  assert.ok(app.includes('isMinimized'), 'app.ts debe leer isMinimized()');
+  assert.ok(app.includes("'main_minimized'"), 'app.ts debe invocar main_minimized');
+  assert.ok(app.includes("'main_restored'"), 'app.ts debe invocar main_restored');
+});
+
+test('TG: hotkey Ctrl+Shift+E intacto (solo alterna orbe)', () => {
+  const main = readSrc('src-tauri/src/main.rs');
+  assert.ok(main.includes('Code::KeyE'), 'falta hotkey KeyE');
+  assert.ok(main.includes('Modifiers::CONTROL | Modifiers::SHIFT'), 'falta modificadores Ctrl+Shift');
+  const hotkey = main.match(/with_handler\(\|[\s\S]*?\.build\(\)/);
+  assert.ok(hotkey && hotkey[0].includes('toggle_orb_inner'), 'hotkey debe seguir alternando solo el orbe');
+});
+
+test('TG: orbe-mini sin figuras forzadas (vibra, no muta)', () => {
+  const orb = readSrc('src/orb.ts');
+  assert.ok(!orb.includes('setGlyph'), 'orb.ts no debe forzar figuras');
+  assert.ok(!orb.includes('setShape'), 'orb.ts no debe forzar shapes');
+  assert.ok(orb.includes('orb_poll'), 'orb.ts debe leer estado vía orb_poll');
+  assert.ok(orb.includes('expand'), 'orb.ts debe poder expandir a main');
+});
+
 test('v3: setGlyph intacto en 2D y 3D (única vía de figuras)', () => {
   for (const p of ['src/fx/orb-morph.ts', 'src/fx/orb3d.ts']) {
     const src = readSrc(p);

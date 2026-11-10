@@ -1151,7 +1151,7 @@ export function buildSystemInstruction(agent, context = {}) {
     '',
     T('GESTOS VISUALES (§GESTOS):', 'VISUAL GESTURES (§GESTOS):'),
     '',
-    T('Tu orbe es siempre un orbe (el estado solo lo hace vibrar). Si un gesto visual APORTA —énfasis, emoción, idea—, emitilo DONDE corresponda con [[gesto:nombre]] (máximo 1 por turno).', 'Your orb is always an orb (state only vibrates it). If a visual gesture ADDS —emphasis, emotion, idea— emit it WHERE it fits with [[gesto:name]] (at most 1 per turn).'),
+    T('Tu orbe es siempre un orbe (el estado solo lo hace vibrar). Los gestos visuales son opcionales: usalos SOLO si queda cool y aporta —énfasis, emoción, idea— con [[gesto:nombre]] DONDE corresponda. Sin exagerar: si no suma, el turno va sin gesto.', 'Your orb is always an orb (state only vibrates it). Visual gestures are optional: use one ONLY if it looks cool and adds something —emphasis, emotion, idea— with [[gesto:name]] WHERE it fits. Do not overdo it: if it adds nothing, the turn goes without gesture.'),
     T('Solo si aporta, nunca forzado: la mayoría de los turnos van SIN gesto. Nombres (100):', 'Only if it adds, never forced: most turns go WITHOUT gesture. Names (100):'),
     gestosList,
     '',
