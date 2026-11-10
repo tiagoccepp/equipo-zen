@@ -26,6 +26,10 @@ export const WHISPER_MODEL_OPTIONS = ['tiny', 'base', 'small', 'medium', 'large-
 // 'piper'/'supertonic' fuerzan el orden (el otro queda de respaldo). El Deepgram
 // con key siempre va primero (override cloud, ver agent-runtime).
 export const TTS_ENGINE_OPTIONS = ['auto', 'piper', 'supertonic'];
+// Motores direccionables por tts.order (espejo de stt.order): la cascada
+// TTS se recorre en ese orden y SOLO los listados se intentan. 'edge'
+// resuelve en speakSentence (path MP3); el resto en generateAudioParts.
+export const TTS_ENGINES = ['piper', 'supertonic', 'deepgram', 'edge'];
 export const STT_PROVIDERS = ['local', 'groq', 'deepgram', 'browser'];
 // Motores direccionables por stt.order (la cadena STT se recorre en ese
 // orden; local = parakeet+whisper partible). El hint del navegador es
@@ -197,6 +201,48 @@ export function ttsLocalOrder(engine = 'auto') {
   return engine === 'supertonic' ? ['supertonic', 'piper'] : ['piper', 'supertonic'];
 }
 
+// Default del tts.order = legacy byte a byte: Deepgram-con-key primero
+// (override cloud), luego locales según tts.engine, Edge último. Sin key
+// Deepgram se salta → local-first keyless (Piper primero).
+export function defaultTtsOrder(engine = getTtsEngine()) {
+  return ['deepgram', ...ttsLocalOrder(engine), 'edge'];
+}
+
+// Orden de la cascada TTS (CSV de motores, espejo de stt.order): define
+// en qué secuencia se intentan y —diferencia con el legacy— SOLO los
+// listados se intentan (elegido manda, resto out). Sin override, respeta
+// el legacy tts.engine vía defaultTtsOrder.
+export function getTtsOrder() {
+  const raw = dbValue('tts.order');
+  if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+    const parsed = parseTtsOrder(String(raw));
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+  return defaultTtsOrder();
+}
+
+// ¿Hay override explícito de tts.order en DB? (el watchdog lo usa para
+// decidir elección explícita vs default legacy parakeet+piper.)
+export function isTtsOrderSet() {
+  const raw = dbValue('tts.order');
+  return raw !== null && raw !== undefined && String(raw).trim() !== '';
+}
+
+export function parseTtsOrder(csv) {
+  const seen = new Set();
+  const out = [];
+  for (const token of String(csv || '').split(',')) {
+    const engine = token.trim().toLowerCase();
+    if (TTS_ENGINES.includes(engine) && !seen.has(engine)) {
+      seen.add(engine);
+      out.push(engine);
+    }
+  }
+  return out;
+}
+
 export function getTtsUrl() {
   return dbValue('tts.url') || SUPERTONIC_URL;
 }
@@ -348,6 +394,7 @@ const EDITABLE_KEYS = new Set([
   'stt.minConfidence',
   'tts.language',
   'tts.engine',
+  'tts.order',
   'manos.enabled',
   'manos.maxTurns',
   'sala.v1',
@@ -404,6 +451,8 @@ export function publicSettings() {
     tts: {
       engine: getTtsEngine(),
       engineOptions: TTS_ENGINE_OPTIONS,
+      order: getTtsOrder().join(','),
+      orderDefault: defaultTtsOrder().join(','),
       language: getTtsLanguage(),
       url: getTtsUrl()
     },
@@ -455,6 +504,9 @@ export function applySettings(patch) {
       continue;
     }
     if (key === 'tts.engine' && value && !TTS_ENGINE_OPTIONS.includes(value)) {
+      continue;
+    }
+    if (key === 'tts.order' && value && parseTtsOrder(value).length === 0) {
       continue;
     }
     if (key === 'stt.minConfidence' && value) {

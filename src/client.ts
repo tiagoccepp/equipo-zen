@@ -145,7 +145,7 @@ export interface PublicSettings {
     language: string;
     minConfidence: number;
   };
-  tts: { engine: string; engineOptions: string[]; language: string; url: string };
+  tts: { engine: string; engineOptions: string[]; order: string; orderDefault: string; language: string; url: string };
   audio: { output: string; input: string; followDefault: boolean };
 }
 
@@ -171,6 +171,7 @@ export interface SidecarStatus {
   downs: number;
   restartsLastHour: number;
   lastSpawnAt: string | null;
+  elected?: boolean | null;
   autostart: boolean;
 }
 

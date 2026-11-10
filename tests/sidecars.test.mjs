@@ -77,13 +77,16 @@ test('shouldRestart: monitor-only y autostart off nunca spawnean', () => {
   }
 });
 
-test('SIDECARS: parakeet+piper spawneables, whisper+supertonic monitor-only (Tito 09/11)', () => {
+test('SIDECARS: los 4 spawneables con su comando (TV2: elegido=up, resto=down)', () => {
   const byName = Object.fromEntries(SIDECARS.map((s) => [s.name, s]));
   assert.ok(byName.parakeet.spawn);
   assert.ok(byName.piper.spawn);
-  // Sin respaldos locales: monitor-only (spawn null, health intacto).
-  assert.equal(byName.whisper.spawn, null);
-  assert.equal(byName.supertonic.spawn, null);
+  // Whisper/Supertonic obedecen la elección (spawn real, espejo dev:stt/dev:tts).
+  assert.match(byName.whisper.spawn.cmd, /whisper-venv\/bin\/python/);
+  assert.deepEqual(byName.whisper.spawn.args, ['server/stt/whisper_server.py']);
+  assert.equal(byName.whisper.spawn.env?.WHISPER_PRELOAD, '0');
+  assert.match(byName.supertonic.spawn.cmd, /supertonic-venv\/bin\/supertonic/);
+  assert.deepEqual(byName.supertonic.spawn.args.slice(0, 1), ['serve']);
   assert.match(byName.parakeet.health, /7790/);
   assert.match(byName.piper.health, /7791/);
   assert.match(byName.whisper.health, /7789/);

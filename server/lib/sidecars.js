@@ -23,6 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { telemetry } from './telemetry.js';
+import { getSttOrder, getTtsOrder, isSttOrderSet, isTtsOrderSet } from './settings.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -50,21 +51,31 @@ export const SIDECARS = [
     spawn: { cmd: 'python3', args: ['server/tts/piper_server.py'] }
   },
   {
-    // Tito 09/11: sin respaldos locales, solo Parakeet+Piper. Monitor-only:
-    // el watchdog vigila /health pero NO levanta el proceso (spawn null).
+    // Respaldo STT local (venv dedicado, lazy: WHISPER_PRELOAD=0). Espeja
+    // el `dev:stt` de package.json. El watchdog lo levanta SOLO si está
+    // elegido en stt.order (TV2: elegido=up, resto=down).
     name: 'whisper',
     health: process.env.WHISPER_URL
       ? `${process.env.WHISPER_URL}/health`
       : 'http://127.0.0.1:7789/health',
-    spawn: null
+    spawn: {
+      cmd: WHISPER_PYTHON,
+      args: ['server/stt/whisper_server.py'],
+      env: { WHISPER_MODEL: 'tiny', WHISPER_PRELOAD: '0', HF_HUB_OFFLINE: '1' }
+    }
   },
   {
-    // Tito 09/11: sin respaldos locales, solo Parakeet+Piper. Monitor-only.
+    // TTS local Supertonic (venv dedicado). Espeja el `dev:tts` de
+    // package.json. El watchdog lo levanta SOLO si está elegido en
+    // tts.order (TV2: elegido=up, resto=down).
     name: 'supertonic',
     health: process.env.SUPERTONIC_URL
       ? `${process.env.SUPERTONIC_URL}/v1/health`
       : 'http://127.0.0.1:7788/v1/health',
-    spawn: null
+    spawn: {
+      cmd: SUPERTONIC_BIN,
+      args: ['serve', '--host', '127.0.0.1', '--port', '7788']
+    }
   }
 ];
 
@@ -92,9 +103,11 @@ export function parseHealth(res) {
 }
 
 // Decisión pura de restart. state = { downs, restarts: [timestamps ms],
-// lastSpawnAt, consecutiveSpawns }. Devuelve { restart, reason }.
-export function shouldRestart(spec, state, now = Date.now()) {
+// lastSpawnAt, consecutiveSpawns }. opts.elected=false (TV2: motor no
+// elegido en stt.order/tts.order) → nunca spawnea. Devuelve { restart, reason }.
+export function shouldRestart(spec, state, now = Date.now(), { elected = true } = {}) {
   if (!spec || !spec.spawn) return { restart: false, reason: 'monitor-only' };
+  if (elected === false) return { restart: false, reason: 'not-elected' };
   if (process.env.SIDECAR_AUTOSTART === '0') return { restart: false, reason: 'autostart-off' };
   const downs = state?.downs || 0;
   if (downs < DOWN_STRIKES) return { restart: false, reason: 'need-2-strikes' };
@@ -105,6 +118,49 @@ export function shouldRestart(spec, state, now = Date.now()) {
   const lastSpawn = state?.lastSpawnAt || 0;
   if (now - lastSpawn < wait) return { restart: false, reason: 'backoff' };
   return { restart: true, reason: 'down' };
+}
+
+// ---------------------------------------------------------------------------
+// Motores elegibles (TV2): elegido=up, resto=down.
+// ---------------------------------------------------------------------------
+
+// Sidecars direccionables por los orders (los cloud —groq/deepgram/edge—
+// no tienen proceso local y se ignoran acá).
+export const LOCAL_SIDECAR_ENGINES = ['parakeet', 'piper', 'whisper', 'supertonic'];
+
+// ¿Este spec participa como elegido? Solo los 4 locales obedecen la
+// elección; un spec NO conocido (tests con fakes, futuros motores) no
+// participa y sigue legacy (siempre elegible). Pura.
+export function isSpecElected(name, elected) {
+  if (!LOCAL_SIDECAR_ENGINES.includes(name)) return true;
+  return elected instanceof Set ? elected.has(name) : false;
+}
+
+// Elegidos por defecto: locales del stt.order/tts.order seteado; lado sin
+// setear aporta su legacy (parakeet/piper). Sin settings: parakeet+piper
+// (comportamiento actual — Supertonic corría por concurrently, nunca lo
+// levantó el watchdog). No lanza: si settings falla, legacy.
+export function defaultElectedSidecars() {
+  try {
+    const out = new Set();
+    if (isSttOrderSet()) {
+      for (const e of getSttOrder()) {
+        if (LOCAL_SIDECAR_ENGINES.includes(e)) out.add(e);
+      }
+    } else {
+      out.add('parakeet');
+    }
+    if (isTtsOrderSet()) {
+      for (const e of getTtsOrder()) {
+        if (LOCAL_SIDECAR_ENGINES.includes(e)) out.add(e);
+      }
+    } else {
+      out.add('piper');
+    }
+    return out;
+  } catch {
+    return new Set(['parakeet', 'piper']);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,10 +356,38 @@ function defaultSpawnFn(spec) {
   return { pid: child.pid ?? null };
 }
 
+// Mata UN hijo propio del watchdog (handle que devolvió spawnFn). Nunca
+// toca PIDs ajenos: si el handle no trae pid o el proceso ya murió,
+// devuelve false sin lanzar. PROHIBIDO pkill por nombre/patrón broad.
+function defaultKillFn(handle) {
+  try {
+    const pid = handle?.pid;
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 'SIGTERM');
+    return true;
+  } catch (err) {
+    // ESRCH = ya murió: estado deseado alcanzado, cuenta como stop.
+    return err?.code === 'ESRCH';
+  }
+}
+
 // Último estado conocido por el watchdog activo (lo sirve /api/sidecars).
 let registry = null;
+// Últimos elegidos vistos por el watchdog activo (para el campo elected
+// del status; null = sin watchdog, se computa al vuelo).
+let lastElected = null;
+
+function electedSetNow() {
+  if (lastElected instanceof Set) return lastElected;
+  try {
+    return defaultElectedSidecars();
+  } catch {
+    return new Set();
+  }
+}
 
 export function getSidecarStatus() {
+  const elected = electedSetNow();
   if (!registry) {
     return SIDECARS.map((s) => ({
       name: s.name,
@@ -311,6 +395,7 @@ export function getSidecarStatus() {
       downs: 0,
       restartsLastHour: 0,
       lastSpawnAt: null,
+      elected: isSpecElected(s.name, elected),
       autostart: s.spawn !== null && process.env.SIDECAR_AUTOSTART !== '0'
     }));
   }
@@ -321,6 +406,7 @@ export function getSidecarStatus() {
     downs: state.downs,
     restartsLastHour: state.restarts.filter((t) => now - t < HOUR_MS).length,
     lastSpawnAt: state.lastSpawnAt ? new Date(state.lastSpawnAt).toISOString() : null,
+    elected: isSpecElected(spec.name, elected),
     autostart: spec.spawn !== null && process.env.SIDECAR_AUTOSTART !== '0'
   }));
 }
@@ -337,11 +423,31 @@ function emit(onTelemetry, type, payload) {
   }
 }
 
+// Baja UN hijo propio no-elegido (best-effort, nunca lanza). Solo se
+// llama con handles que trackeamos en `children` — jamás PIDs ajenos.
+function stopOwnChild(spec, handle, killFn, onTelemetry) {
+  let stopped = false;
+  try {
+    stopped = killFn(handle, spec) !== false;
+  } catch {
+    stopped = false;
+  }
+  emit(onTelemetry, stopped ? 'sidecar_stop' : 'sidecar_stop_failed', {
+    sidecar: spec.name,
+    pid: handle?.pid ?? null
+  });
+}
+
 export function startSidecarWatchdog({
   intervalMs = 20000,
   specs = SIDECARS,
   check = defaultCheck,
   spawnFn = defaultSpawnFn,
+  // TV2 selectivo: getElected devuelve los nombres elegidos (default =
+  // settings stt.order/tts.order); killFn mata UN hijo propio (default =
+  // SIGTERM al pid del handle). Inyectables para tests.
+  getElected = defaultElectedSidecars,
+  killFn = defaultKillFn,
   onTelemetry = null,
   // Keepalive anti-swap SOLO a Parakeet: TRANSCRIBE real cada 75s con el
   // fixture chico (fire-and-forget, timeout 10s). `false` lo apaga (tests
@@ -355,6 +461,9 @@ export function startSidecarWatchdog({
     state: { status: 'unknown', downs: 0, restarts: [], lastSpawnAt: 0, consecutiveSpawns: 0 }
   }));
   registry = entries;
+  // Hijos propios vivos por nombre (handles de spawnFn). SOLO estos se
+  // pueden matar; jamás un PID que el watchdog no spawneó.
+  const children = new Map();
 
   const kaOpts = keepalive === false ? null
     : { intervalMs: KEEPALIVE_INTERVAL_MS, timeoutMs: KEEPALIVE_TIMEOUT_MS, ...(keepalive === true ? {} : keepalive) };
@@ -371,6 +480,15 @@ export function startSidecarWatchdog({
     : { ...(swapWarn === true ? {} : swapWarn) };
 
   async function tick(now = Date.now()) {
+    // Elegidos de este tick. Si getElected falla: fail-open (todos
+    // elegidos = comportamiento pre-TV2, y sobre todo NUNCA matar).
+    let elected;
+    try {
+      elected = new Set(getElected());
+    } catch {
+      elected = new Set(specs.map((s) => s.name));
+    }
+    lastElected = elected;
     for (const entry of entryList()) {
       const { spec, state } = entry;
       let ok = false;
@@ -383,6 +501,12 @@ export function startSidecarWatchdog({
         state.status = 'up';
         state.downs = 0;
         state.consecutiveSpawns = 0;
+        // No-elegido pero levantado: si es hijo propio se baja (elegido=
+        // up, resto=down); si NO lo spawneamos nosotros, ni se toca.
+        if (!isSpecElected(spec.name, elected) && children.has(spec.name)) {
+          stopOwnChild(spec, children.get(spec.name), killFn, onTelemetry);
+          children.delete(spec.name);
+        }
         continue;
       }
       state.status = 'down';
@@ -390,10 +514,20 @@ export function startSidecarWatchdog({
       if (state.downs === 1) {
         emit(onTelemetry, 'sidecar_down', { sidecar: spec.name, health: spec.health });
       }
-      const decision = shouldRestart(spec, state, now);
+      // No-elegido: nunca spawnea; si queda un hijo propio (ej. se
+      // deseligió mientras arrancaba), se baja y listo.
+      if (!isSpecElected(spec.name, elected)) {
+        if (children.has(spec.name)) {
+          stopOwnChild(spec, children.get(spec.name), killFn, onTelemetry);
+          children.delete(spec.name);
+        }
+        continue;
+      }
+      const decision = shouldRestart(spec, state, now, { elected: true });
       if (!decision.restart) continue;
       try {
         const r = await spawnFn(spec);
+        if (r && Number.isInteger(r.pid)) children.set(spec.name, r);
         state.restarts.push(now);
         state.restarts = state.restarts.filter((t) => now - t < HOUR_MS);
         state.lastSpawnAt = now;
@@ -412,10 +546,12 @@ export function startSidecarWatchdog({
         });
       }
     }
-    // Keepalive anti-swap: solo Parakeet, solo cada 75s (el tick de 20s
-    // es muy seguido), fire-and-forget. Cero telemetría salvo 3 fallos
-    // seguidos: el keepalive sano tiene que ser invisible.
+    // Keepalive anti-swap: solo Parakeet elegido, solo cada 75s (el tick
+    // de 20s es muy seguido), fire-and-forget. Cero telemetría salvo 3
+    // fallos seguidos: el keepalive sano tiene que ser invisible. Si
+    // Parakeet no está elegido, no se le habla (está down a propósito).
     if (kaOpts && parakeetSpec && kaState.audio && kaState.url
+        && isSpecElected('parakeet', elected)
         && shouldKeepalive(now, kaState.lastAt, kaOpts.intervalMs)) {
       kaState.lastAt = now; // se marca antes: nunca se apila
       void postKeepalive(kaState.url, kaState.audio, {
@@ -470,7 +606,10 @@ export function startSidecarWatchdog({
     getKeepalive: () => ({ lastAt: kaState.lastAt, failures: kaState.failures }),
     stop() {
       clearInterval(timer);
-      if (registry === entries) registry = null;
+      if (registry === entries) {
+        registry = null;
+        lastElected = null;
+      }
     }
   };
 }

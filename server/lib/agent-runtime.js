@@ -1,6 +1,6 @@
 import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsEngine, getTtsLanguage, ttsLocalOrder } from './settings.js';
+import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsLanguage, getTtsOrder } from './settings.js';
 import { completeChat, streamChat, withTimeout } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
@@ -335,8 +335,12 @@ export class LiveAgentRuntime {
         return;
       }
       if (parts.length === 0) {
-        // Sin TTS propio (Deepgram ya se intentó en generateAudioParts):
-        // Edge TTS (nube sin clave) → speechSynthesis del cliente.
+        // Sin TTS propio: Edge TTS (nube sin clave) solo si el tts.order
+        // lo incluye (default sí); si no, directo a speechSynthesis del
+        // cliente. Elegido manda, resto out.
+        if (!shouldUseEdgeFallback()) {
+          return;
+        }
         try {
           const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
           if (signal?.aborted) {
@@ -682,47 +686,32 @@ export class LiveAgentRuntime {
     return lines.join('\n');
   }
 
-  // TTS de una oración: Deepgram Aura primero si hay key (la elegida:
-  // javier-es M / selena-es F), luego locales en el orden de Ajustes →
-  // tts.engine (auto = Piper → Supertonic). Devuelve las partes de audio
-  // (no emite chunks; el gate decide cuándo salen). Si nada responde, []
-  // y speakSentence cae a Edge → voz del navegador.
+  // TTS de una oración, en el orden del tts.order de Ajustes (default =
+  // legacy: Deepgram-con-key → locales según tts.engine → Edge). SOLO los
+  // motores listados se intentan (elegido manda, resto out); 'edge' se
+  // salta acá y resuelve en speakSentence (path MP3, no PCM+gate).
+  // Devuelve las partes de audio (no emite chunks; el gate decide cuándo
+  // salen). Si nada responde, [] y speakSentence cae a Edge (si el order
+  // lo incluye) → voz del navegador.
   async generateAudioParts(text, emit, signal) {
     if (!text?.trim() || signal?.aborted) {
       return [];
     }
-
-    if (getDeepgramKey()) {
-      try {
-        const dgParts = await synthesizeDeepgram(text, this.agent?.voice || 'M1');
-        if (dgParts.length > 0) {
-          return dgParts;
-        }
-      } catch {
-        // Aura caído: cae a locales.
-      }
-    }
-
-    // Locales en el orden del setting (auto/piper = Piper → Supertonic;
-    // supertonic = Supertonic → Piper). Piper primero en AMBOS idiomas por
-    // default: tiene voces inglesas (jenny F / lessac M) y cada oración en
-    // inglés evita los ~2.4s de la nube Deepgram. El segundo motor es
-    // respaldo del primero: el orden elige preferencia, no exclusividad.
     const voice = this.agent?.voice || 'M1';
-    const localSynths = {
-      piper: () => synthesizePiper(text, voice, { signal }),
-      supertonic: () => synthesize(text, voice, { signal })
-    };
-    let lastError = null;
-    for (const engine of ttsLocalOrder(getTtsEngine())) {
-      try {
-        const parts = await localSynths[engine]();
-        if (parts.length > 0) {
-          return parts;
-        }
-      } catch (error) {
-        lastError = error;
-      }
+    const { parts, lastError } = await synthesizeTtsOrdered({
+      text,
+      voice,
+      order: getTtsOrder(),
+      deepgramKey: getDeepgramKey(),
+      runners: {
+        deepgram: () => synthesizeDeepgram(text, voice),
+        piper: () => synthesizePiper(text, voice, { signal }),
+        supertonic: () => synthesize(text, voice, { signal })
+      },
+      signal
+    });
+    if (parts.length > 0) {
+      return parts;
     }
     if (lastError && !signal?.aborted) {
       emit({
@@ -738,6 +727,47 @@ export class LiveAgentRuntime {
   reset() {}
 
   close() {}
+}
+
+// ¿El fallback Edge (MP3) participa en esta oración? Solo si 'edge' está
+// en el tts.order (el default lo incluye → comportamiento actual).
+export function shouldUseEdgeFallback(order = getTtsOrder()) {
+  return (order || []).includes('edge');
+}
+
+// Cascada TTS ordenada (runners inyectables para tests): recorre el order
+// en secuencia; cloud sin key se salta (patrón TC); 'edge' se salta acá
+// (resuelve en speakSentence, path MP3); vacío o error pasa al siguiente.
+// Devuelve { parts, lastError } — lastError solo cuenta errores LOCALES
+// (Deepgram fallado es silencioso, como en el legacy).
+export async function synthesizeTtsOrdered({ text, voice, order, deepgramKey = '', runners = {}, signal = null }) {
+  void text;
+  void voice;
+  void signal;
+  let lastError = null;
+  for (const engine of order || []) {
+    if (engine === 'edge') {
+      continue; // Path MP3 en speakSentence, no PCM+gate.
+    }
+    if (engine === 'deepgram' && !deepgramKey) {
+      continue; // Cloud sin key: ni se intenta.
+    }
+    const run = runners[engine];
+    if (typeof run !== 'function') {
+      continue;
+    }
+    try {
+      const parts = await run();
+      if (parts && parts.length > 0) {
+        return { parts, lastError: null };
+      }
+    } catch (error) {
+      if (engine !== 'deepgram') {
+        lastError = error;
+      }
+    }
+  }
+  return { parts: [], lastError };
 }
 
 export function emptyAgentResponse() {

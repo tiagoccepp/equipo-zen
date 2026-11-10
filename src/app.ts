@@ -1180,6 +1180,10 @@ async function renderSettings(): Promise<void> {
   orderInput.spellcheck = false;
   orderInput.addEventListener('change', () => save({ 'stt.order': orderInput.value.trim() }));
   box.appendChild(settingRow('🔀 STT order', orderInput));
+  const sttNote = document.createElement('div');
+  sttNote.className = 'sidecar-note';
+  sttNote.textContent = 'Motores: parakeet, whisper, groq, deepgram — solo los listados se intentan, en orden.';
+  box.appendChild(sttNote);
 
   const wSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
   wSel.setAttribute('aria-label', 'Local Whisper model');
@@ -1241,6 +1245,22 @@ async function renderSettings(): Promise<void> {
   engSel.setAttribute('aria-label', 'TTS engine');
   engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
   box.appendChild(settingRow('🔊 TTS engine', engSel));
+
+  // Orden de la cascada TTS (tts.order): CSV de motores, aplica en caliente.
+  // Vacío = default legacy (Deepgram-con-key → locales → Edge). Solo los
+  // listados se intentan, en orden: el elegido manda, el resto out.
+  const ttsOrderInput = document.createElement('input');
+  ttsOrderInput.type = 'text';
+  ttsOrderInput.value = s.tts.order || '';
+  ttsOrderInput.placeholder = s.tts.orderDefault || 'deepgram,piper,supertonic,edge';
+  ttsOrderInput.setAttribute('aria-label', 'TTS engine order');
+  ttsOrderInput.spellcheck = false;
+  ttsOrderInput.addEventListener('change', () => save({ 'tts.order': ttsOrderInput.value.trim() }));
+  box.appendChild(settingRow('🔀 TTS order', ttsOrderInput));
+  const ttsNote = document.createElement('div');
+  ttsNote.className = 'sidecar-note';
+  ttsNote.textContent = 'Motores: piper, supertonic, deepgram, edge — solo los listados se intentan, en orden.';
+  box.appendChild(ttsNote);
 
   // ── Audio: routing PipeWire (salida/entrada) ──────────────────────
   // followDefault on = los streams siguen al sistema (selects off).
