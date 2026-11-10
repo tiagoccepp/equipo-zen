@@ -13,9 +13,9 @@ function carpeta(t) {
   return d;
 }
 
-// ── La terminal del equipo ───────────────────────────────────────────────
+// ── The team terminal ───────────────────────────────────────────────
 
-test('los comandos normales de trabajo se permiten sin trámite', () => {
+test('normal work commands are allowed without fuss', () => {
   for (const cmd of [
     'npx create-expo-app@latest . --template blank',
     'npx tsc --noEmit',
@@ -31,7 +31,7 @@ test('los comandos normales de trabajo se permiten sin trámite', () => {
   }
 });
 
-test('los comandos que borran o mueven piden explicación, pero no se niegan', () => {
+test('commands that delete or move ask for an explanation, but are not denied', () => {
   for (const cmd of ['rm -rf node_modules', 'mv viejo.js nuevo.js', 'kill 1234']) {
     const r = clasificarComando(cmd);
     assert.equal(r.permitido, true, `"${cmd}" se permite`);
@@ -39,7 +39,7 @@ test('los comandos que borran o mueven piden explicación, pero no se niegan', (
   }
 });
 
-test('lo que rompería la máquina del usuario no se corre, y se dice por qué', () => {
+test('what would break the user machine is not run, and the reason is given', () => {
   const casos = [
     'sudo rm -rf /',
     'rm -rf ~',
@@ -59,20 +59,20 @@ test('lo que rompería la máquina del usuario no se corre, y se dice por qué',
   }
 });
 
-test('un comando vacío o absurdamente largo se rechaza', () => {
+test('an empty or absurdly long command is rejected', () => {
   assert.equal(clasificarComando('').permitido, false);
   assert.equal(clasificarComando('   ').permitido, false);
   assert.equal(clasificarComando('echo ' + 'x'.repeat(3000)).permitido, false);
 });
 
-test('el comando corre DENTRO de la carpeta del proyecto y nada más', async (t) => {
+test('the command runs INSIDE the project folder and nowhere else', async (t) => {
   const dir = carpeta(t);
   const r = await ejecutar('pwd', dir);
   assert.equal(r.ok, true);
   assert.ok(r.salida.includes(path.basename(dir)), `corrió en ${r.salida}, no en el proyecto`);
 });
 
-test('un comando que falla devuelve su error, no una excepción', async (t) => {
+test('a failing command returns its error, not an exception', async (t) => {
   const dir = carpeta(t);
   const r = await ejecutar('exit 3', dir);
   assert.equal(r.ok, false);
@@ -80,14 +80,14 @@ test('un comando que falla devuelve su error, no una excepción', async (t) => {
   assert.match(renderResultado('exit 3', r), /falló/);
 });
 
-test('los archivos que crea un comando quedan de verdad', async (t) => {
+test('files created by a command actually persist', async (t) => {
   const dir = carpeta(t);
   const r = await ejecutar('printf "hola" > saludo.txt', dir);
   assert.equal(r.ok, true);
   assert.ok(existsSync(path.join(dir, 'saludo.txt')), 'el archivo tiene que existir');
 });
 
-test('un comando colgado se corta y no bloquea la corrida', async (t) => {
+test('a hung command is cut off and does not block the run', async (t) => {
   const dir = carpeta(t);
   const r = await ejecutar('sleep 30', dir, { timeoutMs: 900 });
   assert.equal(r.ok, false);
@@ -95,32 +95,32 @@ test('un comando colgado se corta y no bloquea la corrida', async (t) => {
   assert.match(r.salida, /se cortó/);
 });
 
-test('una carpeta que no existe se avisa, no explota', async () => {
+test('a missing folder is reported, not fatal', async () => {
   const r = await ejecutar('pwd', '/no/existe/esta/carpeta');
   assert.equal(r.ok, false);
   assert.match(r.salida, /no existe/);
 });
 
-test('cada nicho recibe las herramientas de su oficio', () => {
+test('each niche gets the tools of its trade', () => {
   assert.match(renderHerramientas('movil-rn'), /create-expo-app/);
   assert.match(renderHerramientas('android'), /gradle/);
   assert.match(renderHerramientas('web'), /prettier|node/);
-  // Y todos aprenden a pedir permiso para lo riesgoso.
+  // And everyone learns to ask permission for risky ones.
   for (const s of ['movil-rn', 'android', 'web', 'automatizacion']) {
     assert.match(renderHerramientas(s), /porque/, `${s} tiene que explicar el campo "porque"`);
   }
 });
 
-// ── El entorno de diseño ─────────────────────────────────────────────────
+// ── The design environment ─────────────────────────────────────────────────
 
-test('quien diseña se reconoce por su oficio, no por su nombre', () => {
+test('designers are recognized by craft, not by name', () => {
   assert.equal(esAgenteDeDiseno({ title: 'Directora de arte digital', domains: [] }), true);
   assert.equal(esAgenteDeDiseno({ title: 'Diseñadora Material', domains: [] }), true);
   assert.equal(esAgenteDeDiseno({ title: 'QA móvil', domains: ['qa', 'testing'] }), false);
   assert.equal(esAgenteDeDiseno({ title: 'CEO', domains: ['estrategia'] }), false);
 });
 
-test('los tokens del diseño se traducen al lenguaje de cada nicho', () => {
+test('design tokens translate into each niche language', () => {
   const vars = {
     'color/fondo': { type: 'color', value: '#0F1226' },
     'espacio/md': { type: 'number', value: 16 }
@@ -142,13 +142,13 @@ test('los tokens del diseño se traducen al lenguaje de cada nicho', () => {
   assert.match(web.contenido, /--espacio-md: 16px/);
 });
 
-test('sin diseño no hay tokens que traducir', () => {
+test('without design there are no tokens to translate', () => {
   assert.equal(tokensComoCodigo(null, 'web'), null);
 });
 
-test('el que diseña recibe la herramienta; el que programa, el diseño hecho', (t) => {
-  // Sin binarios OpenPencil instalados renderDiseno degrada a '' por diseño
-  // (fail preexistente en main, 09/11): el test necesita el entorno real.
+test('designers get the tool; developers get the finished design', (t) => {
+  // Without OpenPencil binaries installed renderDiseno degrades to '' by design
+  // (preexisting fail on main, 09/11): the test needs the real environment.
   if (!openpencilDisponible()) {
     t.skip('sin binarios OpenPencil (op): scripts/instalar-openpencil.sh');
     return;
@@ -162,6 +162,6 @@ test('el que diseña recibe la herramienta; el que programa, el diseño hecho', 
   assert.match(paraDev, /IMPLEMENTALO, NO LO REINVENTES/);
   assert.match(paraDev, /--color-x/, 'el dev recibe los valores exactos');
 
-  // Un dev sin diseño hecho no recibe ruido.
+  // A dev without finished design gets no noise.
   assert.equal(renderDiseno({ esDisenador: false, hayDiseno: false, tokens: null, stack: 'web' }), '');
 });

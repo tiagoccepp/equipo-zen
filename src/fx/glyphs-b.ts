@@ -1,14 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Glifos B: 50 figuras-nombre para el protocolo de gestos (track T2b).
+// Glyphs B: 50 name-shapes for the gesture protocol (track T2b).
 //
-// Cada glifo es { name, tags, points }: points(count, seed) devuelve un
-// Float32Array plano [x,y,z …] en el cubo [-1,1] (mismo contrato que
-// fx/morph.ts), determinista por seed. Lógica pura: sin DOM, corre en node
-// y en la webview.
+// Each glyph is { name, tags, points }: points(count, seed) returns a flat
+// Float32Array [x,y,z …] in the [-1,1] cube (same contract as fx/morph.ts),
+// deterministic per seed. Pure logic: no DOM, runs in node and the webview.
 //
-// El tipo Glyph vive en glyphs-a.ts (T2a) y se importa, no se redefine.
-// Los renderers usan el índice combinado (glyphs-index.ts), no este archivo.
-// Nombres en español_snake, ASCII (seguros para el protocolo [[gesto:X]]).
+// The Glyph type lives in glyphs-a.ts (T2a) and is imported, not redefined.
+// Renderers use the combined index (glyphs-index.ts), not this file.
+// spanish_snake names, ASCII (safe for the [[gesto:X]] protocol).
 // ═══════════════════════════════════════════════════════════════════════
 
 import type { Glyph } from './glyphs-a.ts';
@@ -16,7 +15,7 @@ import { mulberry32 } from './morph.ts';
 
 type Rng = () => number;
 type V3 = [number, number, number];
-// Gen: un punto aleatorio (con rng determinista) de una primitiva.
+// Gen: one random point (with deterministic rng) from a primitive.
 type Gen = (rng: Rng) => V3;
 type Part = { w: number; gen: Gen };
 
@@ -25,7 +24,7 @@ const clamp1 = (v: number): number => Math.min(1, Math.max(-1, v));
 const zJit = (rng: Rng, amp = 0.03): number => (rng() - 0.5) * 2 * amp;
 const P = (x: number, y: number, z: number): V3 => [clamp1(x), clamp1(y), clamp1(z)];
 
-// ── Primitivas 2D (z = temblor leve) ───────────────────────────────────
+// ── 2D primitives (z = slight jitter) ─────────────────────────────────
 
 const circ = (cx: number, cy: number, r: number, spread = 0): Gen => (rng) => {
   const t = rng() * TAU;
@@ -57,7 +56,7 @@ const seg = (x1: number, y1: number, x2: number, y2: number, jit = 0.012): Gen =
   return P(x1 + (x2 - x1) * t + jx, y1 + (y2 - y1) * t + jy, zJit(rng));
 };
 
-// Polilínea con reparto proporcional al largo de cada tramo.
+// Polyline with point distribution proportional to each segment's length.
 const path = (pts: readonly (readonly [number, number])[], jit = 0.012): Gen => {
   const segs: { x1: number; y1: number; x2: number; y2: number; len: number }[] = [];
   let total = 0;
@@ -167,7 +166,7 @@ const sineRow = (
   );
 };
 
-// Lemniscata de Bernoulli (infinito). yScale la levanta: cruda es chata.
+// Bernoulli lemniscate (infinity). yScale lifts it: raw it's flat.
 const lemni = (cx: number, cy: number, a: number, yScale = 1.6): Gen => (rng) => {
   const t = rng() * TAU;
   const d = 1 + Math.sin(t) * Math.sin(t);
@@ -192,7 +191,7 @@ const gearO = (cx: number, cy: number, r: number, teeth: number, depth: number):
   return P(cx + Math.cos(t) * rr, cy + Math.sin(t) * rr, zJit(rng));
 };
 
-// Mezcla ponderada de generadores dentro de una misma parte.
+// Weighted mix of generators within a single part.
 const mix = (opts: readonly (readonly [number, Gen])[]): Gen => {
   const total = opts.reduce((s, [w]) => s + w, 0);
   return (rng) => {
@@ -205,10 +204,10 @@ const mix = (opts: readonly (readonly [number, Gen])[]): Gen => {
   };
 };
 
-// ── Composición ────────────────────────────────────────────────────────
-// Reparte `count` puntos entre las partes según peso (reparto exacto, sin
-// redondeo perdido) y siembra cada parte con (seed, índice) para que el
-// resultado sea determinista.
+// ── Composition ─────────────────────────────────────────────────────
+// Splits `count` points across parts by weight (exact split, no lost
+// rounding) and seeds each part with (seed, index) so the result is
+// deterministic.
 
 function compose(parts: Part[]): (count: number, seed: number) => Float32Array {
   const total = parts.reduce((s, p) => s + p.w, 0);
@@ -240,12 +239,12 @@ const G = (name: string, tags: string[], parts: Part[]): Glyph => ({
   points: compose(parts)
 });
 
-// ── 50 glifos ──────────────────────────────────────────────────────────
-// Orden: naturaleza (7), comida (6), herramientas (6), transporte (6),
-// deportes (5), clima (6), música (4), tech (5), manos (3), abstractos (2).
+// ── 50 glyphs ───────────────────────────────────────────────────────
+// Order: nature (7), food (6), tools (6), transport (6), sports (5),
+// weather (6), music (4), tech (5), hands (3), abstract (2).
 
 export const GLYPHS_B: Glyph[] = [
-  // Naturaleza —
+  // Nature —
   G('arbol', ['naturaleza', 'planta', 'verde'], [
     { w: 1, gen: seg(0, -0.8, 0, -0.2, 0.03) },
     {
@@ -305,7 +304,7 @@ export const GLYPHS_B: Glyph[] = [
     { w: 1, gen: mix([[1, disc(-0.18, 0.45, 0.05)], [1, disc(0.12, 0.55, 0.06)], [1, disc(0.25, 0.4, 0.04)]]) }
   ]),
 
-  // Comida —
+  // Food —
   G('manzana', ['comida', 'fruta', 'salud'], [
     { w: 4, gen: disc(0, -0.05, 0.42) },
     { w: 1, gen: seg(0, 0.37, 0.06, 0.62, 0.015) },
@@ -355,7 +354,7 @@ export const GLYPHS_B: Glyph[] = [
     }
   ]),
 
-  // Herramientas —
+  // Tools —
   G('martillo', ['herramienta', 'construccion', 'golpe'], [
     { w: 2, gen: seg(0, -0.7, 0, 0.25, 0.03) },
     { w: 3, gen: rectF(0, 0.48, 0.7, 0.34) }
@@ -385,7 +384,7 @@ export const GLYPHS_B: Glyph[] = [
     { w: 1, gen: spokes(0, 0, 0.2, 0.42, 4) }
   ]),
 
-  // Transporte —
+  // Transport —
   G('auto', ['transporte', 'vehiculo', 'calle'], [
     { w: 2, gen: rectO(0, -0.12, 1.3, 0.44) },
     { w: 2, gen: path([[-0.35, 0.1], [-0.2, 0.46], [0.25, 0.46], [0.4, 0.1]]) },
@@ -434,7 +433,7 @@ export const GLYPHS_B: Glyph[] = [
     }
   ]),
 
-  // Deportes —
+  // Sports —
   G('pelota', ['deporte', 'futbol', 'juego'], [
     { w: 3, gen: circ(0, 0, 0.5) },
     { w: 1, gen: circ(0, 0, 0.13) },
@@ -492,7 +491,7 @@ export const GLYPHS_B: Glyph[] = [
     }
   ]),
 
-  // Clima —
+  // Weather —
   G('sol', ['clima', 'dia', 'calor'], [
     { w: 3, gen: disc(0, 0, 0.3) },
     { w: 3, gen: spokes(0, 0, 0.4, 0.66, 8) }
@@ -539,7 +538,7 @@ export const GLYPHS_B: Glyph[] = [
     }
   ]),
 
-  // Música —
+  // Music —
   G('nota', ['musica', 'cancion', 'sonido'], [
     { w: 2, gen: ellF(0.12, -0.38, 0.18, 0.13) },
     { w: 2, gen: seg(0.29, -0.33, 0.29, 0.5, 0.015) },
@@ -686,7 +685,7 @@ export const GLYPHS_B: Glyph[] = [
     }
   ]),
 
-  // Manos —
+  // Hands —
   G('dedos_cruzados', ['mano', 'suerte', 'deseo'], [
     { w: 3, gen: disc(0, -0.32, 0.28) },
     { w: 2, gen: seg(-0.05, -0.08, -0.05, 0.5, 0.025) },
@@ -713,7 +712,7 @@ export const GLYPHS_B: Glyph[] = [
     { w: 2, gen: seg(0.15, -0.08, 0.26, 0.46, 0.025) }
   ]),
 
-  // Abstractos —
+  // Abstract —
   G('mandala', ['simbolo', 'calma', 'arte'], [
     { w: 2, gen: circ(0, 0, 0.52) },
     { w: 2, gen: circ(0, 0, 0.32) },

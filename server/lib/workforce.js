@@ -217,7 +217,7 @@ export function renderWorkSection(store, companyId, goalId = null) {
   if (goals.length === 0) {
     return '';
   }
-  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
   const ESTADOS = en ? {
     pending: 'queued',
     in_progress: 'working now',
@@ -743,7 +743,7 @@ export class Workforce {
       .filter((a) => a.id !== agent.id)
       .map((a) => `${a.name} (${a.title})`).join(', ');
     // El summary del finish lo lee el usuario en el panel: en inglés si la voz es inglesa.
-    const enWork = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enWork = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
 
     const system = [
       `Sos ${agent.name}, ${agent.title} de ${company?.name || 'la empresa'}. AHORA NO estás en una reunión: estás TRABAJANDO, produciendo un entregable real.`,
@@ -1495,7 +1495,7 @@ export class Workforce {
   async consultarCompanero(companyId, { quienPregunta, aQuien, pregunta, goal, slug, task }) {
     const texto = String(pregunta || '').trim();
     // La respuesta queda como comentario visible: en inglés si la voz es inglesa.
-    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enNote = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
     if (!texto) {
       return { ok: false, nota: 'missing question', observacion: 'Te faltó la pregunta. Usá {"action":"consultar","a":"Nombre","pregunta":"..."}' };
     }
@@ -1668,7 +1668,7 @@ export class Workforce {
 
   async executeReview(companyId, reviewer, task, runId) {
     // El comment queda visible en la tarea: en inglés si la voz es inglesa.
-    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enNote = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
     const parent = task.parent_task_id ? this.store.getTask(task.parent_task_id) : null;
     const goal = task.goal_id ? this.store.getGoal(task.goal_id) : null;
     const slug = goal?.slug || 'general';
@@ -1882,7 +1882,7 @@ export class Workforce {
   async executeRefinement(companyId, contratista, task, runId) {
     const company = this.store.getCompany(companyId);
     // El resumen queda visible en la corrida: en inglés si la voz es inglesa.
-    const enNote = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enNote = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
     const objetivo = this.pickRefinementTarget(companyId, task);
     if (!objetivo) {
       const razon = 'Could not tell who to refine: name the person in the request.';

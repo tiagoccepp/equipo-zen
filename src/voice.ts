@@ -701,7 +701,7 @@ export class BrowserSpeech {
     }
     try {
       this.recognition = new Ctor();
-      this.recognition.lang = lang || 'es-ES';
+      this.recognition.lang = lang || 'en-US';
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
       this.recognition.maxAlternatives = 1;

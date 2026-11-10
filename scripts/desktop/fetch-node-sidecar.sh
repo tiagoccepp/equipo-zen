@@ -1,7 +1,7 @@
 #!/bin/sh
-# Baja el binario Node 24 LTS para un triple de Tauri y lo deja en
-# src-tauri/binaries/node-<triple>[.exe] (lo que pide `externalBin`).
-# Uso: sh scripts/desktop/fetch-node-sidecar.sh x86_64-unknown-linux-gnu
+# Downloads the Node 24 LTS binary for a Tauri triple and places it in
+# src-tauri/binaries/node-<triple>[.exe] (what `externalBin` asks for).
+# Usage: sh scripts/desktop/fetch-node-sidecar.sh x86_64-unknown-linux-gnu
 set -eu
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 export no_proxy='*'

@@ -1,14 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Orb3D: MISMA API que OrbMorph pero con three.js Points (opt-in).
+// Orb3D: SAME API as OrbMorph but with three.js Points (opt-in).
 //
-// El import de three es DINÁMICO (solo se carga si se usa), vía la factory
-// async `createOrb3D`. Si no hay WebGL2, la factory tira un Error claro y
-// el main usa OrbMorph (Canvas 2D garantizado).
+// The three import is DYNAMIC (loaded only if used), via the async
+// `createOrb3D` factory. Without WebGL2 the factory throws a clear Error and
+// main uses OrbMorph (guaranteed Canvas 2D).
 //
-// El morph es en CPU por frame (≤8 esferas × 720 pts: trivial) y se sube
-// como BufferAttribute; nada de shaders custom que depurar en la webview.
-// V3 (09/11, modelo-manda): los ESTADOS ya no piden figuras (todo esfera);
-// solo modulan vibración. setGlyph intacto — única vía de figuras.
+// Morphing runs on CPU per frame (≤8 spheres × 720 pts: trivial) and is
+// uploaded as a BufferAttribute; no custom shaders to debug in the webview.
+// V3 (09/11, model-driven): STATES no longer request shapes (all sphere);
+// they only modulate vibration. setGlyph untouched — the only path to shapes.
 // ═══════════════════════════════════════════════════════════════════════
 
 import {
@@ -46,9 +46,9 @@ export type WebGLProbe = {
   error: string;
 };
 
-// Sonda SIN three (barata): el main la llama para decidir Orb3D vs OrbMorph.
-// Usa un canvas temporal: jamás toca el canvas real (pedir dos contextos
-// distintos sobre el mismo canvas es un error).
+// Probe WITHOUT three (cheap): main calls it to pick Orb3D vs OrbMorph.
+// Uses a temp canvas: never touches the real canvas (requesting two different
+// contexts on the same canvas is an error).
 export function probeWebGL2(): WebGLProbe {
   try {
     if (typeof document === 'undefined') {
@@ -63,7 +63,7 @@ export function probeWebGL2(): WebGLProbe {
     const renderer = ext
       ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '')
       : String(gl.getParameter(gl.RENDERER) || '');
-    // Contexto temporal: se pierde solo al soltar la referencia.
+    // Temp context: lost on its own once the reference is released.
     gl.getExtension('WEBGL_lose_context')?.loseContext();
     return { ok: true, renderer, error: '' };
   } catch (error) {
@@ -97,7 +97,7 @@ type Points3D = {
   color: string;
   hue: number;
   shape: MorphShape;
-  glyph: string | null; // T2a: glifo activo (null = figura clásica)
+  glyph: string | null; // T2a: active glyph (null = classic shape)
   count: number;
   current: Float32Array;
   from: Float32Array;
@@ -110,13 +110,13 @@ type Points3D = {
   energy: number;
   target: number;
   focus: number;
-  vibe: number; // V3: vibración por estado (0..1), nunca cambia figura
+  vibe: number; // V3: per-state vibration (0..1), never changes shape
   points: THREE.Points | null;
   geometry: THREE.BufferGeometry | null;
   material: THREE.PointsMaterial | null;
 };
 
-// Target de morph glyph-aware (T2a, espejo de orb-morph.ts).
+// Glyph-aware morph target (T2a, mirror of orb-morph.ts).
 function orbTargetPoints(shape: MorphShape, glyph: string | null, count: number, seed: number, phase: number): Float32Array {
   if (glyph) {
     const found = lookupGlyph(glyph);
@@ -149,7 +149,7 @@ export class Orb3D {
   private fpsValue = 0;
   private disposed = false;
 
-  // No construir directo: usar createOrb3D (detecta WebGL2 + import dinámico).
+  // Don't construct directly: use createOrb3D (detects WebGL2 + dynamic import).
   constructor(
     canvas: HTMLCanvasElement,
     options: Orb3DOptions,
@@ -161,7 +161,7 @@ export class Orb3D {
     this.morphMs = Math.max(120, options.morphMs ?? 900);
     this.renderer = renderer;
     this.scene = new three.Scene();
-    // Cámara ortho con Y hacia abajo = píxeles CSS directos, igual que 2D.
+    // Ortho camera with Y pointing down = direct CSS pixels, same as 2D.
     this.camera = new three.OrthographicCamera(0, 1, -1, 0, -10, 10);
     this.camera.position.z = 5;
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
@@ -318,7 +318,7 @@ export class Orb3D {
       if (agentId && orb.id !== agentId) continue;
       if (orb.shape === shape && orb.morphT0 < 0 && orb.glyph === null) continue;
       orb.shape = shape;
-      orb.glyph = null; // T2a: setShape vuelve a figura clásica (limpia glifo)
+      orb.glyph = null; // T2a: setShape returns to classic shape (clears glyph)
       if (orb.count === 0) continue;
       orb.from = orb.current.slice();
       orb.to = generateShape(shape, orb.count, { seed: orb.phaseRot, phase: orb.wavePhase });
@@ -333,8 +333,8 @@ export class Orb3D {
     this.kick();
   }
 
-  // V3 modelo-manda: estado → vibración, NUNCA figura (espejo de OrbMorph).
-  // setShape limpia el glifo; setAgentState NO (el glifo del modelo intacto).
+  // V3 model-driven: state → vibration, NEVER shape (OrbMorph mirror).
+  // setShape clears the glyph; setAgentState does NOT (model's glyph stays intact).
   setAgentState(agentId: string, state: AgentVisualState) {
     const vibe = STATE_VIBRATION[state] ?? 0;
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
@@ -365,9 +365,9 @@ export class Orb3D {
     return this.orbs.find((o) => o.id === agentId)?.shape ?? null;
   }
 
-  // ── Glifos (T2a: motor de gestos, espejo de OrbMorph) ─────────────────
-  // Mismo contrato: morph al glifo, fallback a esfera si el nombre no
-  // resuelve, nunca tira. V3: setAgentState NO limpia el glifo.
+  // ── Glyphs (T2a: gesture engine, OrbMorph mirror) ─────────────────
+  // Same contract: morph to the glyph, sphere fallback if the name doesn't
+  // resolve, never throws. V3: setAgentState does NOT clear the glyph.
   setGlyph(agentId: string, glyphName: string | null) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     const reduced = this.reduced;
@@ -411,7 +411,7 @@ export class Orb3D {
     this.renderer.dispose();
   }
 
-  // ── Internos ─────────────────────────────────────────────────────────
+  // ── Internals ───────────────────────────────────────────────────────
 
   private buildPoints(orb: Points3D) {
     this.destroyOrbPoints(orb);
@@ -500,7 +500,7 @@ export class Orb3D {
           animating = true;
         }
       }
-      // T2a: la onda respira salvo que haya un glifo activo (el glifo manda).
+      // T2a: the wave breathes unless a glyph is active (the glyph rules).
       if (orb.shape === 'wave' && !this.reduced && orb.glyph === null) {
         orb.wavePhase += dt * WAVE_SPEED * (0.5 + orb.energy);
         if (orb.morphT0 < 0) {
@@ -524,14 +524,14 @@ export class Orb3D {
     }
   };
 
-  // Proyección CPU idéntica a la 2D → mismos píxeles (salvo AA de cada lado).
+  // CPU projection identical to 2D → same pixels (except each side's AA).
   private writeOrb(orb: Points3D) {
     const slot = orb.slot;
     const geometry = orb.geometry;
     if (!slot || !geometry) return;
     const reduced = this.reduced;
     const energy = orb.energy;
-    const vibe = orb.vibe ?? 0; // V3: vibración por estado
+    const vibe = orb.vibe ?? 0; // V3: per-state vibration
     const drive = Math.max(energy, vibe * 0.8);
     const radius = slot.r * BASE_RADIUS_RATIO;
     let zoom = reduced ? 1 : 1 + ZOOM_AMPLITUDE * drive;
@@ -580,7 +580,7 @@ export class Orb3D {
       const scale = radius * (1 + w) * zoom;
       const depth = Math.min(1, Math.max(0, (z / 1.4 + 1) * 0.5));
       pos.setXYZ(i, cx + jx + x * scale, -((cy + jy) + y * scale), depth * 2 - 1);
-      // Buckets de profundidad 2D ≈ sombreado por vértice (4 escalones).
+      // 2D depth buckets ≈ vertex shading (4 steps).
       const shade = [0.34, 0.52, 0.74, 1][Math.min(3, Math.floor(depth * 4))];
       col.setXYZ(i, base.r * shade, base.g * shade, base.b * shade);
     }
@@ -592,8 +592,8 @@ export class Orb3D {
   }
 }
 
-// Factory: detecta WebGL2, importa three dinámico, construye. Si algo falla,
-// el Error le dice al main exactamente por qué (y que use OrbMorph).
+// Factory: detects WebGL2, dynamically imports three, builds. If anything fails,
+// the Error tells main exactly why (and to use OrbMorph).
 export async function createOrb3D(
   canvas: HTMLCanvasElement,
   options: Orb3DOptions

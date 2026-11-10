@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { CancellableTurnQueue, SpeakerGate } from '../server/lib/turn-pipeline.js';
 
-test('interrupt aborta el turno en curso y descarta los pendientes', async () => {
+test('interrupt aborts the current turn and discards pending ones', async () => {
   const cancelled = [];
   const queue = new CancellableTurnQueue({ timeoutMs: 5000, onCancelled: (id, reason) => cancelled.push({ id, reason }) });
   const done = [];
@@ -25,7 +25,7 @@ test('interrupt aborta el turno en curso y descarta los pendientes', async () =>
   assert.deepEqual(done, ['t3'], 'la cola sigue viva después del interrupt');
 });
 
-test('un turno colgado hace timeout y el siguiente corre', async () => {
+test('a hung turn times out and the next one runs', async () => {
   const errors = [];
   const queue = new CancellableTurnQueue({ timeoutMs: 50 });
   const done = [];
@@ -36,7 +36,7 @@ test('un turno colgado hace timeout y el siguiente corre', async () => {
   assert.deepEqual(done, ['t2']);
 });
 
-test('SpeakerGate: un solo dueño, orden FIFO y flush por barge-in', async () => {
+test('SpeakerGate: single owner, FIFO order, and flush on barge-in', async () => {
   const emitted = [];
   const gate = new SpeakerGate({ emit: (e) => emitted.push(e), ackGraceMs: 50 });
 
@@ -62,7 +62,7 @@ test('SpeakerGate: un solo dueño, orden FIFO y flush por barge-in', async () =>
   assert.equal(ends.at(-1).reason, 'interrupted');
 });
 
-test('SpeakerGate: chunks de un token no-dueño se descartan', async () => {
+test('SpeakerGate: chunks from a non-owner token are discarded', async () => {
   const emitted = [];
   const gate = new SpeakerGate({ emit: (e) => emitted.push(e) });
   const token = await gate.acquire('t1', 'julio');

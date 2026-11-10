@@ -1,7 +1,7 @@
-// Smoke Manos v1: LIVE contra código real (única red externa permitida:
-// fetch a https://example.com). node scripts/manos-smoke.mjs
+// Manos v1 smoke: LIVE against real code (only external network allowed:
+// fetch to https://example.com). node scripts/manos-smoke.mjs
 
-// Sin proxy: el gateway lo envenena con 403 y example.com tiene que salir directo.
+// No proxy: the gateway poisons it with 403 and example.com must go direct.
 for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']) {
   delete process.env[k];
 }
@@ -80,7 +80,7 @@ await paso('NEGATIVO: rm -rf negado en vivo', async () => {
   return r.error;
 });
 
-// Limpieza: el smoke no deja basura.
+// Cleanup: the smoke leaves no litter.
 await fs.rm(projectDir(EMPRESA, 'general'), { recursive: true, force: true });
 
 const ancho = Math.max(...filas.map((f) => f[1].length));

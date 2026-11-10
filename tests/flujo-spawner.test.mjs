@@ -1,5 +1,5 @@
-// Track B: spawner + matriz de capabilities. Hermético: workspace en tmpdir
-// vía PABLO_MEMORY_DIR; sin red, sin DISPLAY, sin MCP.
+// Track B: spawner + capabilities matrix. Hermetic: workspace in tmpdir
+// via PABLO_MEMORY_DIR; no network, no DISPLAY, no MCP.
 import { strict as assert } from 'node:assert';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,25 +19,25 @@ beforeEach(() => {
   conv.__resetConventionsCache();
 });
 
-describe('matriz íntegra: toda capability resuelve a real', () => {
-  it('integrity vacío contra el repo real', () => {
+describe('matrix intact: every capability resolves to real', () => {
+  it('empty integrity against the real repo', () => {
     const fantasmas = caps.integrityCheck();
     assert.deepEqual(fantasmas, [], `capabilities fantasma: ${JSON.stringify(fantasmas)}`);
   });
 
-  it('cada capability desconocida no resuelve', () => {
+  it('each unknown capability does not resolve', () => {
     const r = caps.resolveCapability('teletransportacion');
     assert.equal(r.ok, false);
     assert.match(r.missing.join(' '), /desconocida/);
   });
 
-  it('detecta tool fantasma si el inventario no la trae', () => {
+  it('detects a ghost tool when the inventory lacks it', () => {
     const r = caps.resolveCapability('exec', { tools: [], skills: ['terminal'] });
     assert.equal(r.ok, false);
     assert.ok(r.missing.some((m) => m.includes('run_cmd')));
   });
 
-  it('todos los roles tienen base + propias', () => {
+  it('all roles have base + own capabilities', () => {
     for (const rol of caps.knownRoles()) {
       const c = caps.capabilitiesForRole(rol);
       for (const b of caps.BASE_CAPABILITIES) {
@@ -51,8 +51,8 @@ describe('matriz íntegra: toda capability resuelve a real', () => {
   });
 });
 
-describe('no-duplicados: equipo actual manda', () => {
-  it('miembro que cubre → responde existente', () => {
+describe('no-duplicates: current team wins', () => {
+  it('covering member → answers existente', () => {
     const r = spawner.spawnRequest(
       { rol: 'backend', porque: 'falta API', capabilities: ['exec'] },
       { equipo: [{ id: 'be-1', role: 'backend' }] }
@@ -63,7 +63,7 @@ describe('no-duplicados: equipo actual manda', () => {
     assert.match(r.motivo, /cero duplicados/);
   });
 
-  it('rol conocido sin miembro → crea', () => {
+  it('known role without a member → creates', () => {
     const r = spawner.spawnRequest(
       { rol: 'backend', porque: 'falta API' },
       { equipo: [{ id: 'fe-1', role: 'frontend' }] }
@@ -72,7 +72,7 @@ describe('no-duplicados: equipo actual manda', () => {
     assert.equal(r.agent.role, 'backend');
   });
 
-  it('rol desconocido cubierto por existente → deriva', () => {
+  it('unknown role covered by an existing one → derives', () => {
     const r = spawner.spawnRequest(
       { rol: 'ninja', porque: 'algo', capabilities: ['exec'] },
       { equipo: [{ id: 'be-1', role: 'backend' }] }
@@ -81,15 +81,15 @@ describe('no-duplicados: equipo actual manda', () => {
     assert.equal(r.existing, 'backend');
   });
 
-  it('rolQueCubre: subconjunto de matriz', () => {
+  it('rolQueCubre: matrix subset', () => {
     assert.equal(caps.rolQueCubre(['exec', 'tests']), 'backend');
     assert.equal(caps.rolQueCubre(['no-existe']), null);
     assert.equal(caps.rolQueCubre([]), null);
   });
 });
 
-describe('spawn crea ficha + skills + tools', () => {
-  it('ficha en workspace + skills/tools concretas', () => {
+describe('spawn creates ficha + skills + tools', () => {
+  it('ficha in workspace + concrete skills/tools', () => {
     const r = spawner.spawnRequest(
       { rol: 'marketing', porque: 'lanzamiento del producto' },
       { companySlug: 'acme', equipo: [] }
@@ -99,14 +99,14 @@ describe('spawn crea ficha + skills + tools', () => {
     assert.ok(r.capabilities.includes('outreach-lectura'));
     assert.ok(r.skills.includes('marketing'), `skills: ${r.skills.join(',')}`);
     assert.ok(r.tools.includes('fetch_url'), `tools: ${r.tools.join(',')}`);
-    // La ficha existe y es seed de marketing.
+    // The ficha exists and is a marketing seed.
     const frag = conv.renderAgentConventions('acme', r.agent);
     assert.match(frag, /MARKETING/);
-    // Log registra.
+    // Log records it.
     assert.equal(spawner.spawnLog().length, 1);
   });
 
-  it('skillsForRole trae las nuevas por scope', () => {
+  it('skillsForRole brings the new ones by scope', () => {
     assert.ok(skills.skillsForRole('marketing').includes('marketing'));
     assert.ok(skills.skillsForRole('ventas').includes('ventas'));
     assert.ok(skills.skillsForRole('tester').includes('pruebas'));
@@ -114,15 +114,15 @@ describe('spawn crea ficha + skills + tools', () => {
   });
 });
 
-describe('rechazo con motivo', () => {
-  it('sin porqué → rechazo', () => {
+describe('rejection with motivo', () => {
+  it('no reason given → rejection', () => {
     const r = spawner.spawnRequest({ rol: 'backend' }, {});
     assert.equal(r.created, false);
     assert.equal(r.rejected, true);
     assert.match(r.motivo, /porqu/);
   });
 
-  it('pedido vacío → rechazo', () => {
+  it('empty request → rejection', () => {
     const r = spawner.spawnRequest({ porque: 'x' }, {});
     assert.equal(r.created, false);
     assert.equal(r.rejected, true);
@@ -130,7 +130,7 @@ describe('rechazo con motivo', () => {
     assert.equal(v.rejected, true);
   });
 
-  it('rol desconocido sin capabilities → rechazo con roles válidos', () => {
+  it('unknown role without capabilities → rejection with valid roles', () => {
     const r = spawner.spawnRequest({ rol: 'astronauta', porque: 'sueño' }, {});
     assert.equal(r.created, false);
     assert.equal(r.rejected, true);
@@ -138,15 +138,15 @@ describe('rechazo con motivo', () => {
   });
 });
 
-describe('revisaMonetizacion (pura, sin IO)', () => {
-  it('detecta potencial beneficio', () => {
+describe('revisaMonetizacion (pure, no IO)', () => {
+  it('detects potential profit', () => {
     assert.equal(caps.revisaMonetizacion({ nombre: 'Tienda de mates', tipo: 'e-commerce' }), true);
     assert.equal(caps.revisaMonetizacion({ descripcion: 'landing con pricing y checkout' }), true);
     assert.equal(caps.revisaMonetizacion({ vende: true }), true);
     assert.equal(caps.revisaMonetizacion({ features: ['carrito', 'pago'] }), true);
   });
 
-  it('no marca lo interno', () => {
+  it('does not flag internal stuff', () => {
     assert.equal(caps.revisaMonetizacion({ nombre: 'Script interno de backup' }), false);
     assert.equal(caps.revisaMonetizacion({}), false);
     assert.equal(caps.revisaMonetizacion(null), false);

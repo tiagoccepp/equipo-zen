@@ -18,9 +18,9 @@ import {
   setManosLoader
 } from '../server/lib/agent-runtime.js';
 
-// Manos v1: cableado two-phase al turno en vivo. El loader es inyectable;
-// manos.js real puede no existir todavía: estos tests programan contra el
-// contrato (shouldUseTools/renderManosPrompt/runToolLoop) con fakes.
+// Manos v1: two-phase wiring into the live turn. The loader is injectable;
+// the real manos.js may not exist yet: these tests program against the
+// contract (shouldUseTools/renderManosPrompt/runToolLoop) with fakes.
 
 function freshSettings() {
   const store = new Store(':memory:');
@@ -47,7 +47,7 @@ function baseArgs(overrides = {}) {
   };
 }
 
-// Fake ok: gate por palabra clave, loop de 2 tools que devuelve resumen.
+// Happy-path fake: keyword gate, 2-tool loop returning a summary.
 function fakeManosOk(captured) {
   return {
     shouldUseTools: (text) => /leé|lee|corré|corre|buscá|busca/i.test(String(text || '')),
@@ -63,16 +63,16 @@ function fakeManosOk(captured) {
 
 // ── settings: defaults ───────────────────────────────────────────────
 
-test('manos: defaults enabled=true y maxTurns=6', () => {
+test('manos: defaults enabled=true and maxTurns=6', () => {
   freshSettings();
   assert.equal(getManosEnabled(), true);
   assert.equal(getManosMaxTurns(), 6);
   assert.deepEqual(publicSettings().manos, { enabled: true, maxTurns: 6 });
 });
 
-// ── settings: apply + validación ─────────────────────────────────────
+// ── settings: apply + validation ─────────────────────────────────────
 
-test('manos: applySettings guarda enabled y maxTurns válidos', () => {
+test('manos: applySettings saves valid enabled and maxTurns', () => {
   freshSettings();
   const applied = applySettings({ 'manos.enabled': 'false', 'manos.maxTurns': '10' });
   assert.deepEqual(applied.sort(), ['manos.enabled', 'manos.maxTurns']);
@@ -81,7 +81,7 @@ test('manos: applySettings guarda enabled y maxTurns válidos', () => {
   assert.deepEqual(publicSettings().manos, { enabled: false, maxTurns: 10 });
 });
 
-test('manos: maxTurns fuera de 1..12 o no numérico se ignora', () => {
+test('manos: maxTurns outside 1..12 or non-numeric is ignored', () => {
   freshSettings();
   applySettings({ 'manos.maxTurns': '7' });
   assert.equal(getManosMaxTurns(), 7);
@@ -92,7 +92,7 @@ test('manos: maxTurns fuera de 1..12 o no numérico se ignora', () => {
   }
 });
 
-test('manos: enabled con valor raro se ignora, vacío vuelve al default', () => {
+test('manos: enabled with a weird value is ignored, empty returns to default', () => {
   freshSettings();
   applySettings({ 'manos.enabled': 'false' });
   assert.equal(getManosEnabled(), false);
@@ -102,9 +102,9 @@ test('manos: enabled con valor raro se ignora, vacío vuelve al default', () => 
   assert.equal(getManosEnabled(), true);
 });
 
-// ── fase tools: camino feliz ──────────────────────────────────────────
+// ── tools phase: happy path ──────────────────────────────────────────
 
-test('manos: gate true corre el loop e inyecta el resumen al user', async () => {
+test('manos: gate true runs the loop and injects the summary into user', async () => {
   freshSettings();
   const captured = {};
   setManosLoader(async () => fakeManosOk(captured));
@@ -115,12 +115,12 @@ test('manos: gate true corre el loop e inyecta el resumen al user', async () => 
     assert.equal(phase.toolSummary, 'package.json: nombre equipo, 3 deps');
     assert.equal(phase.toolTurns, 2);
     assert.equal(phase.userContent, `USER-TURN\n\n${MANOS_TOOLS_MARKER}\npackage.json: nombre equipo, 3 deps`);
-    // Aviso [AVANCE]-style por el canal existente, con identidad.
+    // [AVANCE]-style notice over the existing channel, with identity.
     assert.equal(emitted[0].type, 'agent_progress');
     assert.equal(emitted[0].text, 'Using tools…');
     assert.equal(emitted[0].turnId, 'turn-1');
     assert.equal(emitted[0].agentId, 'ana');
-    // El loop emite por el mismo canal y el wrapper le pone identidad.
+    // The loop emits over the same channel and the wrapper adds identity.
     const call = emitted.find((m) => m.type === 'agent_tool_call');
     assert.equal(call.turnId, 'turn-1');
     assert.equal(call.agentId, 'ana');
@@ -129,7 +129,7 @@ test('manos: gate true corre el loop e inyecta el resumen al user', async () => 
   }
 });
 
-test('manos: el loop recibe maxTurns/deadline/source/messages/system', async () => {
+test('manos: the loop receives maxTurns/deadline/source/messages/system', async () => {
   freshSettings();
   applySettings({ 'manos.maxTurns': '3' });
   const captured = {};
@@ -142,7 +142,7 @@ test('manos: el loop recibe maxTurns/deadline/source/messages/system', async () 
     assert.equal(captured.params.source, 'text');
     assert.equal(typeof captured.params.completeChat, 'function');
     assert.equal(typeof captured.params.emit, 'function');
-    // El system del loop trae la sección Manos; los messages son formato chat.
+    // The loop system carries the Manos section; messages use chat format.
     assert.match(captured.params.system, /SYSTEM-BASE/);
     assert.match(captured.params.system, /MANOS-FORMATO/);
     assert.equal(captured.params.messages.length, 2);
@@ -154,7 +154,7 @@ test('manos: el loop recibe maxTurns/deadline/source/messages/system', async () 
   }
 });
 
-test('manos: en voz la deadline es 45s, en texto 120s', async () => {
+test('manos: voice deadline is 45s, text is 120s', async () => {
   freshSettings();
   assert.equal(MANOS_VOICE_DEADLINE_MS, 45000);
   assert.equal(MANOS_TEXT_DEADLINE_MS, 120000);
@@ -176,9 +176,9 @@ test('manos: en voz la deadline es 45s, en texto 120s', async () => {
   }
 });
 
-// ── fase tools: fallbacks idénticos a hoy ─────────────────────────────
+// ── tools phase: fallbacks identical to today ─────────────────────────────
 
-test('manos: deshabilitado no toca el loader ni el user ni emite', async () => {
+test('manos: disabled touches neither loader nor user nor emits', async () => {
   freshSettings();
   applySettings({ 'manos.enabled': 'false' });
   let loaderCalls = 0;
@@ -199,7 +199,7 @@ test('manos: deshabilitado no toca el loader ni el user ni emite', async () => {
   }
 });
 
-test('manos: gate false deja el turno EXACTO como hoy', async () => {
+test('manos: gate false leaves the turn EXACTLY as today', async () => {
   freshSettings();
   let loopCalls = 0;
   setManosLoader(async () => ({
@@ -222,7 +222,7 @@ test('manos: gate false deja el turno EXACTO como hoy', async () => {
   }
 });
 
-test('manos: loader caído (manos.js ausente) no cambia nada', async () => {
+test('manos: crashed loader (missing manos.js) changes nothing', async () => {
   freshSettings();
   setManosLoader(async () => {
     throw new Error('Cannot find module ./manos.js');
@@ -238,7 +238,7 @@ test('manos: loader caído (manos.js ausente) no cambia nada', async () => {
   }
 });
 
-test('manos: loop que lanza degrada a fallback sin romper el turno', async () => {
+test('manos: throwing loop degrades to fallback without breaking the turn', async () => {
   freshSettings();
   setManosLoader(async () => ({
     shouldUseTools: () => true,
@@ -257,7 +257,7 @@ test('manos: loop que lanza degrada a fallback sin romper el turno', async () =>
   }
 });
 
-test('manos: resumen vacío corre pero no inyecta marker', async () => {
+test('manos: empty summary runs but does not inject marker', async () => {
   freshSettings();
   setManosLoader(async () => ({
     shouldUseTools: () => true,
@@ -275,7 +275,7 @@ test('manos: resumen vacío corre pero no inyecta marker', async () => {
   }
 });
 
-test('manos: turno abortado salta la fase sin cargar nada', async () => {
+test('manos: aborted turn skips the phase without loading anything', async () => {
   freshSettings();
   let loaderCalls = 0;
   setManosLoader(async () => {
@@ -295,9 +295,9 @@ test('manos: turno abortado salta la fase sin cargar nada', async () => {
   }
 });
 
-test('manos: loader default degrada elegante (vale con o sin manos.js)', async () => {
-  // Hoy manos.js no existe → import falla → fallback. Cuando el módulo
-  // paralelo aterrice, un texto neutro no dispara el gate → mismo fallback.
+test('manos: default loader degrades gracefully (holds with or without manos.js)', async () => {
+  // Today manos.js does not exist → import fails → fallback. Once the parallel
+  // module lands, neutral text will not trigger the gate → same fallback.
   freshSettings();
   setManosLoader(null);
   const { args } = baseArgs({ turn: { text: 'hola, ¿cómo están?' } });

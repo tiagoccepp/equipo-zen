@@ -1,11 +1,11 @@
-// Lo que el usuario RECIBE. El verificador determinista es lo último que se
-// interpone entre el equipo y una entrega rota, así que acá se prueba desde el
-// lado de quien abre la carpeta del proyecto: ¿la página anda?, ¿está en
-// español?, ¿los enlaces llevan a algún lado?, ¿el CSS respeta los tokens?
+// What the user RECEIVES. The deterministic verifier is the last thing
+// standing between the team and a broken delivery, so here it is tested from
+// the side of whoever opens the project folder: does the page work?, is it in
+// Spanish?, do links lead anywhere?, does the CSS respect the tokens?
 //
-// La regla que más importa es la inversa: una página BIEN hecha no puede
-// producir un solo hallazgo. Cada falso positivo le hace romper al agente algo
-// que ya estaba bien.
+// The rule that matters most is the inverse: a WELL-made page cannot
+// produce a single finding. Every false positive makes the agent break something
+// that was already fine.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +18,7 @@ import {
 
 const que = (hallazgos) => hallazgos.map((h) => `[${h.archivo}] ${h.que}`).join(' || ') || '(sin hallazgos)';
 
-// ── Una entrega terminada de verdad ─────────────────────────────────────
+// ── A truly finished delivery ─────────────────────────────────────
 
 const PAGINA_TERMINADA = `<!doctype html>
 <html lang="es">
@@ -71,9 +71,9 @@ const TOKENS = `:root {
   --tipografia: Georgia, 'Times New Roman', serif;
 }`;
 
-// CSS de producción: todo por var(), sombras en negro translúcido y
-// `font-family: inherit` en los controles de formulario, que es la forma
-// estándar de que el botón no salga con la tipografía del sistema operativo.
+// Production CSS: everything via var(), translucent-black shadows, and
+// `font-family: inherit` on form controls, which is the standard way to keep
+// buttons from rendering in the OS typeface.
 const ESTILOS = `.saltar { position: absolute; left: -9999px; }
 .saltar:focus { left: var(--espacio-2); background: var(--superficie); color: var(--tinta); }
 body { background: var(--fondo); color: var(--tinta); font-family: var(--tipografia); }
@@ -93,24 +93,24 @@ for (const ancla of anclas) {
   });
 }`;
 
-test('una entrega terminada de verdad no le devuelve ni un solo hallazgo al equipo', () => {
+test('a truly finished delivery returns not a single finding to the team', () => {
   const archivos = new Map([
     ['index.html', PAGINA_TERMINADA],
     ['tokens.css', TOKENS],
     ['estilos.css', ESTILOS],
     ['app.js', APP]
   ]);
-  // La página también apunta a nosotros.html y fachada.svg: existen en el
-  // proyecto aunque esta corrida no los haya tocado.
+  // The page also points at nosotros.html and fachada.svg: they exist in the
+  // project even though this run did not touch them.
   const rutas = ['index.html', 'nosotros.html', 'tokens.css', 'estilos.css', 'app.js', 'fachada.svg'];
 
   const hallazgos = verifyProject(archivos, rutas);
   assert.deepEqual(hallazgos, [], `el verificador inventó problemas sobre una página que está bien: ${que(hallazgos)}`);
 });
 
-// ── Una entrega rota ────────────────────────────────────────────────────
+// ── A broken delivery ────────────────────────────────────────────────────
 
-test('si la página llega rota, el equipo se entera antes de que la abra alguien', () => {
+test('if the page arrives broken, the team finds out before anyone opens it', () => {
   const rota = `<!doctype html>
 <html lang="es">
 <head><title>Tienda del barrio</title><meta name="description" content="Almacén y fiambrería en Lanús."></head>
@@ -135,13 +135,13 @@ test('si la página llega rota, el equipo se entera antes de que la abra alguien
   assert.match(texto, /2 <h1>/, `no vio los dos encabezados principales: ${texto}`);
   assert.match(texto, /sin atributo alt/, `no vio la imagen sin alt: ${texto}`);
 
-  // Y el informe le dice al agente qué pasa, dónde y que arregle antes de cerrar.
+  // And the report tells the agent what is wrong, where, and to fix before closing.
   const informe = renderVerificationReport(hallazgos);
   assert.match(informe, /index\.html/);
   assert.match(informe, /finish/, 'el informe tiene que frenar el cierre de la tarea');
 });
 
-test('una página a medio hacer, con relleno adentro, no pasa por terminada', () => {
+test('a half-made page, with filler inside, does not pass as finished', () => {
   const archivos = new Map([
     ['index.html', `<!doctype html><html lang="es"><head><title>Estudio contable Ramírez</title>
 <meta name="description" content="Estudio contable en Quilmes."></head><body>
@@ -164,9 +164,9 @@ test('una página a medio hacer, con relleno adentro, no pasa por terminada', ()
   assert.match(enReadme, /Tu contenido acá/i, enReadme);
 });
 
-// ── Idioma ──────────────────────────────────────────────────────────────
+// ── Language ──────────────────────────────────────────────────────────────
 
-test('el inglés que se cuela en la navegación y en los botones sale marcado', () => {
+test('English leaking into navigation and buttons gets flagged', () => {
   const html = `<!doctype html><html lang="es"><head><title>Estudio Norte</title>
 <meta name="description" content="Estudio de arquitectura en Rosario."></head><body>
 <nav><a href="#inicio">Home</a><a href="#contacto">Contact us</a></nav>
@@ -187,7 +187,7 @@ test('el inglés que se cuela en la navegación y en los botones sale marcado', 
   }
 });
 
-test('cómo hablamos acá no es inglés: mail, chat, software y tests quedan como están', () => {
+test('how we talk here is not English: mail, chat, software, and tests stay as they are', () => {
   const html = `<!doctype html><html lang="es"><head><title>Muty — software a medida</title>
 <meta name="description" content="Hacemos software a medida: web, mobile y automatizaciones."></head><body>
 <h1>Hacemos software a medida</h1>
@@ -211,9 +211,9 @@ test('cómo hablamos acá no es inglés: mail, chat, software y tests quedan com
   assert.deepEqual(hallazgos, [], `se marcó como inglés lo que es español rioplatense normal, o se leyó el código como si fuera texto de la interfaz: ${que(hallazgos)}`);
 });
 
-// ── Que la página se pueda abrir y navegar ──────────────────────────────
+// ── That the page can be opened and navigated ──────────────────────────────
 
-test('los enlaces llevan a algún lado, los archivos existen y nada depende de internet', () => {
+test('links lead somewhere, files exist, and nothing depends on the internet', () => {
   const html = `<!doctype html><html lang="es"><head><title>Bicicletería Sur</title>
 <meta name="description" content="Taller de bicicletas en Lanús.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">
@@ -239,7 +239,7 @@ test('los enlaces llevan a algún lado, los archivos existen y nada depende de i
   assert.doesNotMatch(texto, /estilos\.css|logo\.svg|mailto/, `lo que sí existe no se puede reportar como roto: ${texto}`);
 });
 
-test('si el JavaScript no arranca, lo interactivo queda muerto y hay que decirlo', () => {
+test('if the JavaScript does not boot, the interactive part stays dead and it must be said', () => {
   const roto = `<!doctype html><html lang="es"><head><title>Turnos</title>
 <meta name="description" content="Pedí tu turno online."></head><body>
 <h1>Pedí tu turno</h1>
@@ -250,8 +250,8 @@ test('si el JavaScript no arranca, lo interactivo queda muerto y hay que decirlo
   }
 </script>
 </body></html>`;
-  // JavaScript moderno pero perfectamente válido: campos privados, async,
-  // encadenamiento opcional. Nada de esto puede reportarse como error.
+  // Modern but perfectly valid JavaScript: private fields, async,
+  // optional chaining. None of this may be reported as an error.
   const sano = `class Agenda {
   #turnos = [];
   agregar(turno) {
@@ -276,14 +276,14 @@ window.agenda = new Agenda();`;
   assert.deepEqual(enApp, [], `JavaScript moderno y válido reportado como roto: ${que(enApp)}`);
 });
 
-test('el CSS de una página normal no se confunde con una paleta escrita a mano', () => {
-  // Una paleta propia, escrita a ojo, SÍ tiene que salir marcada: así es como
-  // un proyecto termina con cinco azules distintos.
+test('the CSS of a normal page is not confused with a hand-written palette', () => {
+  // An own palette, eyeballed, MUST get flagged: that is how a project
+  // ends up with five different blues.
   const propia = verifyCss('estilos.css', '.hero { background: #e63946; color: #f1faee; border-bottom: 2px solid rgb(29, 53, 87); }');
   assert.match(que(propia), /escritos a mano/, que(propia));
 
-  // Pero un selector de sección que casualmente se escribe con letras
-  // hexadecimales (#cafe, en una panadería, es de lo más común) no es un color.
+  // But a section selector that happens to be spelled with hex letters
+  // (#cafe, in a bakery, is most common) is not a color.
   const normal = verifyCss('estilos.css', `:root { --tinta: #2b2118; }
 #cafe {
   padding: var(--espacio-3);

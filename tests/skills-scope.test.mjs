@@ -1,6 +1,6 @@
-// Tests skills por agente: scope extendido (role:<rol> | agent:<id>) y las
-// 3 skills ejemplo (diseno-web, copy-ventas, revision-codigo).
-// Sin agent: conducta histórica intacta (default-off por omisión).
+// Per-agent skills tests: extended scope (role:<role> | agent:<id>) and the
+// 3 example skills (diseno-web, copy-ventas, revision-codigo).
+// Without agent: historic behavior intact (default-off by omission).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -19,9 +19,9 @@ import {
 const BRUNO = { id: 'bruno-x', name: 'Bruno', role: 'worker' };
 const RENATA = { id: 'renata-y', name: 'Renata', role: 'ceo' };
 
-// ── skillAppliesTo (puro, sintético) ──────────────────────────────────
+// ── skillAppliesTo (pure, synthetic) ──────────────────────────────────
 
-test('sin agent: all/chat/work como siempre; rol/agente NO matchean', () => {
+test('without agent: all/chat/work as always; role/agent do NOT match', () => {
   assert.equal(skillAppliesTo({ scope: 'all', scopes: ['all'] }, 'chat'), true);
   assert.equal(skillAppliesTo({ scope: 'chat', scopes: ['chat'] }, 'chat'), true);
   assert.equal(skillAppliesTo({ scope: 'work', scopes: ['work'] }, 'chat'), false);
@@ -30,17 +30,17 @@ test('sin agent: all/chat/work como siempre; rol/agente NO matchean', () => {
   assert.equal(skillAppliesTo({ scope: 'agent:bruno-x', scopes: ['agent:bruno-x'] }, 'chat'), false);
 });
 
-test('con agent: matchea role:<rol> y agent:<id>', () => {
+test('with agent: matches role:<role> and agent:<id>', () => {
   assert.equal(skillAppliesTo({ scope: 'role:worker', scopes: ['role:worker'] }, 'chat', BRUNO), true);
   assert.equal(skillAppliesTo({ scope: 'role:worker', scopes: ['role:worker'] }, 'chat', RENATA), false);
   assert.equal(skillAppliesTo({ scope: 'agent:bruno-x', scopes: ['agent:bruno-x'] }, 'chat', BRUNO), true);
   assert.equal(skillAppliesTo({ scope: 'agent:bruno-x', scopes: ['agent:bruno-x'] }, 'chat', RENATA), false);
-  // El scope del turno sigue valiendo con agent.
+  // The turn scope still applies with agent.
   assert.equal(skillAppliesTo({ scope: 'chat', scopes: ['chat'] }, 'chat', BRUNO), true);
   assert.equal(skillAppliesTo({ scope: 'work', scopes: ['work'] }, 'chat', BRUNO), false);
 });
 
-test('case-insensitive y listas con comas', () => {
+test('case-insensitive and comma lists', () => {
   const skill = { scope: 'chat, role:Worker', scopes: ['chat', 'role:worker'] };
   assert.equal(skillAppliesTo(skill, 'chat', { id: 'X', role: 'WORKER' }), true);
   assert.equal(skillAppliesTo(
@@ -48,15 +48,15 @@ test('case-insensitive y listas con comas', () => {
   ), true);
 });
 
-test('entradas desconocidas se ignoran; legacy sin scopes usa scope', () => {
+test('unknown entries are ignored; legacy without scopes uses scope', () => {
   assert.equal(skillAppliesTo({ scope: 'nada', scopes: ['nada'] }, 'chat', BRUNO), false);
   assert.equal(skillAppliesTo({ scope: 'chat' }, 'chat'), true, 'fallback a scope plano');
   assert.equal(skillAppliesTo({ scope: 'chat', scopes: [] }, 'chat'), true, 'scopes vacío usa scope');
 });
 
-// ── Directorio real ───────────────────────────────────────────────────
+// ── Real directory ───────────────────────────────────────────────────
 
-test('las 3 skills ejemplo cargan con scope chat+roles reales', () => {
+test('the 3 example skills load with chat+real-roles scope', () => {
   __resetSkillsCache();
   const ESPERADOS = {
     'diseno-web': ['role:diseno', 'role:frontend'],
@@ -79,7 +79,7 @@ test('las 3 skills ejemplo cargan con scope chat+roles reales', () => {
   }
 });
 
-test('sin agent las nuevas matchean por keywords (caller actual intacto)', () => {
+test('without agent the new ones match by keywords (current caller intact)', () => {
   __resetSkillsCache();
   const d = matchSkills('hay que definir el layout, la paleta y el responsive', { scope: 'chat' });
   assert.ok(d.some((s) => s.name === 'diseno-web'), 'diseno-web por keywords');
@@ -89,9 +89,9 @@ test('sin agent las nuevas matchean por keywords (caller actual intacto)', () =>
   assert.ok(r.some((s) => s.name === 'revision-codigo'), 'revision-codigo por keywords');
 });
 
-// ── Fixture aislado: skill solo-rol ───────────────────────────────────
+// ── Isolated fixture: role-only skill ───────────────────────────────────
 
-test('skill solo-rol: invisible sin agent, visible con su rol', () => {
+test('role-only skill: invisible without agent, visible with its role', () => {
   const dir = mkdtempSync(join(tmpdir(), 'skills-'));
   writeFileSync(join(dir, 'solo-jefes.md'), [
     '---',
@@ -105,7 +105,7 @@ test('skill solo-rol: invisible sin agent, visible con su rol', () => {
     ''
   ].join('\n'));
   __resetSkillsCache();
-  loadSkills(dir); // precarga el caché con el fixture
+  loadSkills(dir); // preloads the cache with the fixture
   try {
     const sinAgent = matchSkills('hay que coordinar prioridades y repartir tareas', { scope: 'chat' });
     assert.ok(!sinAgent.some((s) => s.name === 'solo-jefes'), 'sin agent no matchea');
@@ -114,13 +114,13 @@ test('skill solo-rol: invisible sin agent, visible con su rol', () => {
     const worker = matchSkills('hay que coordinar prioridades y repartir tareas', { scope: 'chat', agent: BRUNO });
     assert.ok(!worker.some((s) => s.name === 'solo-jefes'), 'con worker no matchea');
   } finally {
-    __resetSkillsCache(); // el siguiente loadSkills relee el dir real
+    __resetSkillsCache(); // the next loadSkills re-reads the real dir
   }
 });
 
-// ── Dieta ─────────────────────────────────────────────────────────────
+// ── Diet ─────────────────────────────────────────────────────────────
 
-test('dieta D6: render con agent no pasa el techo', () => {
+test('diet D6: render with agent stays under the ceiling', () => {
   __resetSkillsCache();
   const out = renderSkillsSection(
     'definí el layout y la paleta responsive y escribí el titular persuasivo con llamada a la acción',

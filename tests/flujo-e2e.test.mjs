@@ -1,6 +1,6 @@
-// E2E del flujo de equipo (tracks A→B→C) con adaptadores del main.
-// Recorre: brief → plan (+spawn FALTA:*) → dispatch → entrega →
-// peer review → tester falla → devolución → rework → tester aprueba.
+// Team flow E2E (tracks A→B→C) with main adapters.
+// Walks: brief → plan (+spawn FALTA:*) → dispatch → entrega →
+// peer review → tester fails → devolucion → rework → tester approves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -40,7 +40,7 @@ function fasesDemo() {
 
 function orquestadorE2E(anuncios) {
   return new Orchestrator({
-    // Cableado A→B por adaptadores (el único lugar que traduce).
+    // A→B wiring via adapters (the only place that translates).
     requestSpawn: (req) => adaptarSpawnResponse(
       spawnRequest(spawnRequestPara(req), { equipo: EQUIPO }),
       EQUIPO
@@ -50,7 +50,7 @@ function orquestadorE2E(anuncios) {
   });
 }
 
-test('flujo E2E: brief → plan con spawn → dispatch → entrega', async () => {
+test('E2E flow: brief → plan with spawn → dispatch → entrega', async () => {
   const anuncios = [];
   const orq = orquestadorE2E(anuncios);
   const { job } = orq.intake(briefWeb());
@@ -58,7 +58,7 @@ test('flujo E2E: brief → plan con spawn → dispatch → entrega', async () =>
 
   await orq.planificar(job.id, fasesDemo(), { research: false });
   assert.equal(job.estado, 'planificado');
-  // FALTA:tester se resolvió por protocolo a un nombre (no SIN_DUEÑO).
+  // FALTA:tester resolved by protocol to a name (not SIN_DUEÑO).
   const fase2 = job.plan.fases.find((f) => f.n === 2);
   assert.ok(!/^SIN_DUEÑO:/.test(fase2.dueño), `dueño sin resolver: ${fase2.dueño}`);
   assert.ok(anuncios.some((a) => /fase/.test(a.texto || '')), 'anuncia plan_listo');
@@ -69,11 +69,11 @@ test('flujo E2E: brief → plan con spawn → dispatch → entrega', async () =>
   assert.equal(entrega.estado, 'entregado');
 });
 
-test('flujo E2E: rol existente no se duplica (vía adaptador)', async () => {
+test('E2E flow: existing role is not duplicated (via adapter)', async () => {
   const anuncios = [];
   const orq = orquestadorE2E(anuncios);
   const { job } = orq.intake(briefWeb());
-  // backend ya está en el equipo → existente, ok:true, con id+nombre.
+  // backend is already on the team → existing, ok:true, with id+name.
   const res = await orq.pedirRol(job, 'backend');
   assert.equal(res.ok, true);
   assert.ok(res.existente?.id === 'be-1');
@@ -81,7 +81,7 @@ test('flujo E2E: rol existente no se duplica (vía adaptador)', async () => {
   assert.equal(isSpawnResponse(res).ok, true);
 });
 
-test('flujo E2E: peer review calla sin mejora, habla con mejora', () => {
+test('E2E flow: peer review stays silent without improvement, speaks with improvement', () => {
   const silencio = revisar({ texto: 'código limpio, testeado, documentado' }, { rol: 'backend' });
   assert.equal(silencio.silencio, true);
   const habla = revisar({ texto: 'TODO: arreglar esto después, contraseña admin123 hardcodeada' }, { rol: 'backend' });
@@ -89,7 +89,7 @@ test('flujo E2E: peer review calla sin mejora, habla con mejora', () => {
   assert.ok(habla.mejoras.length > 0);
 });
 
-test('flujo E2E: tester falla → devolución → rework → aprueba', async () => {
+test('E2E flow: tester fails → devolucion → rework → approves', async () => {
   const anuncios = [];
   const orq = orquestadorE2E(anuncios);
   const { job } = orq.intake(briefWeb());
@@ -100,7 +100,7 @@ test('flujo E2E: tester falla → devolución → rework → aprueba', async () 
   const plan = planDePrueba({ tipo: 'web', brief: briefWeb() });
   assert.ok(plan.celdas.length > 0);
 
-  // Ronda 1: un bug real → devolución canonical → rework.
+  // Round 1: a real bug → canonical devolucion → rework.
   const juicio1 = juzgar([
     { estado: 'pass', persona: 'usuario-nuevo', dimension: 'visual' },
     {
@@ -117,7 +117,7 @@ test('flujo E2E: tester falla → devolución → rework → aprueba', async () 
   assert.equal(rw.estado, 'rework');
   assert.ok(rw.redispatches.length > 0);
 
-  // Ronda 2: todo verde → aprobación canonical → aprobado.
+  // Round 2: all green → canonical approval → aprobado.
   const juicio2 = juzgar([
     { estado: 'pass', persona: 'usuario-nuevo', dimension: 'visual' },
     { estado: 'pass', persona: 'comprador', dimension: 'funcional' }

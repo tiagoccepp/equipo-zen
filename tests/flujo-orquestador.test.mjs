@@ -1,5 +1,5 @@
-// Tests track A (flujo-orquestador): 7 contratos, plan, rechazo→replan,
-// loop devolución con corte, preguntasFaltantes, research, voz y hook.
+// Track A tests (flujo-orquestador): 7 contracts, plan, rejection→replan,
+// feedback loop with cutoff, preguntasFaltantes, research, voice and hook.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -54,12 +54,12 @@ const FASES_OK = [
 function briefValido() { return { ...BRIEF_OK, restricciones: [...BRIEF_OK.restricciones], criteriosExito: [...BRIEF_OK.criteriosExito] }; }
 
 // ── 1. Brief ────────────────────────────────────────────────────────────
-test('brief válido pasa', () => {
+test('valid brief passes', () => {
   assert.equal(isBrief(briefValido()).ok, true);
   assertBrief(briefValido());
 });
 
-test('brief sin objetivo ni criterios no pasa', () => {
+test('brief without objetivo or criteriosExito fails', () => {
   const r = isBrief({ contexto: 'x' });
   assert.equal(r.ok, false);
   assert.ok(r.errors.join(' ').includes('objetivo'));
@@ -68,21 +68,21 @@ test('brief sin objetivo ni criterios no pasa', () => {
 });
 
 // ── 2. Plan ─────────────────────────────────────────────────────────────
-test('plan válido pasa', () => {
+test('valid plan passes', () => {
   const plan = crearPlan(briefValido(), { jobId: 'job-1', fases: FASES_OK });
   assert.equal(plan.fases.length, 3);
   assert.deepEqual(plan.fases.map((f) => f.n), [1, 2, 3]);
   assertPlan(plan);
 });
 
-test('plan exige doneCriteria por fase', () => {
+test('plan requires doneCriteria per phase', () => {
   assert.throws(
     () => crearPlan(briefValido(), { fases: [{ titulo: 'X', dueño: 'be', doneCriteria: '' }] }),
     /doneCriteria/
   );
 });
 
-test('plan rechaza dependeDe a fase posterior o igual', () => {
+test('plan rejects dependeDe to a later or equal phase', () => {
   const r = isPlan({
     jobId: 'j',
     fases: [
@@ -94,7 +94,7 @@ test('plan rechaza dependeDe a fase posterior o igual', () => {
   assert.ok(r.errors.join(' ').includes('dependeDe'));
 });
 
-test('plan rechaza numeración con huecos', () => {
+test('plan rejects numbering with gaps', () => {
   const r = isPlan({
     jobId: 'j',
     fases: [
@@ -106,13 +106,13 @@ test('plan rechaza numeración con huecos', () => {
   assert.ok(r.errors.join(' ').includes('fase 2'));
 });
 
-test('ordenEjecucion respeta dependencias', () => {
+test('ordenEjecucion respects dependencies', () => {
   const plan = crearPlan(briefValido(), { fases: FASES_OK });
   assert.deepEqual(ordenEjecucion(plan).map((f) => f.n), [1, 2, 3]);
 });
 
 // ── 3. Dispatch ─────────────────────────────────────────────────────────
-test('dispatch válido pasa', () => {
+test('valid dispatch passes', () => {
   const plan = crearPlan(briefValido(), { fases: FASES_OK });
   const d = hacerDispatch(plan, 1, { para: 'frontend' });
   assert.equal(d.fase, 1);
@@ -120,28 +120,28 @@ test('dispatch válido pasa', () => {
   assertDispatch(d);
 });
 
-test('dispatch a fase inexistente lanza', () => {
+test('dispatch to missing phase throws', () => {
   const plan = crearPlan(briefValido(), { fases: FASES_OK });
   assert.throws(() => hacerDispatch(plan, 9), /Fase 9/);
 });
 
-test('dispatch inválido no pasa', () => {
+test('invalid dispatch fails', () => {
   assert.equal(isDispatch({}).ok, false);
   assert.throws(() => assertDispatch({ taskId: 'x' }), /dispatch/i);
 });
 
 // ── 4. Spawn-request / response ─────────────────────────────────────────
-test('spawn-request válido pasa', () => {
+test('valid spawn-request passes', () => {
   const req = { jobId: 'job-1', rolFaltante: 'video', porQue: 'hace falta edición', capabilities: ['workspace'] };
   assert.equal(isSpawnRequest(req).ok, true);
   assertSpawnRequest(req);
 });
 
-test('spawn-request sin capabilities no pasa', () => {
+test('spawn-request without capabilities fails', () => {
   assert.equal(isSpawnRequest({ jobId: 'j', rolFaltante: 'r', porQue: 'p', capabilities: [] }).ok, false);
 });
 
-test('spawn-response acepta agente, existente o motivo', () => {
+test('spawn-response accepts agente, existente or motivo', () => {
   assert.equal(isSpawnResponse({ ok: true, agente: { id: 'a', nombre: 'N' } }).ok, true);
   assert.equal(isSpawnResponse({ ok: true, existente: { id: 'b', nombre: 'M' } }).ok, true);
   assert.equal(isSpawnResponse({ ok: false, motivo: 'no hay cupo' }).ok, true);
@@ -151,15 +151,15 @@ test('spawn-response acepta agente, existente o motivo', () => {
 });
 
 // ── 5. Peer review ──────────────────────────────────────────────────────
-test('peer-review válido pasa y vacío no', () => {
+test('valid peer-review passes, empty one fails', () => {
   const pr = { de: 'fe', para: 'be', que: 'cachear', porQue: 'lento', como: 'con ETag' };
   assert.equal(isPeerReview(pr).ok, true);
   assertPeerReview(pr);
   assert.equal(isPeerReview({ de: 'a', para: 'b' }).ok, false);
 });
 
-// ── 6. Devolución ───────────────────────────────────────────────────────
-test('devolución válida pasa', () => {
+// ── 6. Handoff ───────────────────────────────────────────────────────
+test('valid devolucion passes', () => {
   const dev = {
     jobId: 'job-1', ronda: 1,
     items: [{ severidad: 'bug', descripcion: 'el botón no anda', reproduccion: 'click', persona: 'usuario' }]
@@ -168,14 +168,14 @@ test('devolución válida pasa', () => {
   assertDevolucion(dev);
 });
 
-test('devolución sin items o severidad mala no pasa', () => {
+test('devolucion without items or with bad severidad fails', () => {
   assert.equal(isDevolucion({ jobId: 'j', ronda: 1, items: [] }).ok, false);
   assert.equal(isDevolucion({ jobId: 'j', ronda: 1, items: [{ severidad: 'x', descripcion: 'd' }] }).ok, false);
   assert.equal(isDevolucion({ jobId: 'j', ronda: 0, items: [{ severidad: 'bug', descripcion: 'd' }] }).ok, false);
 });
 
-// ── 7. Aprobación ───────────────────────────────────────────────────────
-test('aprobación válida pasa', () => {
+// ── 7. Approval ───────────────────────────────────────────────────────
+test('valid aprobacion passes', () => {
   const ap = {
     jobId: 'job-1',
     probado: [{ persona: 'usuario', dimensiones: ['visual', 'funcional'] }],
@@ -186,12 +186,12 @@ test('aprobación válida pasa', () => {
   assertAprobacion(ap);
 });
 
-test('aprobación sin probado no pasa', () => {
+test('aprobacion without probado fails', () => {
   assert.equal(isAprobacion({ jobId: 'j', probado: [] }).ok, false);
 });
 
 // ── preguntasFaltantes ──────────────────────────────────────────────────
-test('preguntasFaltantes: brief pelado pide 5, completo pide 0', () => {
+test('preguntasFaltantes: bare brief asks 5, complete asks 0', () => {
   assert.equal(preguntasFaltantes({}).length, 5);
   assert.deepEqual(preguntasFaltantes(briefValido()), []);
   const sinUna = briefValido();
@@ -201,7 +201,7 @@ test('preguntasFaltantes: brief pelado pide 5, completo pide 0', () => {
   assert.ok(ps[0].includes('formato'));
 });
 
-// ── rechazo → replan ────────────────────────────────────────────────────
+// ── rejection → replan ────────────────────────────────────────────────────
 function jobConPlan() {
   const orq = new Orchestrator();
   const { job } = orq.intake(briefValido());
@@ -209,7 +209,7 @@ function jobConPlan() {
   return { orq, job };
 }
 
-test('rechazo 1 vez con motivo → re-dispatch intento 2', () => {
+test('rejection once with motivo → re-dispatch intento 2', () => {
   const { job } = jobConPlan();
   const d = hacerDispatch(job.plan, 1, { para: 'frontend' });
   d.estado = 'en_curso';
@@ -222,7 +222,7 @@ test('rechazo 1 vez con motivo → re-dispatch intento 2', () => {
   assert.ok(d.motivoRechazo.includes('tapado'));
 });
 
-test('segundo rechazo igual → RECHAZO_AGOTADO', () => {
+test('second rejection anyway → RECHAZO_AGOTADO', () => {
   const { job } = jobConPlan();
   const d = hacerDispatch(job.plan, 1, { para: 'frontend' });
   job.dispatches.set(d.taskId, d);
@@ -231,14 +231,14 @@ test('segundo rechazo igual → RECHAZO_AGOTADO', () => {
   assert.throws(() => aplicarRechazo(job, d2, 'motivo dos'), /RECHAZO_AGOTADO/);
 });
 
-test('rechazo sin motivo lanza', () => {
+test('rejection without motivo throws', () => {
   const { job } = jobConPlan();
   const d = hacerDispatch(job.plan, 1, { para: 'frontend' });
   assert.throws(() => aplicarRechazo(job, d, '  '), /motivo/);
 });
 
-// ── loop devolución con corte ───────────────────────────────────────────
-test('devolución ronda<max → rework con re-dispatches', () => {
+// ── feedback loop with cutoff ───────────────────────────────────────────
+test('devolucion ronda<max → rework with re-dispatches', () => {
   const { job } = jobConPlan();
   const d = hacerDispatch(job.plan, 1, { para: 'frontend' });
   job.dispatches.set(d.taskId, d);
@@ -256,7 +256,7 @@ test('devolución ronda<max → rework con re-dispatches', () => {
   assert.equal(r.redispatches[0].para, 'frontend');
 });
 
-test('devolución ronda==max → escalado, sin re-dispatch', () => {
+test('devolucion ronda==max → escalado, no re-dispatch', () => {
   const { job } = jobConPlan();
   const r = aplicarDevolucion(job, {
     jobId: job.id, ronda: 3,
@@ -268,7 +268,7 @@ test('devolución ronda==max → escalado, sin re-dispatch', () => {
   assert.ok(job.escalado.motivo.includes('máx rondas'));
 });
 
-test('devolución de otro job lanza', () => {
+test('devolucion from another job throws', () => {
   const { job } = jobConPlan();
   assert.throws(
     () => aplicarDevolucion(job, { jobId: 'otro', ronda: 1, items: [{ severidad: 'bug', descripcion: 'x' }] }),
@@ -277,14 +277,14 @@ test('devolución de otro job lanza', () => {
 });
 
 // ── research ────────────────────────────────────────────────────────────
-test('researchQueries deriva hasta 4 queries del objetivo', () => {
+test('researchQueries derives up to 4 queries from objetivo', () => {
   const plan = crearPlan(briefValido(), { fases: FASES_OK });
   const qs = researchQueries(briefValido(), plan);
   assert.ok(qs.length >= 3 && qs.length <= 4);
   assert.ok(qs[0].includes('open source'));
 });
 
-test('runResearch con fetch fake junta hallazgos y corta en maxFuentes', async () => {
+test('runResearch with fake fetch gathers hallazgos and caps at maxFuentes', async () => {
   const res = await runResearch(['q1', 'q2', 'q3'], {
     fetchUrl: async (q) => `resultado de ${q}`,
     maxFuentes: 2
@@ -293,7 +293,7 @@ test('runResearch con fetch fake junta hallazgos y corta en maxFuentes', async (
   assert.ok(res[0].hallazgos[0].resumen.includes('q1'));
 });
 
-test('runResearch nunca lanza: fallo queda como error', async () => {
+test('runResearch never throws: failure stays as error', async () => {
   const res = await runResearch(['q1'], {
     fetchUrl: async () => { throw new Error('red caída'); }
   });
@@ -301,14 +301,14 @@ test('runResearch nunca lanza: fallo queda como error', async () => {
   assert.ok(res[0].error.includes('red caída'));
 });
 
-test('runResearch sin fetchUrl avisa y sigue', async () => {
+test('runResearch without fetchUrl warns and continues', async () => {
   const res = await runResearch(['q1']);
   assert.equal(res.length, 1);
   assert.equal(res[0].hallazgos.length, 0);
   assert.ok(res[0].nota.includes('sin fetchUrl'));
 });
 
-test('anexarResearch deja decisión explícita por hallazgo', () => {
+test('anexarResearch leaves an explicit decision per hallazgo', () => {
   const plan = crearPlan(briefValido(), { fases: FASES_OK });
   const con = anexarResearch(plan, [{ query: 'q', hallazgos: [{ fuente: 'f', resumen: 'lib X' }] }], ['usar lib X']);
   assert.equal(con.research[0].decision, 'usar lib X');
@@ -316,8 +316,8 @@ test('anexarResearch deja decisión explícita por hallazgo', () => {
   assert.equal(vacio.research[0].decision, 'se construye desde cero');
 });
 
-// ── voz ─────────────────────────────────────────────────────────────────
-test('voicePayload cubre los 5 eventos con su dueño', () => {
+// ── voice ─────────────────────────────────────────────────────────────────
+test('voicePayload covers the 5 events with their owner', () => {
   const plan = voicePayload({ tipo: 'plan_listo', fases: 3, resumen: 'a→b' });
   assert.equal(plan.speaker, 'Orquestador');
   assert.ok(plan.texto.includes('3 fases'));
@@ -338,14 +338,14 @@ test('voicePayload cubre los 5 eventos con su dueño', () => {
   assert.ok(apr.texto.includes('sin offline'));
 });
 
-test('voicePayload devuelve null con evento desconocido o vacío', () => {
+test('voicePayload returns null with unknown or empty event', () => {
   assert.equal(voicePayload(null), null);
   assert.equal(voicePayload({}), null);
   assert.equal(voicePayload({ tipo: 'fiesta' }), null);
 });
 
-// ── Orchestrator end-to-end en memoria ──────────────────────────────────
-test('flujo completo: intake → planificar → dispatch → entregar → aprobar', async () => {
+// ── Orchestrator end-to-end in memory ──────────────────────────────────
+test('full flow: intake → planificar → dispatch → entregar → aprobar', async () => {
   const voces = [];
   const orq = new Orchestrator({
     announce: (p) => voces.push(p),
@@ -380,11 +380,11 @@ test('flujo completo: intake → planificar → dispatch → entregar → aproba
     limitaciones: []
   });
   assert.equal(orq.estado(job.id).estado, 'aprobado');
-  // Voces: plan + dispatch + entrega + aprobado.
+  // Voices: plan + dispatch + entrega + aprobado.
   assert.deepEqual(voces.map((v) => v.speaker), ['Orquestador', 'Orquestador', 'frontend', 'Pablo']);
 });
 
-test('spawn sin cablear marca SIN_DUEÑO en vez de trabar', async () => {
+test('unwired spawn marks SIN_DUEÑO instead of blocking', async () => {
   const orq = new Orchestrator({ fetchUrl: async () => '' });
   const { job } = orq.intake(briefValido());
   await orq.planificar(job.id, [
@@ -394,14 +394,14 @@ test('spawn sin cablear marca SIN_DUEÑO en vez de trabar', async () => {
   assert.equal(job.estado, 'planificado');
 });
 
-test('announce que lanza no rompe el flujo', () => {
+test('throwing announce does not break the flow', () => {
   const orq = new Orchestrator({ announce: () => { throw new Error('llamada caída'); } });
   const { job } = orq.intake(briefValido());
   assert.equal(job.estado, 'brief_ok');
 });
 
-// ── hook voz en meeting-session: no-op sin llamada ───────────────────────
-test('announceTeamEvent es no-op sin reunión viva', async () => {
+// ── voice hook in meeting-session: no-op without a call ───────────────────────
+test('announceTeamEvent is a no-op without a live meeting', async () => {
   process.env.SESSION_LOG = '0';
   const { MeetingSession } = await import('../server/lib/meeting-session.js');
   const s = Object.create(MeetingSession.prototype);
@@ -410,7 +410,7 @@ test('announceTeamEvent es no-op sin reunión viva', async () => {
   assert.equal(s.announceTeamEvent({ tipo: 'plan_listo', fases: 2 }), null);
 });
 
-test('announceTeamEvent emite team_event con llamada viva', async () => {
+test('announceTeamEvent emits team_event with a live call', async () => {
   process.env.SESSION_LOG = '0';
   const { MeetingSession } = await import('../server/lib/meeting-session.js');
   const sent = [];

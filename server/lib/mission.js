@@ -1,14 +1,14 @@
-// Mission Control — snapshot de reuniones vivas (server).
-// Deps inyectadas (meetings/isLive/getCompany/teamFor) para no acoplar el
-// store ni el registry WS: testeable con fakes, cero imports pesados.
+// Mission Control — snapshot of live meetings (server).
+// Injected deps (meetings/isLive/getCompany/teamFor) to avoid coupling the
+// store or the WS registry: testable with fakes, zero heavy imports.
 
 /**
  * @param {object} deps
- * @param {Array} deps.meetings Filas de store.listMeetings (id, company_id, title, status, turn_count, last_active_at).
+ * @param {Array} deps.meetings Rows from store.listMeetings (id, company_id, title, status, turn_count, last_active_at).
  * @param {(id: string) => boolean} deps.isLive
  * @param {(companyId: string) => { id: string, name: string } | null} deps.getCompany
  * @param {(companyId: string) => Array<{ id: string, name: string, title?: string, role?: string, color?: string }>} deps.teamFor
- * @param {(meetingId: string) => string | null} [deps.goalFor] Título del proyecto de la reunión (opcional).
+ * @param {(meetingId: string) => string | null} [deps.goalFor] Meeting's project title (optional).
  */
 export function buildLiveSnapshot({ meetings, isLive, getCompany, teamFor, goalFor }) {
   const live = [];

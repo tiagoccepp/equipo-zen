@@ -8,7 +8,7 @@ import {
 } from '../server/lib/tester.js';
 import { registrarLearningsDeLaburo, contextoPrevio } from '../server/lib/learning.js';
 
-// Store fake mínimo con la API real que usa el hook.
+// Minimal fake store with the real API the hook uses.
 function fakeStore() {
   const learnings = [];
   let seq = 0;
@@ -32,9 +32,9 @@ function fakeStore() {
   };
 }
 
-// ---- critic: silencio cuando no hay mejora ----
+// ---- critic: silence when there is no improvement ----
 
-test('critic: silencio estructurado con entrega limpia', () => {
+test('critic: structured silence with a clean delivery', () => {
   const r = revisar(
     { texto: 'Implementé el endpoint con validación zod, tests en verde y docs.' },
     { rol: 'backend' }
@@ -43,12 +43,12 @@ test('critic: silencio estructurado con entrega limpia', () => {
   assert.equal(r.motivo, 'sin_mejora_concreta');
 });
 
-test('critic: silencio con texto vacío o rol sin checklist', () => {
+test('critic: silence with empty text or role without checklist', () => {
   assert.equal(revisar({ texto: '' }, { rol: 'backend' }).silencio, true);
   assert.equal(revisar({ texto: 'algo' }, { rol: 'rol-inexistente' }).silencio, true);
 });
 
-test('critic: mejora concreta con qué+porqué+cómo+evidencia', () => {
+test('critic: concrete improvement with que+porque+como+evidencia', () => {
   const r = revisar(
     { texto: 'Dejé un TODO: refactorizar esto después y un catch(e) {} vacío.' },
     { rol: 'backend' }
@@ -64,7 +64,7 @@ test('critic: mejora concreta con qué+porqué+cómo+evidencia', () => {
   assert.ok(ids.includes('error-silenciado'));
 });
 
-test('critic: severidades ordenadas bug → mejora → nit', () => {
+test('critic: severidades ordered bug → mejora → nit', () => {
   const r = revisar(
     { texto: 'Lorem ipsum dolor. Fue implementado por el equipo. Es robusto y sin fisuras.' },
     { rol: 'copy' }
@@ -76,7 +76,7 @@ test('critic: severidades ordenadas bug → mejora → nit', () => {
   assert.equal(r.mejoras[0].severidad, 'bug'); // lorem = placeholder
 });
 
-test('critic: anti-duplicados (misma señal 2 veces = 1)', () => {
+test('critic: anti-duplicates (same signal twice = 1)', () => {
   const dup = dedup([
     { severidad: 'mejora', que: 'Quedó un TODO sin resolver', como: 'Resolverlo ahora mismo' },
     { severidad: 'mejora', que: 'Quedó un TODO sin resolver en el código', como: 'Resolverlo ahora mismo ya' }
@@ -84,21 +84,21 @@ test('critic: anti-duplicados (misma señal 2 veces = 1)', () => {
   assert.equal(dup.length, 1);
 });
 
-test('critic: checklists existen para los 8 roles base', () => {
+test('critic: checklists exist for the 8 base roles', () => {
   for (const rol of ['backend', 'frontend', 'diseño', 'copy', 'marketing', 'ventas', 'data', 'devops']) {
     assert.ok(Array.isArray(CHECKLISTS_ROL[rol]) && CHECKLISTS_ROL[rol].length > 0, rol);
   }
 });
 
-test('critic: secreto hardcodeado = bug (devops)', () => {
+test('critic: hardcoded secret = bug (devops)', () => {
   const r = revisar({ texto: 'config: api_key = "sk-abc123456789" en el deploy' }, { rol: 'devops' });
   assert.equal(r.silencio, false);
   assert.equal(r.mejoras[0].severidad, 'bug');
 });
 
-// ---- tester: matriz persona×dimensión ----
+// ---- tester: persona×dimension matrix ----
 
-test('tester: matriz web = 4 personas × 4 dims', () => {
+test('tester: web matrix = 4 personas × 4 dims', () => {
   const plan = planDePrueba({ tipo: 'web', descripcion: 'landing', url: 'http://x' });
   assert.equal(plan.tipo, 'web');
   assert.deepEqual(plan.personas, ['usuario-nuevo', 'usuario-experto', 'ingeniero-design', 'comprador']);
@@ -106,27 +106,27 @@ test('tester: matriz web = 4 personas × 4 dims', () => {
   assert.equal(plan.celdas.length, 16);
 });
 
-test('tester: matriz cv = 2 personas sin visual', () => {
+test('tester: cv matrix = 2 personas without visual', () => {
   const plan = planDePrueba({ tipo: 'cv', descripcion: 'CV senior' });
   assert.deepEqual(plan.personas, ['ATS', 'recruiter']);
   assert.deepEqual(plan.dimensiones, ['funcional', 'destructivo', 'bordes']);
   assert.equal(plan.celdas.length, 6);
 });
 
-test('tester: matriz app = 2 personas × 4 dims', () => {
+test('tester: app matrix = 2 personas × 4 dims', () => {
   const plan = planDePrueba({ tipo: 'app', descripcion: 'app mobile' });
   assert.deepEqual(plan.personas, ['usuario', 'store-reviewer']);
   assert.equal(plan.celdas.length, 8);
 });
 
-test('tester: tipo desconocido → genérico (3 personas)', () => {
+test('tester: unknown tipo → generico (3 personas)', () => {
   const plan = planDePrueba({ tipo: 'informe', descripcion: 'reporte' });
   assert.equal(plan.tipo, 'generico');
   assert.deepEqual(plan.personas, ['usuario', 'experto', 'escéptico']);
   assert.equal(tipoDe({}), 'generico');
 });
 
-test('tester: cada check tiene pasos + mirar + pass', () => {
+test('tester: each check has pasos + mirar + pass', () => {
   const plan = planDePrueba({ tipo: 'web', descripcion: 'x' });
   for (const celda of plan.celdas) {
     assert.ok(celda.checks.length > 0, celda.id);
@@ -138,7 +138,7 @@ test('tester: cada check tiene pasos + mirar + pass', () => {
   }
 });
 
-test('tester: funcional deriva 1 check por criterio del brief', () => {
+test('tester: funcional derives 1 check per brief criterio', () => {
   const plan = planDePrueba({
     tipo: 'web', descripcion: 'x',
     brief: { criteriosExito: ['carga en <2s', 'formulario funciona'] }
@@ -150,7 +150,7 @@ test('tester: funcional deriva 1 check por criterio del brief', () => {
 
 // ---- juzgar ----
 
-test('juzgar: fails → devolución severizada + reproducible + persona', () => {
+test('juzgar: fails → severitized devolucion + reproducible + persona', () => {
   const j = juzgar([
     { persona: 'usuario-nuevo', dimension: 'funcional', estado: 'fail', observado: 'el form no envía', pasosRepro: ['abrir', 'enviar'], titulo: 'form roto' },
     { persona: 'ingeniero-design', dimension: 'destructivo', estado: 'fail', observado: 'crash con input largo', pasosRepro: ['pegar 5k chars'], titulo: 'crash input' },
@@ -159,7 +159,7 @@ test('juzgar: fails → devolución severizada + reproducible + persona', () => 
   assert.equal(j.veredicto, 'devolucion');
   assert.equal(j.ronda, 2);
   assert.equal(j.fallos.length, 2);
-  assert.equal(j.fallos[0].severidad, 'bug'); // destructivo primero
+  assert.equal(j.fallos[0].severidad, 'bug'); // destructive first
   assert.ok(j.fallos.every((f) => f.reproducible && f.persona && f.pasosRepro.length > 0));
   for (const f of j.fallos) {
     for (const k of FALLO_SCHEMA.filter((x) => !x.endsWith('?'))) {
@@ -169,7 +169,7 @@ test('juzgar: fails → devolución severizada + reproducible + persona', () => 
   assert.ok(j.resumenVoz.includes('Ronda 2'));
 });
 
-test('juzgar: sin pasosRepro → reproducible:false + faltaParaReproducir', () => {
+test('juzgar: no pasosRepro → reproducible:false + faltaParaReproducir', () => {
   const j = juzgar([
     { persona: 'ATS', dimension: 'funcional', estado: 'fail', observado: 'algo raro', titulo: 'raro' }
   ]);
@@ -177,7 +177,7 @@ test('juzgar: sin pasosRepro → reproducible:false + faltaParaReproducir', () =
   assert.ok(j.fallos[0].faltaParaReproducir);
 });
 
-test('juzgar: todo pass → aprobación con cobertura + limitaciones', () => {
+test('juzgar: all pass → aprobacion with cobertura + limitaciones', () => {
   const j = juzgar([
     { persona: 'ATS', dimension: 'funcional', estado: 'pass' },
     { persona: 'recruiter', dimension: 'bordes', estado: 'pass' }
@@ -192,7 +192,7 @@ test('juzgar: todo pass → aprobación con cobertura + limitaciones', () => {
 
 // ---- learnings ----
 
-test('learnings: registra al aprobar e idempotente en 2ª llamada', () => {
+test('learnings: records on approval and idempotent on 2nd call', () => {
   const store = fakeStore();
   const juicio = juzgar(
     [{ persona: 'usuario', dimension: 'funcional', estado: 'pass' }],
@@ -215,7 +215,7 @@ test('learnings: registra al aprobar e idempotente en 2ª llamada', () => {
   assert.ok(r2.reforzados > 0);
 });
 
-test('contextoPrevio: matchea por tema, respeta presupuesto, vacío sin ruido', () => {
+test('contextoPrevio: matches by topic, respects budget, empty without noise', () => {
   const store = fakeStore();
   store.insertLearning({ agentId: null, type: 'skill_note', content: 'Revisar contraste AA en cada entrega visual siempre.', confidence: 0.9 });
   store.insertLearning({ agentId: null, type: 'skill_note', content: 'Los deploy usan healthcheck obligatorio.', confidence: 0.9 });
@@ -227,7 +227,7 @@ test('contextoPrevio: matchea por tema, respeta presupuesto, vacío sin ruido', 
   assert.equal(contextoPrevio(store, 'backend', ''), '');
 });
 
-test('PERSONAS/DIMENSIONES exportados cubren los 4 tipos', () => {
+test('exported PERSONAS/DIMENSIONES cover the 4 tipos', () => {
   for (const t of ['web', 'cv', 'app', 'generico']) {
     assert.ok(PERSONAS_POR_TIPO[t].length >= 2, t);
     assert.ok(DIMENSIONES_POR_TIPO[t].length >= 3, t);

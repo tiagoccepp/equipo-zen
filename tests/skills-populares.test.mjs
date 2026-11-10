@@ -1,6 +1,6 @@
-// Tests TS (flujo-equipo-v3): 12 skills populares adaptadas (extractos verbatim).
-// Fuentes: obra/superpowers (MIT), anthropics/skills (Apache-2.0),
-// vercel-labs/agent-skills (MIT). Solo frontmatter propio + procedencia.
+// TS tests (flujo-equipo-v3): 12 adapted popular skills (verbatim excerpts).
+// Sources: obra/superpowers (MIT), anthropics/skills (Apache-2.0),
+// vercel-labs/agent-skills (MIT). Only own frontmatter + provenance.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -28,14 +28,14 @@ const NUEVAS = {
   'react-best-practices': { url: 'vercel-labs/agent-skills', lic: 'MIT', roles: ['role:frontend'] }
 };
 
-// Roles que ya existen en el repo (convención): nada fantasma.
+// Roles that already exist in the repo (convention): nothing phantom.
 const ROLES_REALES = new Set([
   'role:orquestador', 'role:tester', 'role:marketing', 'role:ventas',
   'role:copy', 'role:diseno', 'role:frontend', 'role:backend',
   'role:data', 'role:devops'
 ]);
 
-test('las 12 populares cargan: frontmatter propio + procedencia + techo 1500', () => {
+test('the 12 popular ones load: own frontmatter + provenance + 1500 ceiling', () => {
   __resetSkillsCache();
   const names = listSkillNames();
   assert.equal(new Set(names).size, names.length, 'sin nombres duplicados');
@@ -58,7 +58,7 @@ test('las 12 populares cargan: frontmatter propio + procedencia + techo 1500', (
   }
 });
 
-test('sin agent las 12 matchean por keywords (chat)', () => {
+test('without agent all 12 match by keywords (chat)', () => {
   __resetSkillsCache();
   const FRASES = {
     'depuracion-sistematica': 'hay un bug en producción, investigá la causa raíz del error',
@@ -80,7 +80,7 @@ test('sin agent las 12 matchean por keywords (chat)', () => {
   }
 });
 
-test('skillsForRole trae las nuevas por rol', () => {
+test('skillsForRole brings the new ones by role', () => {
   __resetSkillsCache();
   assert.ok(skillsForRole('orquestador').includes('planificar-tareas'), 'orquestador→planificar');
   assert.ok(skillsForRole('orquestador').includes('agentes-paralelos'), 'orquestador→paralelos');
@@ -91,7 +91,7 @@ test('skillsForRole trae las nuevas por rol', () => {
   assert.ok(skillsForRole('backend').includes('depuracion-sistematica'), 'backend→depuracion');
 });
 
-test('dieta D6: render con las nuevas no pasa el techo', () => {
+test('diet D6: render with the new ones stays under the ceiling', () => {
   __resetSkillsCache();
   const out = renderSkillsSection(
     'hay un bug, escribí el test que falla, verificá con evidencia antes de afirmar y pedí code review del pull request',

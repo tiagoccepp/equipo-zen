@@ -10,8 +10,8 @@ function nuevaEmpresa() {
   return { store, company };
 }
 
-// Un proyecto con todo lo que se le puede colgar: reunión con turnos, tareas
-// con corridas y comentarios. Es el caso que tiene que quedar limpio al borrar.
+// A project with everything that can hang off it: meeting with turns, tasks
+// with runs and comments. It is the case that must be left clean when deleted.
 function proyectoPoblado(store, company, titulo = 'Landing del restaurante') {
   const project = store.createProject({ companyId: company.id, title: titulo, brief: 'Una landing con menú.' });
   const meeting = store.createMeeting({ companyId: company.id, goalId: project.id });
@@ -28,7 +28,7 @@ function proyectoPoblado(store, company, titulo = 'Landing del restaurante') {
   return { project, meeting, taskId, agente };
 }
 
-test('el proyecto es el contenedor: sus reuniones cuelgan de él', () => {
+test('the project is the container: its meetings hang off it', () => {
   const { store, company } = nuevaEmpresa();
   const { project, meeting } = proyectoPoblado(store, company);
 
@@ -36,7 +36,7 @@ test('el proyecto es el contenedor: sus reuniones cuelgan de él', () => {
   assert.deepEqual(store.meetingsForProject(project.id).map((m) => m.id), [meeting.id]);
 });
 
-test('borrar un proyecto se lleva reuniones, turnos, tareas, corridas y comentarios', () => {
+test('deleting a project takes meetings, turns, tasks, runs, and comments with it', () => {
   const { store, company } = nuevaEmpresa();
   const { project, meeting, taskId } = proyectoPoblado(store, company);
 
@@ -54,7 +54,7 @@ test('borrar un proyecto se lleva reuniones, turnos, tareas, corridas y comentar
   assert.equal(store.recentWorkRuns(company.id).length, 0);
 });
 
-test('borrar un proyecto no toca los demás', () => {
+test('deleting a project does not touch the others', () => {
   const { store, company } = nuevaEmpresa();
   const uno = proyectoPoblado(store, company, 'Proyecto uno');
   const dos = proyectoPoblado(store, company, 'Proyecto dos');
@@ -67,7 +67,7 @@ test('borrar un proyecto no toca los demás', () => {
   assert.equal(store.recentTurns(dos.meeting.id).length, 2);
 });
 
-test('dos proyectos con el mismo título no comparten carpeta', () => {
+test('two projects with the same title do not share a folder', () => {
   const { store, company } = nuevaEmpresa();
   const uno = store.createProject({ companyId: company.id, title: 'Landing' });
   const dos = store.createProject({ companyId: company.id, title: 'Landing' });
@@ -76,9 +76,9 @@ test('dos proyectos con el mismo título no comparten carpeta', () => {
   assert.equal(store.slugSharedWithOthers(uno.id), false);
 });
 
-// Las metas anteriores a los proyectos quedaron TODAS con slug 'general'
-// (migración v5). Borrar una no puede llevarse los archivos de las otras.
-test('una carpeta compartida no se marca para borrar', () => {
+// Goals from before projects ALL ended up with slug 'general'
+// (migration v5). Deleting one must not take the others' files.
+test('a shared folder is not marked for deletion', () => {
   const { store, company } = nuevaEmpresa();
   const uno = store.createProject({ companyId: company.id, title: 'General' });
   const dos = store.createProject({ companyId: company.id, title: 'Otro' });
@@ -88,9 +88,9 @@ test('una carpeta compartida no se marca para borrar', () => {
   assert.equal(store.deleteProject(uno.id).carpetaCompartida, true);
 });
 
-// Lo que el equipo tiene que recibir para construir lo correcto: las palabras
-// del usuario. Sin esto se inventaban un proyecto genérico.
-test('el pedido del usuario viaja del turno de la reunión al proyecto', () => {
+// What the team needs to receive to build the right thing: the user's words.
+// Without this they invented a generic project.
+test('the user request travels from the meeting turn to the project', () => {
   const { store, company } = nuevaEmpresa();
   const project = store.createProject({ companyId: company.id, title: 'Fasa' });
   const meeting = store.createMeeting({ companyId: company.id, goalId: project.id });
@@ -106,7 +106,7 @@ test('el pedido del usuario viaja del turno de la reunión al proyecto', () => {
   ], 'solo los turnos del usuario, en orden');
 });
 
-test('el pedido de otro proyecto no se filtra', () => {
+test("another project's request does not leak", () => {
   const { store, company } = nuevaEmpresa();
   const uno = store.createProject({ companyId: company.id, title: 'Uno' });
   const dos = store.createProject({ companyId: company.id, title: 'Dos' });
@@ -119,8 +119,8 @@ test('el pedido de otro proyecto no se filtra', () => {
   assert.deepEqual(store.userRequestForGoal(dos.id), ['panadería']);
 });
 
-// El bug que mandó todo el trabajo a un proyecto fantasma llamado con la fecha.
-test('una reunión huérfana la adopta el proyecto en el que estás', () => {
+// The bug that sent all the work to a ghost project named with the date.
+test('an orphan meeting is adopted by the project you are in', () => {
   const { store, company } = nuevaEmpresa();
   const huerfana = store.createMeeting({ companyId: company.id });
   assert.equal(huerfana.goal_id, null);
@@ -130,7 +130,7 @@ test('una reunión huérfana la adopta el proyecto en el que estás', () => {
   assert.equal(store.getMeeting(huerfana.id).goal_id, project.id);
 });
 
-test('a una reunión que ya tiene proyecto no se le roba', () => {
+test('a meeting that already has a project is not stolen', () => {
   const { store, company } = nuevaEmpresa();
   const uno = store.createProject({ companyId: company.id, title: 'Uno' });
   const dos = store.createProject({ companyId: company.id, title: 'Dos' });
@@ -140,7 +140,7 @@ test('a una reunión que ya tiene proyecto no se le roba', () => {
   assert.equal(store.getMeeting(meeting.id).goal_id, uno.id);
 });
 
-test('listProjects trae el conteo de lo que cuelga de cada proyecto', () => {
+test('listProjects brings the count of what hangs off each project', () => {
   const { store, company } = nuevaEmpresa();
   const { project, taskId } = proyectoPoblado(store, company);
   store.finishTask(taskId, { status: 'done', summary: 'listo' });
@@ -152,13 +152,13 @@ test('listProjects trae el conteo de lo que cuelga de cada proyecto', () => {
   assert.equal(fila.done_count, 1);
 });
 
-// ── El esquema de archivos ───────────────────────────────────────────────
+// ── The file map ───────────────────────────────────────────────
 //
-// La causa de las tareas bloqueadas: el equipo repartía por disciplina
-// ("definir la paleta", "implementar el parallax", "prototipo en Figma") y
-// esas tareas no mapean a ningún archivo, así que agotaban los pasos.
+// The cause of the blocked tasks: the team split by discipline
+// ("definir la paleta", "implementar el parallax", "prototipo en Figma") and
+// those tasks map to no file, so they exhausted the steps.
 
-test('el archivo destino se guarda con la tarea y dice quién es el dueño', () => {
+test('the target file is saved with the task and says who the owner is', () => {
   const { store, company } = nuevaEmpresa();
   const project = store.createProject({ companyId: company.id, title: 'Menú' });
   const [uno, dos] = store.listAgents({ companyId: company.id }).filter((a) => a.role === 'worker');
@@ -174,7 +174,7 @@ test('el archivo destino se guarda con la tarea y dice quién es el dueño', () 
   assert.equal(duenos[1].agent_id, dos.id);
 });
 
-test('una decisión no se lleva archivo', () => {
+test('a decision takes no file', () => {
   const { store, company } = nuevaEmpresa();
   const project = store.createProject({ companyId: company.id, title: 'Menú' });
   const agente = store.listAgents({ companyId: company.id })[0];

@@ -1,7 +1,7 @@
-// TV2 — motores de voz elegibles + watchdog selectivo.
-// Selección STT/TTS (orden, elegido-solo, cloud-sin-key-skip) y watchdog
-// selectivo (spawn solo elegido, kill solo hijo-propio-no-elegido,
-// defaults parakeet+piper). Todo con fakes: cero red, cero procesos.
+// TV2 — eligible voice engines + selective watchdog.
+// STT/TTS selection (order, elected-only, cloud-without-key-skip) and selective
+// watchdog (spawn elected-only, kill own-child-non-elected-only,
+// parakeet+piper defaults). All with fakes: zero network, zero processes.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -26,7 +26,7 @@ import {
   startSidecarWatchdog
 } from '../server/lib/sidecars.js';
 
-// Store stub mutable (cada archivo de test corre en su propio proceso).
+// Mutable store stub (each test file runs in its own process).
 const db = new Map();
 initSettings(
   {
@@ -44,14 +44,14 @@ afterEach(() => {
 
 // ── tts.order: parse + defaults ──────────────────────────────────────────
 
-test('parseTtsOrder: filtra desconocidos, dedup, tolera caja/espacios', () => {
+test('parseTtsOrder: filters unknowns, dedups, tolerates case/spaces', () => {
   assert.deepEqual(parseTtsOrder('piper,supertonic,deepgram,edge'), ['piper', 'supertonic', 'deepgram', 'edge']);
   assert.deepEqual(parseTtsOrder('Piper , PIPER, noexiste, edge'), ['piper', 'edge']);
   assert.deepEqual(parseTtsOrder(''), []);
   assert.deepEqual(parseTtsOrder('???'), []);
 });
 
-test('getTtsOrder default = legacy: deepgram → locales → edge (local-first keyless)', () => {
+test('getTtsOrder default = legacy: deepgram → local → edge (local-first keyless)', () => {
   assert.deepEqual(getTtsOrder(), ['deepgram', 'piper', 'supertonic', 'edge']);
   assert.deepEqual(defaultTtsOrder('supertonic'), ['deepgram', 'supertonic', 'piper', 'edge']);
   db.set('tts.engine', 'supertonic');
@@ -59,7 +59,7 @@ test('getTtsOrder default = legacy: deepgram → locales → edge (local-first k
   assert.equal(isTtsOrderSet(), false);
 });
 
-test('getTtsOrder: override manda; inválido cae al default', () => {
+test('getTtsOrder: override wins; invalid falls back to default', () => {
   db.set('tts.order', 'piper');
   assert.deepEqual(getTtsOrder(), ['piper']);
   assert.equal(isTtsOrderSet(), true);
@@ -67,7 +67,7 @@ test('getTtsOrder: override manda; inválido cae al default', () => {
   assert.deepEqual(getTtsOrder(), ['deepgram', 'piper', 'supertonic', 'edge']);
 });
 
-test('applySettings/publicSettings: tts.order editable, expuesto, validado', () => {
+test('applySettings/publicSettings: tts.order editable, exposed, validated', () => {
   const applied = applySettings({ 'tts.order': 'supertonic,piper' });
   assert.ok(applied.includes('tts.order'));
   assert.equal(publicSettings().tts.order, 'supertonic,piper');
@@ -79,7 +79,7 @@ test('applySettings/publicSettings: tts.order editable, expuesto, validado', () 
   assert.equal(isTtsOrderSet(), false, 'vacío borra el override');
 });
 
-// ── synthesizeTtsOrdered: elegido manda, resto out ───────────────────────
+// ── synthesizeTtsOrdered: elected wins, rest out ───────────────────────
 
 const PART = [{ data: 'eA==', mimeType: 'audio/pcm;rate=16000' }];
 const boom = async () => { throw new Error('x'); };
@@ -93,7 +93,7 @@ function ttsStubs(calls, impls = {}) {
   return runners;
 }
 
-test('TTS: el primero que responde gana; los siguientes ni se intentan', async () => {
+test('TTS: first to answer wins; the rest are not even tried', async () => {
   const calls = [];
   const { parts, lastError } = await synthesizeTtsOrdered({
     text: 'hola', voice: 'M1',
@@ -106,7 +106,7 @@ test('TTS: el primero que responde gana; los siguientes ni se intentan', async (
   assert.deepEqual(calls, ['piper']);
 });
 
-test('TTS elegido-solo: order de 1 motor, el resto out aunque fallen', async () => {
+test('TTS elected-only: 1-engine order, rest out even if they fail', async () => {
   const calls = [];
   const { parts } = await synthesizeTtsOrdered({
     text: 'hola', voice: 'M1',
@@ -117,7 +117,7 @@ test('TTS elegido-solo: order de 1 motor, el resto out aunque fallen', async () 
   assert.deepEqual(calls, ['supertonic']);
 });
 
-test('TTS: deepgram sin key ni se intenta; con key sí', async () => {
+test('TTS: deepgram without key is not even tried; with key it is', async () => {
   const calls = [];
   const r1 = await synthesizeTtsOrdered({
     text: 'hola', voice: 'M1',
@@ -138,7 +138,7 @@ test('TTS: deepgram sin key ni se intenta; con key sí', async () => {
   assert.deepEqual(calls, ['deepgram'], 'con key: primero');
 });
 
-test('TTS: edge se salta en parts (resuelve en speakSentence); vacío/error pasa al siguiente', async () => {
+test('TTS: edge skipped in parts (resolves in speakSentence); empty/error moves to next', async () => {
   const calls = [];
   const { parts, lastError } = await synthesizeTtsOrdered({
     text: 'hola', voice: 'M1',
@@ -148,7 +148,7 @@ test('TTS: edge se salta en parts (resuelve en speakSentence); vacío/error pasa
   assert.deepEqual(parts, PART);
   assert.equal(lastError, null);
   assert.deepEqual(calls, ['piper', 'supertonic']);
-  // Error local → siguiente + lastError; deepgram fallado es silencioso.
+  // Local error → next + lastError; failed deepgram is silent.
   const calls2 = [];
   const r2 = await synthesizeTtsOrdered({
     text: 'hola', voice: 'M1',
@@ -165,17 +165,17 @@ test('TTS: edge se salta en parts (resuelve en speakSentence); vacío/error pasa
   assert.ok(r3.lastError instanceof Error, 'todo fallado → parts [] + lastError');
 });
 
-test('shouldUseEdgeFallback: default sí; order sin edge no', () => {
+test('shouldUseEdgeFallback: default yes; order without edge no', () => {
   assert.equal(shouldUseEdgeFallback(), true);
   assert.equal(shouldUseEdgeFallback(['piper']), false);
   assert.equal(shouldUseEdgeFallback(['piper', 'edge']), true);
 });
 
-// ── generateAudioParts: delegación con fetch fake (cero red) ─────────────
+// ── generateAudioParts: delegation with fake fetch (zero network) ─────────────
 
 const AGENTE = { id: 't', name: 'T', voice: 'M1' };
 
-// WAV mínimo válido para wavToPcm (RIFF + fmt + data con 2 samples).
+// Minimal valid WAV for wavToPcm (RIFF + fmt + data with 2 samples).
 function fakePiperWav() {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
@@ -194,14 +194,14 @@ function fakePiperWav() {
   return Buffer.concat([header, Buffer.from([1, 0, 2, 0])]);
 }
 
-test('generateAudioParts: order piper → solo Piper habla (fetch fake)', async () => {
+test('generateAudioParts: piper order → only Piper speaks (fake fetch)', async () => {
   db.set('tts.order', 'piper');
   const urls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url) => {
     urls.push(String(url));
     const wav = fakePiperWav();
-    // ArrayBuffer real (no Buffer pooleado): wavToPcm hace new DataView().
+    // Real ArrayBuffer (not pooled Buffer): wavToPcm does new DataView().
     const ab = wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength);
     return { ok: true, arrayBuffer: async () => ab };
   });
@@ -217,21 +217,21 @@ test('generateAudioParts: order piper → solo Piper habla (fetch fake)', async 
   }
 });
 
-test('generateAudioParts: order edge/deepgram-sin-key → cero fetches (ni se intentan)', async () => {
+test('generateAudioParts: edge/no-key-deepgram order → zero fetches (not even tried)', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => { throw new Error('fetch inesperado: motor no-elegido intentado'); });
   try {
     const rt = new LiveAgentRuntime(AGENTE, { hasKeys: () => true }, { recentContext: () => '' }, null);
     db.set('tts.order', 'edge');
     assert.deepEqual(await rt.generateAudioParts('hola', () => {}, null), []);
-    db.set('tts.order', 'deepgram'); // sin key en el store stub
+    db.set('tts.order', 'deepgram'); // no key in the store stub
     assert.deepEqual(await rt.generateAudioParts('hola', () => {}, null), []);
   } finally {
     globalThis.fetch = realFetch;
   }
 });
 
-test('generateAudioParts default keyless: Piper primero (local-first)', async () => {
+test('generateAudioParts keyless default: Piper first (local-first)', async () => {
   const urls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url) => {
@@ -250,17 +250,17 @@ test('generateAudioParts default keyless: Piper primero (local-first)', async ()
   }
 });
 
-// ── Watchdog selectivo ───────────────────────────────────────────────────
+// ── Selective watchdog ───────────────────────────────────────────────────
 
 const spec = (name) => ({ name, health: `http://${name}/health`, spawn: { cmd: 'x', args: [name] } });
 
-test('isSpecElected: specs no-locales siempre elegibles (legacy fail-open)', () => {
+test('isSpecElected: non-local specs always eligible (legacy fail-open)', () => {
   assert.equal(isSpecElected('x', new Set()), true);
   assert.equal(isSpecElected('parakeet', new Set()), false);
   assert.equal(isSpecElected('parakeet', new Set(['parakeet'])), true);
 });
 
-test('shouldRestart: no-elegido nunca spawnea (reason not-elected)', () => {
+test('shouldRestart: non-elected never spawns (reason not-elected)', () => {
   const r = shouldRestart(spec('whisper'), { downs: 9, restarts: [] }, Date.now(), { elected: false });
   assert.equal(r.restart, false);
   assert.equal(r.reason, 'not-elected');
@@ -268,7 +268,7 @@ test('shouldRestart: no-elegido nunca spawnea (reason not-elected)', () => {
   assert.equal(r2.restart, true, 'default elected=true (compat)');
 });
 
-test('watchdog: spawn SOLO elegido; no-elegido caído no spawnea', async () => {
+test('watchdog: spawn elected ONLY; down non-elected does not spawn', async () => {
   const spawns = [];
   const wd = startSidecarWatchdog({
     intervalMs: 60000,
@@ -290,7 +290,7 @@ test('watchdog: spawn SOLO elegido; no-elegido caído no spawnea', async () => {
   }
 });
 
-test('watchdog: kill SOLO hijo-propio-no-elegido; ajeno ni se toca', async () => {
+test('watchdog: kill own-child-non-elected ONLY; foreign one untouched', async () => {
   let elected = ['parakeet'];
   const health = { parakeet: false, whisper: true }; // whisper UP ajeno
   const kills = [];
@@ -308,7 +308,7 @@ test('watchdog: kill SOLO hijo-propio-no-elegido; ajeno ni se toca', async () =>
     await wd.tick(Date.now());
     await wd.tick(Date.now()); // parakeet elegido+down → spawn (pid 4242)
     assert.equal(kills.length, 0);
-    // Tito deselige parakeet: whisper sigue UP ajeno (no hijo propio).
+    // Tito deselects parakeet: whisper stays UP foreign (not own child).
     elected = [];
     await wd.tick(Date.now());
     assert.deepEqual(kills, [{ name: 'parakeet', pid: 4242 }], 'solo el hijo propio');
@@ -319,7 +319,7 @@ test('watchdog: kill SOLO hijo-propio-no-elegido; ajeno ni se toca', async () =>
   }
 });
 
-test('watchdog: getElected roto → fail-open (spawnea, nunca mata)', async () => {
+test('watchdog: broken getElected → fail-open (spawns, never kills)', async () => {
   const spawns = [];
   const kills = [];
   const wd = startSidecarWatchdog({
@@ -341,15 +341,15 @@ test('watchdog: getElected roto → fail-open (spawnea, nunca mata)', async () =
   }
 });
 
-test('defaultElectedSidecars: sin settings parakeet+piper; seteados mandan', () => {
+test('defaultElectedSidecars: no settings parakeet+piper; set ones win', () => {
   assert.deepEqual([...defaultElectedSidecars()].sort(), ['parakeet', 'piper']);
-  // Caso real Tito: stt.order cloud-first con parakeet + tts sin setear.
+  // Real Tito case: cloud-first stt.order with parakeet + unset tts.
   db.set('stt.order', 'deepgram,parakeet,groq');
   assert.deepEqual([...defaultElectedSidecars()].sort(), ['parakeet', 'piper']);
-  // Tito elige supertonic: piper out, supertonic in.
+  // Tito picks supertonic: piper out, supertonic in.
   db.set('tts.order', 'supertonic');
   assert.deepEqual([...defaultElectedSidecars()].sort(), ['parakeet', 'supertonic']);
-  // STT solo cloud: parakeet out.
+  // STT cloud-only: parakeet out.
   db.set('stt.order', 'deepgram,groq');
   assert.deepEqual([...defaultElectedSidecars()].sort(), ['supertonic']);
 });

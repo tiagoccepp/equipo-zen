@@ -1,19 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Glifos A: repertorio 1/2 del motor de gestos (T2a, Fase 2).
+// Glyphs A: 1/2 repertoire of the gesture engine (T2a, Phase 2).
 //
-// Lógica PURA: sin DOM, sin canvas, sin imports (cero dependencias para
-// que node la importe directo en los tests vía type-stripping y vite la
-// bundleree sin ciclos). Solo sintaxis erasable (tsconfig la exige).
+// PURE logic: no DOM, no canvas, no imports (zero dependencies so node
+// imports it directly in tests via type-stripping and vite bundles it
+// without cycles). Erasable syntax only (tsconfig requires it).
 //
-// Contrato de puntos (igual que fx/morph.ts): Float32Array plano
-// [x,y,z, …], cada eje en [-1,1]. Determinista: mismo (count, seed) →
-// mismos puntos. El renderer los escala por el radio del slot.
+// Point contract (same as fx/morph.ts): flat Float32Array [x,y,z, …],
+// each axis in [-1,1]. Deterministic: same (count, seed) → same points.
+// The renderer scales them by the slot radius.
 //
-// Coordinación T2b: este archivo define el `interface Glyph` (único).
-// glyphs-b.ts importa el tipo de acá (NO lo redefine) y glyphs-index.ts
-// combina A+B y llama a `registerExtraGlyphs(GLYPHS_B)` en load. Los
-// renderers (orb-morph/orb3d) usan `lookupGlyph` de ESTE archivo, que ya
-// consulta A + extras registrados. Main debe importar el índice en app.ts.
+// T2b coordination: this file defines the `interface Glyph` (single one).
+// glyphs-b.ts imports the type from here (does NOT redefine it) and
+// glyphs-index.ts combines A+B and calls `registerExtraGlyphs(GLYPHS_B)`
+// at load. Renderers (orb-morph/orb3d) use `lookupGlyph` from THIS file,
+// which already queries A + registered extras. Main must import the index in app.ts.
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface Glyph {
@@ -27,7 +27,7 @@ const TAU = Math.PI * 2;
 type Rng = () => number;
 type Pt2 = [number, number];
 
-// ── Aleatorio determinista (copia local: cero imports a propósito) ─────
+// ── Deterministic random (local copy: zero imports on purpose) ─────
 
 function hashStr(value: string): number {
   let h = 2166136261;
@@ -48,9 +48,9 @@ function mulberry32(seed: number): Rng {
   };
 }
 
-// ── Normalización de nombres (espejo de server/lib/gestos.js) ──────────
-// Minúsculas + sin tildes/ñ→n + espacios→guion_bajo. "GUIÑO", "guino" y
-// "Guiño" resuelven al glifo `guiño`.
+// ── Name normalization (mirror of server/lib/gestos.js) ──────────
+// Lowercase + no accents/ñ→n + spaces→underscore. "GUIÑO", "guino" and
+// "Guiño" all resolve to glyph `guiño`.
 
 export function foldGlyphName(name: string): string {
   return String(name ?? '')
@@ -61,9 +61,9 @@ export function foldGlyphName(name: string): string {
     .replace(/\s+/g, '_');
 }
 
-// ── Primitivas de muestreo (todo empuja n*3 números a `out`) ────────────
+// ── Sampling primitives (everything pushes n*3 numbers into `out`) ───
 
-// Reparte `count` entre pesos con resto exacto (la suma DA count).
+// Splits `count` across weights with exact remainder (the sum GIVES count).
 function split(count: number, weights: number[]): number[] {
   const total = Math.max(0, Math.round(count));
   if (total === 0) return weights.map(() => 0);
@@ -79,7 +79,7 @@ function split(count: number, weights: number[]): number[] {
   return out;
 }
 
-// Aplica [peso, fill] sobre el count total.
+// Applies [weight, fill] over the total count.
 function parts(out: number[], rng: Rng, count: number, defs: Array<[number, (n: number) => void]>): void {
   const counts = split(count, defs.map((d) => d[0]));
   defs.forEach((d, i) => d[1](counts[i] ?? 0));
@@ -203,7 +203,7 @@ function lemni(out: number[], rng: Rng, cx: number, cy: number, s: number, n: nu
   }
 }
 
-// Rayos radiales (lámpara, sol): n se reparte entre los ángulos dados.
+// Radial rays (lamp, sun): n is split across the given angles.
 function rays(out: number[], rng: Rng, cx: number, cy: number, r0: number, r1: number, angles: number[], n: number, j = 0.01): void {
   const counts = split(n, angles.map(() => 1));
   angles.forEach((a, i) => {
@@ -211,7 +211,7 @@ function rays(out: number[], rng: Rng, cx: number, cy: number, r0: number, r1: n
   });
 }
 
-// ── Fábrica ─────────────────────────────────────────────────────────────
+// ── Factory ─────────────────────────────────────────────────────────
 
 function makeGlyph(name: string, tags: string[], draw: (out: number[], rng: Rng, count: number) => void): Glyph {
   const salt = hashStr(name);
@@ -236,11 +236,11 @@ function makeGlyph(name: string, tags: string[], draw: (out: number[], rng: Rng,
   };
 }
 
-// ── 50 glifos (nombres español_snake, únicos en A; ver reporte T2a) ─────
-// Familias: 12 manos · 10 caras · 12 símbolos · 10 objetos · 6 letras.
+// ── 50 glyphs (spanish_snake names, unique in A; see T2a report) ─────
+// Families: 12 hands · 10 faces · 12 symbols · 10 objects · 6 letters.
 
 export const GLYPHS_A: Glyph[] = [
-  // — Manos —
+  // — Hands —
   makeGlyph('saludar', ['mano', 'gesto', 'hola'], (out, rng, count) => {
     parts(out, rng, count, [
       [1, (n) => disc(out, rng, 0, -0.35, 0.28, n)],
@@ -370,7 +370,7 @@ export const GLYPHS_A: Glyph[] = [
     ]);
   }),
 
-  // — Caras —
+  // — Faces —
   makeGlyph('sonrisa', ['cara', 'feliz', 'alegria'], (out, rng, count) => {
     parts(out, rng, count, [
       [3, (n) => circ(out, rng, 0, 0, 0.7, n)],
@@ -497,7 +497,7 @@ export const GLYPHS_A: Glyph[] = [
     ]);
   }),
 
-  // — Símbolos —
+  // — Symbols —
   makeGlyph('corazon', ['simbolo', 'amor', 'like'], (out, rng, count) => {
     parts(out, rng, count, [
       [3, (n) => heart(out, rng, 0, -0.05, 0.82, n)],
@@ -566,7 +566,7 @@ export const GLYPHS_A: Glyph[] = [
     ]);
   }),
 
-  // — Objetos —
+  // — Objects —
   makeGlyph('taza', ['objeto', 'cafe', 'pausa'], (out, rng, count) => {
     parts(out, rng, count, [
       [3, (n) => poly(out, rng, [[-0.32, -0.5], [0.32, -0.5], [0.32, 0.2], [-0.32, 0.2]], n, 0.012, true)],
@@ -670,7 +670,7 @@ export const GLYPHS_A: Glyph[] = [
     ]);
   }),
 
-  // — Letras —
+  // — Letters —
   makeGlyph('letra_a', ['letra', 'alfabeto'], (out, rng, count) => {
     parts(out, rng, count, [
       [3, (n) => poly(out, rng, [[-0.35, -0.6], [0, 0.6], [0.35, -0.6]], n)],
@@ -703,18 +703,18 @@ export const GLYPHS_A: Glyph[] = [
   })
 ];
 
-// ── Registro ────────────────────────────────────────────────────────────
+// ── Registry ────────────────────────────────────────────────────────
 
 export const GLYPH_A_NAMES: string[] = GLYPHS_A.map((g) => g.name);
 
 const BY_NAME_A = new Map<string, Glyph>();
 for (const g of GLYPHS_A) BY_NAME_A.set(foldGlyphName(g.name), g);
 
-// Extras de T2b (glyphs-index.ts registra GLYPHS_B acá en load).
+// T2b extras (glyphs-index.ts registers GLYPHS_B here at load).
 const EXTRAS = new Map<string, Glyph>();
 
-// Registra glifos extra (B). No pisa A ante colisión: gana A y el nombre
-// colisionado se reporta en el conteo `skipped` (main resuelve).
+// Registers extra glyphs (B). Never overwrites A on collision: A wins and
+// the colliding name is reported in the `skipped` count (main resolves it).
 export function registerExtraGlyphs(glyphs: Glyph[]): { added: number; skipped: string[] } {
   let added = 0;
   const skipped: string[] = [];
@@ -734,7 +734,7 @@ export function lookupGlyphA(name: string): Glyph | null {
   return BY_NAME_A.get(foldGlyphName(name)) ?? null;
 }
 
-// Lookup full: A + extras de B. Case-insensitive, tolera tildes/espacios.
+// Full lookup: A + B extras. Case-insensitive, tolerates accents/spaces.
 export function lookupGlyph(name: string): Glyph | null {
   const key = foldGlyphName(name);
   return BY_NAME_A.get(key) ?? EXTRAS.get(key) ?? null;

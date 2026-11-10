@@ -1,8 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════
-// fx/palette.ts — command bar Ctrl+K. Sin dependencias; estilos base en
-// motion.css (.fx-palette*), estética consola en app.css (overrides).
-// Acciones con grupo + atajo visible, estado vacío honesto, footer de
-// ayuda, setActions() para listas dinámicas (jobs recientes, etc).
+// fx/palette.ts — Ctrl+K command bar. No dependencies; base styles in
+// motion.css (.fx-palette*), console aesthetics in app.css (overrides).
+// Actions with group + visible shortcut, honest empty state, help footer,
+// setActions() for dynamic lists (recent jobs, etc).
 //
 //   const pal = mountPalette({
 //     actions: [
@@ -11,31 +11,31 @@
 //     ],
 //     onAction: (id) => { … }
 //   });
-//   pal.setActions([...]); // refresca la lista (ej. jobs recientes)
+//   pal.setActions([...]); // refreshes the list (e.g. recent jobs)
 //   // … pal.dispose()
 // ═══════════════════════════════════════════════════════════════════════
 
 export type PaletteAction = {
   id: string;
   label: string;
-  /** Grupo del encabezado (Views, Voice, Jobs…). Sin grupo = sin header. */
+  /** Header group (Views, Voice, Jobs…). No group = no header. */
   group?: string;
-  /** Texto secundario a la derecha (descripción corta). */
+  /** Secondary text on the right (short description). */
   hint?: string;
-  /** Atajo visible estilo kbd (ej. '1', '⌘K'). */
+  /** Visible kbd-style shortcut (e.g. '1', '⌘K'). */
   kbd?: string;
-  /** Acción destructiva/atención: tinte de acento cálido. */
+  /** Destructive/caution action: warm accent tint. */
   danger?: boolean;
 };
 
 export type PaletteOptions = {
   actions: PaletteAction[];
   onAction: (id: string) => void;
-  // Atajo de apertura. Default 'k' → Ctrl+K (⌘+K en mac).
+  // Open shortcut. Default 'k' → Ctrl+K (⌘+K on mac).
   shortcutKey?: string;
-  // Placeholder del input. Default 'Type a command…'.
+  // Input placeholder. Default 'Type a command…'.
   placeholder?: string;
-  // Texto del vacío. Default 'No matching commands'.
+  // Empty-state text. Default 'No matching commands'.
   emptyText?: string;
 };
 
@@ -43,7 +43,7 @@ export type PaletteHandle = {
   open: () => void;
   close: () => void;
   toggle: () => void;
-  /** Reemplaza la lista (abierta o cerrada). */
+  /** Replaces the list (open or closed). */
   setActions: (actions: PaletteAction[]) => void;
   dispose: () => void;
 };
@@ -105,7 +105,7 @@ export function mountPalette(options: PaletteOptions): PaletteHandle {
         kbd.textContent = action.kbd;
         li.appendChild(kbd);
       } else if (action.hint) {
-        // Compat: hint viejo con clase kbd sigue alineado a la derecha.
+        // Compat: legacy hint with kbd class stays right-aligned.
         (li.lastChild as HTMLElement).classList.add('fx-kbd');
       }
       li.addEventListener('click', () => {
@@ -202,7 +202,7 @@ export function mountPalette(options: PaletteOptions): PaletteHandle {
     panel = null;
     input = null;
     list = null;
-    // Devuelve el foco a donde estaba (teclado completo sin trampas).
+    // Returns focus to where it was (full keyboard, no traps).
     if (lastFocus && document.contains(lastFocus)) {
       lastFocus.focus({ preventScroll: true });
       lastFocus = null;
@@ -234,7 +234,7 @@ export function mountPalette(options: PaletteOptions): PaletteHandle {
       event.preventDefault();
       move(-1);
     } else if (event.key === 'Tab') {
-      // Tab cicla la selección en vez de fugar el foco del diálogo.
+      // Tab cycles the selection instead of leaking focus out of the dialog.
       event.preventDefault();
       move(event.shiftKey ? -1 : 1);
     } else if (event.key === 'Enter' && filtered[selected]) {

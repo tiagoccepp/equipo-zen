@@ -1,6 +1,6 @@
-// Tests track T1 (addressing contextual): Jev primario + Groq fallback + shadow.
-// TODO fake: fetch stub, key temporal, groq stub. Cero red, cero keys reales.
-// Correr con HOME aislado: HOME=/tmp/fakehome-t1 node --test tests/flujo-addressing.test.mjs
+// T1 track tests (contextual addressing): primary Jev + Groq fallback + shadow.
+// TODO fake: fetch stub, temp key, groq stub. Zero network, zero real keys.
+// Run with isolated HOME: HOME=/tmp/fakehome-t1 node --test tests/flujo-addressing.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -32,7 +32,7 @@ function tmpShadow() {
   return join(dir, 'shadow', 'addressing.jsonl');
 }
 
-// fetch stub programable: handlers por URL-substring.
+// Programmable fetch stub: handlers by URL-substring.
 function fakeFetch(routes = {}) {
   const calls = [];
   const fn = async (url, init = {}) => {
@@ -57,9 +57,9 @@ function jsonResponse(obj, { ok = true, status = 200 } = {}) {
   };
 }
 
-// ── Jev primario ─────────────────────────────────────────────────────────
+// ── Primary Jev ─────────────────────────────────────────────────────────
 
-test('jev primario: decide desde TypeSafe y reporta source jev', async () => {
+test('primary jev: decides from TypeSafe and reports jev source', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ answers: { addressing: { type: 'choice', choice: 'habla_con_otro', confidence: 0.9 } } })
   });
@@ -68,7 +68,7 @@ test('jev primario: decide desde TypeSafe y reporta source jev', async () => {
   assert.equal(res.source, 'jev');
   assert.equal(res.confidence, 0.9);
   assert.ok(res.ms >= 0);
-  // Body TypeSafe real: model + state + questions.addressing (choice).
+  // Real TypeSafe body: model + state + questions.addressing (choice).
   const sent = JSON.parse(fetchFn.calls[0].init.body);
   assert.equal(sent.model, 'jev-1.13-free');
   assert.ok(JSON.parse(sent.state).transcript.includes('María'));
@@ -76,14 +76,14 @@ test('jev primario: decide desde TypeSafe y reporta source jev', async () => {
   assert.equal(Object.keys(sent.questions.addressing.criteria).length, 4);
 });
 
-test('jev: sin key lanza (el fallback lo atrapa)', async () => {
+test('jev: throws without key (fallback catches it)', async () => {
   await assert.rejects(
     callJev({ text: 'hola', keyPath: '/no/existe/zen.key', fetchFn: fakeFetch({}) }),
     /Missing Zen key/
   );
 });
 
-test('jev: 429 propaga status para que classify caiga a groq', async () => {
+test('jev: 429 propagates status so classify falls back to groq', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ error: 'rate limited' }, { ok: false, status: 429 })
   });
@@ -93,7 +93,7 @@ test('jev: 429 propaga status para que classify caiga a groq', async () => {
 
 // ── Groq fallback ────────────────────────────────────────────────────────
 
-test('groq: parsea JSON del chat y reporta source groq', async () => {
+test('groq: parses chat JSON and reports groq source', async () => {
   const fetchFn = fakeFetch({
     'api.groq.com': async ({ init }) => {
       const sent = JSON.parse(init.body);
@@ -108,7 +108,7 @@ test('groq: parsea JSON del chat y reporta source groq', async () => {
   assert.equal(res.confidence, 0.62);
 });
 
-test('classify live: 429 de Jev → cae a groq', async () => {
+test('classify live: Jev 429 → falls back to groq', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ error: 'x' }, { ok: false, status: 429 })
   });
@@ -121,7 +121,7 @@ test('classify live: 429 de Jev → cae a groq', async () => {
   assert.equal(res.source, 'groq');
 });
 
-test('classify live: jev OK no llama a groq', async () => {
+test('classify live: jev OK does not call groq', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ answers: { addressing: { type: 'choice', choice: 'ruido', confidence: 0.88 } } })
   });
@@ -138,7 +138,7 @@ test('classify live: jev OK no llama a groq', async () => {
 
 // ── Fail-open ────────────────────────────────────────────────────────────
 
-test('classify live: todo falla → heurística fail-open (responder)', async () => {
+test('classify live: everything fails → fail-open heuristic (responder)', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => { throw new Error('boom'); }
   });
@@ -154,7 +154,7 @@ test('classify live: todo falla → heurística fail-open (responder)', async ()
 
 // ── Shadow / off ─────────────────────────────────────────────────────────
 
-test('shadow: loguea JSONL y devuelve legacy aunque clasifique otra cosa', async () => {
+test('shadow: logs JSONL and returns legacy even when classifying otherwise', async () => {
   const shadowPath = tmpShadow();
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ answers: { addressing: { type: 'choice', choice: 'habla_con_otro', confidence: 0.9 } } })
@@ -172,10 +172,10 @@ test('shadow: loguea JSONL y devuelve legacy aunque clasifique otra cosa', async
   const entry = JSON.parse(lines[0]);
   assert.equal(entry.classification.decision, 'habla_con_otro');
   assert.equal(entry.legacy.decision, 'me_habla');
-  assert.ok(!JSON.stringify(entry).includes(FAKE_ZEN)); // nunca keys en el log
+  assert.ok(!JSON.stringify(entry).includes(FAKE_ZEN)); // never keys in the log
 });
 
-test('off: bypass total, no toca red ni loguea', async () => {
+test('off: total bypass, touches no network and logs nothing', async () => {
   const fetchFn = fakeFetch({});
   const res = await classifyAddressing({ text: 'hola' }, { mode: 'off', fetchFn });
   assert.equal(res.source, 'bypass');
@@ -183,61 +183,61 @@ test('off: bypass total, no toca red ni loguea', async () => {
   assert.equal(fetchFn.calls.length, 0);
 });
 
-test('appendShadowLog crea dirs y agrega líneas', () => {
+test('appendShadowLog creates dirs and appends lines', () => {
   const p = tmpShadow();
   appendShadowLog({ text: 'a', context: {}, classification: { decision: 'ruido' }, legacy: { decision: 'me_habla' } }, p);
   appendShadowLog({ text: 'b', context: {}, classification: { decision: 'ruido' }, legacy: { decision: 'me_habla' } }, p);
   assert.equal(readFileSync(p, 'utf8').trim().split('\n').length, 2);
 });
 
-// ── Heurística: TO-vs-ABOUT-Pablo ────────────────────────────────────────
+// ── Heuristic: TO-vs-ABOUT-Pablo ────────────────────────────────────────
 
-test('heurística: TO Pablo (2da persona) → me_habla', () => {
+test('heuristic: TO Pablo (2nd person) → me_habla', () => {
   const r = heuristicAddressing({ text: 'Pablo, ¿podés ayudarme con esto?', context: {} });
   assert.equal(r.decision, 'me_habla');
   assert.equal(r.source, 'heuristica');
 });
 
-test('heurística: ABOUT Pablo (3ra persona) → habla_con_otro', () => {
+test('heuristic: ABOUT Pablo (3rd person) → habla_con_otro', () => {
   const r = heuristicAddressing({ text: 'Pablo dijo que lo revisaba mañana', context: {} });
   assert.equal(r.decision, 'habla_con_otro');
 });
 
-test('heurística: ABOUT Pablo narrado → habla_con_otro', () => {
+test('heuristic: narrated ABOUT Pablo → habla_con_otro', () => {
   const r = heuristicAddressing({ text: 'le dije a Pablo que era para hoy', context: {} });
   assert.equal(r.decision, 'habla_con_otro');
 });
 
-test('heurística: Pablo solo + chat activo → me_habla (contexto manda)', () => {
+test('heuristic: lone Pablo + active chat → me_habla (context wins)', () => {
   const r = heuristicAddressing({ text: 'Pablo…', context: { chatActive: true } });
   assert.equal(r.decision, 'me_habla');
 });
 
-test('heurística: Pablo solo sin contexto → habla_con_otro', () => {
+test('heuristic: lone Pablo without context → habla_con_otro', () => {
   const r = heuristicAddressing({ text: 'Pablo…', context: { chatActive: false } });
   assert.equal(r.decision, 'habla_con_otro');
 });
 
-test('heurística: piensa en voz alta', () => {
+test('heuristic: thinking out loud', () => {
   const r = heuristicAddressing({ text: 'a ver, capaz que si muevo esto…', context: {} });
   assert.equal(r.decision, 'piensa_en_voz_alta');
   assert.equal(ADDRESSING_ACTION[r.decision], 'solo-contexto');
 });
 
-test('heurística: ruido corto', () => {
+test('heuristic: short noise', () => {
   const r = heuristicAddressing({ text: 'eh', context: {} });
   assert.equal(r.decision, 'ruido');
   assert.equal(ADDRESSING_ACTION[r.decision], 'ignorar');
 });
 
-test('heurística: texto vacío → ruido, pero nunca lanza', () => {
+test('heuristic: empty text → ruido, but never throws', () => {
   const r = heuristicAddressing({ text: '', context: {} });
   assert.equal(r.decision, 'ruido');
 });
 
-// ── Hook turn-pipeline ───────────────────────────────────────────────────
+// ── turn-pipeline hook ───────────────────────────────────────────────────
 
-test('hook: live mapea decision → action', async () => {
+test('hook: live maps decision → action', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ answers: { addressing: { type: 'choice', choice: 'ruido', confidence: 0.9 } } })
   });
@@ -250,12 +250,12 @@ test('hook: live mapea decision → action', async () => {
   assert.equal(res.source, 'jev');
 });
 
-test('hook: off devuelve null (sigue legacy)', async () => {
+test('hook: off returns null (legacy continues)', async () => {
   const res = await maybeClassifyAddressing({ text: 'hola', deps: { mode: 'off' } });
   assert.equal(res, null);
 });
 
-test('hook: sombra devuelve responder (no afecta turnos)', async () => {
+test('hook: shadow returns responder (does not affect turns)', async () => {
   const fetchFn = fakeFetch({
     systemone: async () => jsonResponse({ answers: { addressing: { type: 'choice', choice: 'habla_con_otro', confidence: 0.9 } } })
   });
@@ -268,8 +268,8 @@ test('hook: sombra devuelve responder (no afecta turnos)', async () => {
   assert.equal(res.source, 'legacy');
 });
 
-test('shadow: no espera a la red (fire-and-forget)', async () => {
-  // Jev lento (500ms): shadow igual resuelve legacy al instante.
+test('shadow: does not wait for the network (fire-and-forget)', async () => {
+  // Slow Jev (500ms): shadow still resolves legacy instantly.
   const fetchFn = fakeFetch({
     systemone: async () => {
       await new Promise((r) => setTimeout(r, 500));
@@ -286,11 +286,11 @@ test('shadow: no espera a la red (fire-and-forget)', async () => {
   assert.equal(res.shadowed, null);
 });
 
-test('hook: nunca lanza aunque explote todo', async () => {
+test('hook: never throws even if everything explodes', async () => {
   const res = await maybeClassifyAddressing({
     text: 'hola', context: {},
     deps: { mode: 'live', fetchFn: async () => { throw new Error('red muerta'); }, groqFn: async () => { throw new Error('x'); }, keyPath: tmpKey() }
   });
-  // heurística rescata: responde algo válido, no null, no throw
+  // heuristic rescues: returns something valid, not null, no throw
   assert.ok(res && res.action);
 });

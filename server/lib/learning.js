@@ -206,7 +206,7 @@ export function renderLearningsSection(store, agentId) {
     return '';
   }
   // El header viaja en el system prompt: en inglés si la voz es inglesa.
-  const enLearn = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const enLearn = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
   const agent = store.getAgent(agentId);
   if (agent && agent.learningEnabled === false) {
     return '';

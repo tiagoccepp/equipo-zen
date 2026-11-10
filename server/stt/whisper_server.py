@@ -1,14 +1,14 @@
-"""Servidor STT local: Whisper (open source de OpenAI) vía faster-whisper.
+"""Local STT server: Whisper (OpenAI open source) via faster-whisper.
 
-Corre 100% en la máquina; descarga el modelo de Hugging Face en el primer
-arranque. API:
+Runs 100% on-machine; downloads the model from Hugging Face on first
+boot. API:
   GET  /health                → {"ok": true, "model": "tiny", "loaded": false}
   POST /v1/transcribe         → {"text": "...", "language": "es", "durationMs": 1234, "confidence": 0.87}
        body JSON: {"audio_base64": "<wav>", "language": "es"|null}
 
-confidence: promedio de exp(avg_logprob) por segmento ponderado por
-  duración (avg_logprob ∈ (-inf, 0]; exp lo lleva a (0, 1]). None si no
-  hubo segmentos. stt.js reintenta en Deepgram si es MUY baja (§2e).
+confidence: average of exp(avg_logprob) per segment weighted by
+  duration (avg_logprob in (-inf, 0]; exp maps it to (0, 1]). None if no
+  segments. stt.js retries on Deepgram if VERY low (§2e).
 """
 
 import base64
@@ -21,8 +21,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 
-# faster-whisper 1.2.1 pasa metadata_errors a av.open, pero av>=15 lo sacó
-# (Requires-Dist sin cota). Se dropea el kwarg: en WAV no hay metadata.
+# faster-whisper 1.2.1 passes metadata_errors to av.open, but av>=15 removed it
+# (uncapped Requires-Dist). The kwarg is dropped: WAVs carry no metadata.
 try:
     import av
     _av_open = av.open
@@ -40,10 +40,10 @@ except ImportError:
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "tiny")
 DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")
-# WHISPER_PRELOAD=0: carga lazy (el modelo se carga en el primer
-# /v1/transcribe, no al arrancar). El watchdog spawnea con 0: Whisper es el
-# último fallback local y con el box al 96% de RAM no puede ocupar memoria
-# en idle. Default 1 = precarga (conducta histórica si se corre a mano).
+# WHISPER_PRELOAD=0: lazy load (the model loads on the first
+# /v1/transcribe, not at startup). The watchdog spawns with 0: Whisper is the
+# last local fallback and with the box at 96% RAM it can't hold memory
+# while idle. Default 1 = preload (historic behavior when run by hand).
 PRELOAD = os.environ.get("WHISPER_PRELOAD", "1") != "0"
 
 app = FastAPI(title="Whisper local")
@@ -82,7 +82,7 @@ def transcribe(request: TranscribeRequest):
         vad_filter=True,
         beam_size=1,
     )
-    # segments es generador: se materializa para texto + confianza.
+    # segments is a generator: materialized for text + confidence.
     seg_list = list(segments)
     text = " ".join(s.text.strip() for s in seg_list).strip()
     confidence = None
@@ -104,8 +104,8 @@ def transcribe(request: TranscribeRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    # Precarga para que el primer turno no pague la carga del modelo, salvo
-    # WHISPER_PRELOAD=0 (lazy: el watchdog lo usa, ver arriba).
+    # Preload so the first turn doesn't pay the model load, except
+    # WHISPER_PRELOAD=0 (lazy: the watchdog uses it, see above).
     if PRELOAD:
         get_model()
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("WHISPER_PORT", "7789")), log_level="warning")

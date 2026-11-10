@@ -143,7 +143,7 @@ export function collectProviderKeys(providerId) {
 
 // ── Supertonic (voz local) ───────────────────────────────────────────────
 export const SUPERTONIC_URL = process.env.SUPERTONIC_URL || 'http://127.0.0.1:7788';
-export const SUPERTONIC_LANGUAGE = process.env.SUPERTONIC_LANGUAGE || 'es';
+export const SUPERTONIC_LANGUAGE = process.env.SUPERTONIC_LANGUAGE || 'en';
 
 // ── Tiempos y colas ──────────────────────────────────────────────────────
 export const RESPONSE_TIMEOUT_MS = 18000;

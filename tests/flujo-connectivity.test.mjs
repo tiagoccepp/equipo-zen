@@ -1,6 +1,6 @@
-// TC — Monitor de conectividad: todo-fake, 0 red real.
-// Sidecars ok/down, cloud con/sin key, timeout, DNS fail, WS fail, 401,
-// snapshot/loop (no arranca en tests) + endpoint con snapshot inyectado.
+// TC — Connectivity monitor: all-fake, 0 real network.
+// Sidecars ok/down, cloud with/without key, timeout, DNS fail, WS fail, 401,
+// snapshot/loop (does not start in tests) + endpoint with injected snapshot.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,7 +52,7 @@ const fetchByUrl = (routes) => async (url) => {
   if (typeof entry === 'number') return resOk(entry);
   return resOk(200);
 };
-const fetchHang = () => new Promise(() => {}); // cuelga: el techo la rescata
+const fetchHang = () => new Promise(() => {}); // hangs: the ceiling rescues it
 const connRefused = () => {
   const err = new Error('connect ECONNREFUSED 127.0.0.1:7791');
   err.code = 'ECONNREFUSED';
@@ -90,7 +90,7 @@ function baseOpts(over = {}) {
 
 // ── checkConnectivity ────────────────────────────────────────────────────
 
-test('todo ok → online con checks nombrados y ts', async () => {
+test('all ok → online with named checks and ts', async () => {
   const r = await checkConnectivity(baseOpts());
   assert.equal(r.online, true);
   assert.equal(r.status, 'online');
@@ -110,7 +110,7 @@ test('todo ok → online con checks nombrados y ts', async () => {
   }
 });
 
-test('defaults reales: sidecars del repo + ws/dns hosts (fetch/ws/dns fake)', async () => {
+test('real defaults: repo sidecars + ws/dns hosts (fake fetch/ws/dns)', async () => {
   const r = await checkConnectivity({
     fetchFn: fetchOk,
     wsCheck: wsOk,
@@ -130,7 +130,7 @@ test('defaults reales: sidecars del repo + ws/dns hosts (fetch/ws/dns fake)', as
   assert.equal(typeof defaultDnsHost(), 'string');
 });
 
-test('sidecar caído (conn refused) → degraded + detail honesto', async () => {
+test('down sidecar (conn refused) → degraded + honest detail', async () => {
   const r = await checkConnectivity(baseOpts({
     fetchFn: fetchByUrl({ 'http://127.0.0.1:7791/health': connRefused() })
   }));
@@ -142,7 +142,7 @@ test('sidecar caído (conn refused) → degraded + detail honesto', async () => 
   assert.equal(r.checks.find((c) => c.name === 'sidecar:parakeet').ok, true);
 });
 
-test('sidecar con http 500 → ok=false (health local exige 2xx)', async () => {
+test('sidecar with http 500 → ok=false (local health requires 2xx)', async () => {
   const r = await checkConnectivity(baseOpts({
     fetchFn: fetchByUrl({ 'http://127.0.0.1:7790/health': 500 })
   }));
@@ -151,7 +151,7 @@ test('sidecar con http 500 → ok=false (health local exige 2xx)', async () => {
   assert.match(pk.detail, /http 500/);
 });
 
-test('timeout en todo → offline, nada cuelga', async () => {
+test('timeout everywhere → offline, nothing hangs', async () => {
   const started = Date.now();
   const r = await checkConnectivity(baseOpts({
     fetchFn: fetchHang,
@@ -169,7 +169,7 @@ test('timeout en todo → offline, nada cuelga', async () => {
   }
 });
 
-test('dns fail → degraded con detail dns fail', async () => {
+test('dns fail → degraded with dns fail detail', async () => {
   const r = await checkConnectivity(baseOpts({
     dnsFn: async () => { throw dnsFail(); }
   }));
@@ -179,7 +179,7 @@ test('dns fail → degraded con detail dns fail', async () => {
   assert.equal(dns.detail, 'dns fail');
 });
 
-test('ws fail → degraded con detail del probe', async () => {
+test('ws fail → degraded with probe detail', async () => {
   const r = await checkConnectivity(baseOpts({
     wsCheck: async () => ({ ok: false, detail: 'conn refused' })
   }));
@@ -189,7 +189,7 @@ test('ws fail → degraded con detail del probe', async () => {
   assert.equal(ws.detail, 'conn refused');
 });
 
-test('ws que lanza → ok=false, no tumba el resto', async () => {
+test('ws that throws → ok=false, does not take down the rest', async () => {
   const r = await checkConnectivity(baseOpts({
     wsCheck: async () => { throw new Error('boom'); }
   }));
@@ -197,7 +197,7 @@ test('ws que lanza → ok=false, no tumba el resto', async () => {
   assert.equal(r.checks.find((c) => c.name === 'sidecar:parakeet').ok, true);
 });
 
-test('cloud 401 → ok=false (key rechazada) y SIN key en el resultado', async () => {
+test('cloud 401 → ok=false (rejected key) and NO key in the result', async () => {
   const MARKER = 'SECRETO-XYZ-123';
   const r = await checkConnectivity(baseOpts({
     cloud: [{
@@ -216,7 +216,7 @@ test('cloud 401 → ok=false (key rechazada) y SIN key en el resultado', async (
   assert.equal(r.status, 'degraded');
 });
 
-test('cloud GET sobre POST-only (405) con auth → ok=true reachable', async () => {
+test('cloud GET on POST-only (405) with auth → ok=true reachable', async () => {
   const r = await checkConnectivity(baseOpts({
     cloud: [{ name: 'cloud:llm-minimax', url: 'https://x.test/chat', headers: {}, authSent: true }],
     fetchFn: fetchByUrl({ 'https://x.test/chat': 405 })
@@ -226,18 +226,18 @@ test('cloud GET sobre POST-only (405) con auth → ok=true reachable', async () 
   assert.match(llm.detail, /http 405/);
 });
 
-test('classifyHttp: matriz de estados', () => {
+test('classifyHttp: status matrix', () => {
   assert.deepEqual(classifyHttp(200, true), { ok: true });
   assert.deepEqual(classifyHttp(401, true), { ok: false, note: 'key rechazada' });
   assert.deepEqual(classifyHttp(403, true), { ok: false, note: 'key rechazada' });
-  assert.deepEqual(classifyHttp(401, false), { ok: true }); // host probe: responde = ok
+  assert.deepEqual(classifyHttp(401, false), { ok: true }); // host probe: responds = ok
   assert.deepEqual(classifyHttp(404, true), { ok: true });
   assert.deepEqual(classifyHttp(429, true), { ok: true, note: 'rate limit' });
   assert.deepEqual(classifyHttp(500, true), { ok: false, note: 'upstream 5xx' });
   assert.deepEqual(classifyHttp(0, true), { ok: false, note: 'sin respuesta' });
 });
 
-// ── buildCloudTargets: solo con key ──────────────────────────────────────
+// ── buildCloudTargets: only with key ──────────────────────────────────────
 
 const NO_KEYS = {
   llmProvider: 'minimax',
@@ -250,11 +250,11 @@ const NO_KEYS = {
   tavilyKey: ''
 };
 
-test('sin keys → cero targets (jamás testea con dummies)', () => {
+test('without keys → zero targets (never tests with dummies)', () => {
   assert.deepEqual(buildCloudTargets(NO_KEYS), []);
 });
 
-test('con keys → targets con auth; probes sin auth no mandan Bearer', () => {
+test('with keys → targets with auth; probes without auth send no Bearer', () => {
   const targets = buildCloudTargets({
     ...NO_KEYS,
     llmKey: 'K1',
@@ -277,7 +277,7 @@ test('con keys → targets con auth; probes sin auth no mandan Bearer', () => {
   }
 });
 
-test('proveedor groq usa una sola key efectiva, sin duplicar checks', () => {
+test('groq provider uses a single effective key, without duplicating checks', () => {
   const targets = buildCloudTargets({ ...NO_KEYS, llmProvider: 'groq', llmKey: 'K9' });
   assert.deepEqual(targets.map((t) => t.name), ['cloud:groq']);
   assert.match(targets[0].headers.Authorization, /^Bearer K9$/);
@@ -285,13 +285,13 @@ test('proveedor groq usa una sola key efectiva, sin duplicar checks', () => {
 
 // ── Snapshot + loop ──────────────────────────────────────────────────────
 
-test('test env detectado: el loop no arranca', () => {
+test('test env detected: the loop does not start', () => {
   assert.equal(isConnectivityTestEnv(), true);
   assert.equal(ensureConnectivityLoop(), null);
   assert.equal(CONNECTIVITY_INTERVAL_MS, 30000);
 });
 
-test('snapshot roundtrip + refresh con fakes', async () => {
+test('snapshot roundtrip + refresh with fakes', async () => {
   __resetConnectivity();
   assert.equal(getConnectivitySnapshot(), null);
   const seed = { online: true, status: 'online', checks: [], ts: Date.now() };
@@ -304,9 +304,9 @@ test('snapshot roundtrip + refresh con fakes', async () => {
   assert.equal(getConnectivitySnapshot(), null);
 });
 
-// ── Endpoint aditivo ─────────────────────────────────────────────────────
+// ── Additive endpoint ─────────────────────────────────────────────────────
 
-test('GET /api/connectivity sirve snapshot inyectado, 0 red', async () => {
+test('GET /api/connectivity serves injected snapshot, 0 network', async () => {
   const { createApp } = await import('../server/lib/http.js');
   const seed = {
     online: false,
@@ -330,9 +330,9 @@ test('GET /api/connectivity sirve snapshot inyectado, 0 red', async () => {
   }
 });
 
-// ── Guardrails del track ─────────────────────────────────────────────────
+// ── Track guardrails ─────────────────────────────────────────────────
 
-test('fuente: sin imports prohibidos ni logs', () => {
+test('source: no banned imports or logs', () => {
   const src = readFileSync(join(HERE, '..', 'server', 'lib', 'connectivity.js'), 'utf8');
   const code = src
     .replace(/\/\*[\s\S]*?\*\//g, '')

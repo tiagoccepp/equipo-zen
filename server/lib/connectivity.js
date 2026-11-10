@@ -1,12 +1,12 @@
-// Monitor de conectividad (track TC, 09/11 noche). Observabilidad pura:
-// sondea sidecars locales, WS /meeting, APIs cloud con key configurada y
-// DNS general. Diseñado para sondeo periódico (30s), NUNCA para el hot
-// path del turno — checkConnectivity() es async con timeouts cortos y
-// todo inyectable (fetchFn/dnsFn/wsCheck/sidecars/cloud) para tests.
+// Connectivity monitor (track TC, 09/11 evening). Pure observability:
+// probes local sidecars, WS /meeting, cloud APIs with configured key and
+// general DNS. Built for periodic polling (30s), NEVER for the turn hot
+// path — checkConnectivity() is async with short timeouts and
+// everything injectable (fetchFn/dnsFn/wsCheck/sidecars/cloud) for tests.
 //   checkConnectivity(opts?) → { online, status, checks, ts }
 //   checks: [{ name, ok, ms, detail? }]
-// NUNCA loguea keys: los details llevan solo nombres, estados HTTP y ms.
-// Cloud SIN key configurada no emite check (no es un problema de conexión).
+// NEVER logs keys: details carry only names, HTTP statuses and ms.
+// Cloud WITHOUT a configured key emits no check (not a connection problem).
 
 import { lookup } from 'node:dns/promises';
 import { readFileSync } from 'node:fs';
@@ -24,14 +24,14 @@ const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models';
 const DEEPGRAM_PROJECTS_URL = 'https://api.deepgram.com/v1/projects';
 const BRAVE_ROOT_URL = 'https://api.search.brave.com/';
 const TAVILY_ROOT_URL = 'https://api.tavily.com/';
-// Groq va tras Cloudflare: sin UA de navegador devuelve 403/1010
-// (mismo header que el proveedor groq en config.js).
+// Groq sits behind Cloudflare: without a browser UA it returns 403/1010
+// (same header as the groq provider in config.js).
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
 const TIMEOUT = Symbol('timeout');
 
-// Carrera con techo. SIN unref: este timer custodia una promesa que
-// alguien espera (misma razón que withTimeoutMs en sidecars.js).
+// Race with a cap. NO unref: this timer guards a promise someone
+// awaits (same reason as withTimeoutMs in sidecars.js).
 function raceTimeout(promise, ms) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => resolve(TIMEOUT), Math.max(1, ms));
@@ -42,7 +42,7 @@ function raceTimeout(promise, ms) {
   });
 }
 
-// Error de red → detail corto y honesto (nunca incluye keys: acá no hay).
+// Network error → short honest detail (never includes keys: none here).
 function shortErr(err) {
   const code = err && typeof err.code === 'string' ? err.code : '';
   if (code === 'ECONNREFUSED') return 'conn refused';
@@ -61,11 +61,11 @@ function safeGet(fn, fallback) {
   }
 }
 
-// Clasifica un HTTP en ok/no-ok para pings de conectividad.
-// Con auth (Bearer enviado): 401/403 = key rechazada (falla, hay que
-// saberlo); cualquier otro 4xx = reachable con auth aceptada (los GET
-// sobre endpoints POST-only devuelven 404/405/400: esperado).
-// Sin auth (host probe, sin gastar ni mandar key): cualquier respuesta = ok.
+// Classifies an HTTP status into ok/not-ok for connectivity pings.
+// With auth (Bearer sent): 401/403 = rejected key (failure, must be
+// known); any other 4xx = reachable with accepted auth (GETs
+// against POST-only endpoints return 404/405/400: expected).
+// Without auth (host probe, neither spending nor sending the key): any response = ok.
 export function classifyHttp(status, authSent) {
   const s = Number(status) || 0;
   if (s >= 200 && s < 300) return { ok: true };
@@ -76,7 +76,7 @@ export function classifyHttp(status, authSent) {
   return { ok: false, note: 'sin respuesta' };
 }
 
-// ¿Hay key de Zen/Jev en disco? Solo existencia, el contenido no sale.
+// Is there a Zen/Jev key on disk? Existence only, content never leaves.
 function hasZenKeyFile() {
   try {
     return readFileSync(defaultZenKeyPath(), 'utf8').trim().length > 0;
@@ -85,9 +85,9 @@ function hasZenKeyFile() {
   }
 }
 
-// Targets cloud SOLO para keys configuradas. Cada override undefined =
-// detectar real (env/settings/disco); pasar ''/false = forzar ausente
-// (tests). Jamás testea con keys dummy: sin key no hay target.
+// Cloud targets ONLY for configured keys. Each undefined override =
+// real detection (env/settings/disk); passing ''/false = force absent
+// (tests). Never probes with dummy keys: no key, no target.
 export function buildCloudTargets({
   llmProvider,
   llmKey,
@@ -120,8 +120,8 @@ export function buildCloudTargets({
       authSent: true
     });
   }
-  // Groq cubre STT y LLM con el mismo endpoint: una sola key efectiva
-  // (stt.groqKey/GROQ_API_KEY o la del proveedor llm groq), un solo check.
+  // Groq covers STT and LLM with the same endpoint: a single effective key
+  // (stt.groqKey/GROQ_API_KEY or the groq llm provider's), a single check.
   const groqEffective = G || (provider === 'groq' ? K : '');
   if (groqEffective) {
     targets.push({
@@ -139,7 +139,7 @@ export function buildCloudTargets({
       authSent: true
     });
   }
-  // Host probes SIN auth: prueban DNS+TCP+TLS sin gastar ni mandar la key.
+  // Host probes WITHOUT auth: test DNS+TCP+TLS without spending or sending the key.
   if (zen) {
     targets.push({ name: 'cloud:zen', url: JEV_URL, headers: {}, authSent: false, extraDetail: 'key presente' });
   }
@@ -163,15 +163,15 @@ export function defaultDnsHost() {
     const host = new URL(url).hostname;
     if (host) return host;
   } catch {
-    // Sin URL válida: host estable de fallback.
+    // No valid URL: stable fallback host.
   }
   return 'api.groq.com';
 }
 
-// Probe real de WS: handshake contra /meeting local y cierre inmediato.
-// Crea una MeetingSession efímera del lado servidor (igual que un cliente
-// que conecta y cuelga al instante; initMeeting solo corre con hello).
-// Inyectable vía opts.wsCheck (tests usan fake, 0 red real).
+// Real WS probe: handshake against local /meeting and immediate close.
+// Creates an ephemeral server-side MeetingSession (same as a client
+// connecting and hanging up instantly; initMeeting only runs on hello).
+// Injectable via opts.wsCheck (tests use a fake, 0 real network).
 export function defaultWsCheck(url, timeoutMs) {
   const target = url || defaultWsUrl();
   return new Promise((resolve) => {
@@ -181,7 +181,7 @@ export function defaultWsCheck(url, timeoutMs) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      try { sock?.close(); } catch { /* ya cerrado */ }
+      try { sock?.close(); } catch { /* already closed */ }
       resolve(detail ? { ok, detail } : { ok });
     };
     const timer = setTimeout(() => finish(false, 'timeout'), Math.max(1, timeoutMs));
@@ -196,13 +196,13 @@ export function defaultWsCheck(url, timeoutMs) {
   });
 }
 
-// Probe real de DNS: resolve barato del host que el LLM usa.
+// Real DNS probe: cheap resolve of the host the LLM uses.
 export async function defaultDnsFn(host) {
   const result = await lookup(host || defaultDnsHost());
   return { ok: true, detail: result?.address ? String(result.address) : undefined };
 }
 
-// Un check: nunca lanza, nunca cuelga más de timeoutMs.
+// One check: never throws, never hangs longer than timeoutMs.
 async function runCheck(name, fn, timeoutMs) {
   const started = Date.now();
   try {
@@ -240,12 +240,12 @@ function probeSidecar(spec, fetchFn, timeoutMs) {
       method: 'GET',
       signal: AbortSignal.timeout(timeoutMs)
     });
-    // Health local: solo 2xx vale (un 404 acá es sidecar roto, no reachable).
+    // Local health: only 2xx counts (a 404 here is a broken sidecar, not reachable).
     return { ok: res?.ok === true, detail: `http ${Number(res?.status) || 0}` };
   };
 }
 
-// Sondeo completo. Todo paralelo (Promise.all), techo timeoutMs por check.
+// Full poll. All parallel (Promise.all), timeoutMs cap per check.
 // opts: { fetchFn, dnsFn, dnsHost, wsCheck, wsUrl, sidecars, cloud, timeoutMs }.
 export async function checkConnectivity({
   fetchFn = fetch,
@@ -281,9 +281,9 @@ export async function checkConnectivity({
   return { online, status, checks, ts: Date.now() };
 }
 
-// ── Snapshot en memoria + intervalo lazy (30s, no en tests) ──────────────
-// El endpoint sirve el snapshot; el intervalo lo refresca en fondo. Todo
-// best-effort: un sondeo fallido deja el snapshot anterior intacto.
+// ── In-memory snapshot + lazy interval (30s, not in tests) ───────────────
+// The endpoint serves the snapshot; the interval refreshes it in background. All
+// best-effort: a failed poll leaves the previous snapshot intact.
 
 let snapshot = null;
 let timer = null;
@@ -320,7 +320,7 @@ export function ensureConnectivityLoop(opts = {}) {
   return timer;
 }
 
-// Solo tests.
+// Tests only.
 export function __resetConnectivity() {
   if (timer) clearInterval(timer);
   timer = null;

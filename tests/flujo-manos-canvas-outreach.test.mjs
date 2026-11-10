@@ -1,6 +1,6 @@
-// Tests Track D (09/11): canvas_* sobre openpencil.js (stub) + outreach_*
-// (draft escribe, send con gate de Tito). Workspace temporal, cero binarios
-// reales: OpenPencil se reemplaza vía _setOpenpencil().
+// Track D tests (09/11): canvas_* over openpencil.js (stub) + outreach_*
+// (draft writes, send with Tito's gate). Temp workspace, zero real
+// binaries: OpenPencil is replaced via _setOpenpencil().
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync }
 import os from 'node:os';
 import path from 'node:path';
 
-// Sin proxy (misma razón que manos.test.mjs: Undici + stubs locales).
+// No proxy (same reason as manos.test.mjs: Undici + local stubs).
 for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']) {
   delete process.env[k];
 }
@@ -55,14 +55,14 @@ function stubOp(over = {}) {
     abrirDiseno: async () => ({ ok: true, puerto: 3342 }),
     cerrarDiseno: async () => {},
     leerTokensDelDiseno: async () => ({ ...VARS }),
-    // tokensComoCodigo NO se stubbea: es puro, se usa el real.
+    // tokensComoCodigo is NOT stubbed: it is pure, the real one is used.
     ...over
   });
 }
 
-// --- registro ----------------------------------------------------------------
+// --- registration ------------------------------------------------------------
 
-test('registro: 4 canvas_* + 2 outreach_*', () => {
+test('registration: 4 canvas_* + 2 outreach_*', () => {
   for (const name of [
     'canvas_abrir', 'canvas_tokens', 'canvas_codigo', 'canvas_cerrar',
     'outreach_draft', 'outreach_send'
@@ -71,9 +71,9 @@ test('registro: 4 canvas_* + 2 outreach_*', () => {
   }
 });
 
-// --- canvas: degrada sin binarios ----------------------------------------------
+// --- canvas: degrades without binaries ------------------------------------------
 
-test('canvas: las 4 degradan sin binarios con hint instalar-openpencil.sh', async () => {
+test('canvas: all 4 degrade without binaries with instalar-openpencil.sh hint', async () => {
   canvas._resetOpenpencil();
   canvas._setOpenpencil({
     disponible: () => false,
@@ -92,7 +92,7 @@ test('canvas: las 4 degradan sin binarios con hint instalar-openpencil.sh', asyn
   canvas._resetOpenpencil();
 });
 
-test('canvas: el hint se agrega aunque el motivo no lo traiga', async () => {
+test('canvas: the hint is appended even when the reason lacks it', async () => {
   canvas._resetOpenpencil();
   canvas._setOpenpencil({ disponible: () => false, motivoNoDisponible: () => 'algo roto' });
   const r = await tool('canvas_abrir').execute({}, ctx);
@@ -102,9 +102,9 @@ test('canvas: el hint se agrega aunque el motivo no lo traiga', async () => {
   canvas._resetOpenpencil();
 });
 
-// --- canvas: camino feliz (stub) --------------------------------------------------
+// --- canvas: happy path (stub) --------------------------------------------------
 
-test('canvas_abrir: reporta puerto y usa el workspace del ctx (mismo resolvedor)', async () => {
+test('canvas_abrir: reports port and uses the ctx workspace (same resolver)', async () => {
   let visto = null;
   stubOp({
     abrirDiseno: async (dir, clave) => {
@@ -119,7 +119,7 @@ test('canvas_abrir: reporta puerto y usa el workspace del ctx (mismo resolvedor)
   assert.equal(visto.clave, `${EMPRESA}/${SLUG}`);
 });
 
-test('canvas_abrir: yaEstaba se reporta, fallo de op → error claro', async () => {
+test('canvas_abrir: yaEstaba is reported, op failure → clear error', async () => {
   stubOp({ abrirDiseno: async () => ({ ok: true, puerto: 3301, yaEstaba: true }) });
   const ya = await tool('canvas_abrir').execute({}, ctx);
   assert.equal(ya.ok, true);
@@ -131,7 +131,7 @@ test('canvas_abrir: yaEstaba se reporta, fallo de op → error claro', async () 
   assert.match(mal.error, /no pude abrir el diseño/);
 });
 
-test('canvas_tokens: vuelca variables; sin diseno.op avisa (no falla)', async () => {
+test('canvas_tokens: dumps variables; without diseno.op warns (does not fail)', async () => {
   stubOp();
   const r = await tool('canvas_tokens').execute({}, ctx);
   assert.equal(r.ok, true);
@@ -144,7 +144,7 @@ test('canvas_tokens: vuelca variables; sin diseno.op avisa (no falla)', async ()
   assert.match(vacio.output, /sin tokens todavía/);
 });
 
-test('canvas_codigo: usa tokensComoCodigo real (web → tokens.css, movil-rn → theme.js)', async () => {
+test('canvas_codigo: uses real tokensComoCodigo (web → tokens.css, movil-rn → theme.js)', async () => {
   stubOp();
   const web = await tool('canvas_codigo').execute({ stack: 'web' }, ctx);
   assert.equal(web.ok, true);
@@ -162,14 +162,14 @@ test('canvas_codigo: usa tokensComoCodigo real (web → tokens.css, movil-rn →
   assert.match(def.output, /tokens\.css/);
 });
 
-test('canvas_codigo: sin tokens → error (no hay nada que generar)', async () => {
+test('canvas_codigo: without tokens → error (nothing to generate)', async () => {
   stubOp({ leerTokensDelDiseno: async () => null });
   const r = await tool('canvas_codigo').execute({ stack: 'web' }, ctx);
   assert.equal(r.ok, false);
   assert.match(r.error, /sin tokens/);
 });
 
-test('canvas_cerrar: cierra con dir+clave del workspace', async () => {
+test('canvas_cerrar: closes with workspace dir+clave', async () => {
   let visto = null;
   stubOp({ cerrarDiseno: async (dir, clave) => { visto = { dir, clave }; } });
   const r = await tool('canvas_cerrar').execute({}, ctx);
@@ -179,7 +179,7 @@ test('canvas_cerrar: cierra con dir+clave del workspace', async () => {
   assert.equal(visto.clave, `${EMPRESA}/${SLUG}`);
 });
 
-test('canvas: sin companyId → error, nunca throw', async () => {
+test('canvas: without companyId → error, never throws', async () => {
   stubOp();
   for (const [name, args] of [
     ['canvas_abrir', {}],
@@ -195,7 +195,7 @@ test('canvas: sin companyId → error, nunca throw', async () => {
 
 // --- outreach_draft ---------------------------------------------------------------
 
-test('outreach_draft: valida canal/para/cuerpo', async () => {
+test('outreach_draft: validates canal/para/cuerpo', async () => {
   for (const [args, patron] of [
     [{}, /canal/],
     [{ canal: 'email' }, /para/],
@@ -210,7 +210,7 @@ test('outreach_draft: valida canal/para/cuerpo', async () => {
   }
 });
 
-test('outreach_draft: escribe outreach/<fecha>-<canal>.md con frontmatter + cuerpo', async () => {
+test('outreach_draft: writes outreach/<fecha>-<canal>.md with frontmatter + cuerpo', async () => {
   const r = await tool('outreach_draft').execute({
     canal: 'Email',
     para: 'juan@x.com',
@@ -230,7 +230,7 @@ test('outreach_draft: escribe outreach/<fecha>-<canal>.md con frontmatter + cuer
   assert.match(texto, /Che Juan, ¿tomamos un café\?/);
 });
 
-test('outreach_draft: mismo día+canal no pisa (sufijo -2)', async () => {
+test('outreach_draft: same day+canal does not overwrite (suffix -2)', async () => {
   const a = await tool('outreach_draft').execute({ canal: 'wa', para: 'Ana', cuerpo: 'uno' }, ctx);
   const b = await tool('outreach_draft').execute({ canal: 'wa', para: 'Beto', cuerpo: 'dos' }, ctx);
   assert.equal(a.ok, true);
@@ -241,7 +241,7 @@ test('outreach_draft: mismo día+canal no pisa (sufijo -2)', async () => {
   assert.ok(existsSync(path.join(TMPWS, EMPRESA, SLUG, `outreach/${HOY}-wa-2.md`)));
 });
 
-test('outreach_draft: canal con traversal se sanea (no escapa del workspace)', async () => {
+test('outreach_draft: traversal canal is sanitized (does not escape the workspace)', async () => {
   const r = await tool('outreach_draft').execute(
     { canal: '../../etc', para: 'x', cuerpo: 'intento' }, ctx
   );
@@ -250,7 +250,7 @@ test('outreach_draft: canal con traversal se sanea (no escapa del workspace)', a
   assert.ok(!existsSync(path.join(TMPWS, 'etc.md')), 'nada fuera del proyecto');
 });
 
-test('outreach_draft: sin companyId → error, nunca throw', async () => {
+test('outreach_draft: without companyId → error, never throws', async () => {
   const r = await tool('outreach_draft').execute({ canal: 'email', para: 'x', cuerpo: 'y' }, {});
   assert.equal(r.ok, false);
   assert.match(r.error, /companyId/);
@@ -258,7 +258,7 @@ test('outreach_draft: sin companyId → error, nunca throw', async () => {
 
 // --- outreach_send: gate ----------------------------------------------------------------
 
-test('outreach_send: SIN aprobación rechaza (ausente, false, truthy-no-true)', async () => {
+test('outreach_send: WITHOUT approval rejects (missing, false, truthy-non-true)', async () => {
   const draft = await tool('outreach_draft').execute(
     { canal: 'email', para: 'gate@x.com', cuerpo: 'pendiente' }, ctx
   );
@@ -277,7 +277,7 @@ test('outreach_send: SIN aprobación rechaza (ausente, false, truthy-no-true)', 
   assert.ok(!existsSync(path.join(TMPWS, EMPRESA, SLUG, 'outbox')), 'nada encolado sin OK');
 });
 
-test('outreach_send: CON aprobación encola outbox/*.ready.json y NUNCA dice enviado', async () => {
+test('outreach_send: WITH approval queues outbox/*.ready.json and NEVER says sent', async () => {
   const draft = await tool('outreach_draft').execute(
     { canal: 'linkedin', para: 'María Gómez', asunto: 'Hola', cuerpo: 'Te escribo por…' }, ctx
   );
@@ -303,7 +303,7 @@ test('outreach_send: CON aprobación encola outbox/*.ready.json y NUNCA dice env
   assert.match(payload.cuerpo, /Te escribo/);
 });
 
-test('outreach_send: valida draft (vacío, fuera de outreach/, inexistente, sin frontmatter)', async () => {
+test('outreach_send: validates draft (empty, outside outreach/, missing, without frontmatter)', async () => {
   const v = await tool('outreach_send').execute({}, ctxOK);
   assert.equal(v.ok, false);
   assert.match(v.error, /falta draft/);
@@ -320,7 +320,7 @@ test('outreach_send: valida draft (vacío, fuera de outreach/, inexistente, sin 
   assert.match(x.error, /no pude leer el borrador/);
 });
 
-test('outreach_send: re-encolar el mismo draft no pisa (sufijo -2)', async () => {
+test('outreach_send: re-queueing the same draft does not overwrite (suffix -2)', async () => {
   const draft = await tool('outreach_draft').execute(
     { canal: 'email', para: 're@x.com', cuerpo: 'otra vez' }, ctx
   );

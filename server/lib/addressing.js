@@ -1,23 +1,23 @@
-// ── Addressing contextual (Equipo v2, Fase 1 / track T1) ────────────────────
-// Decide a quién habla cada turno: ¿me habla a mí (Pablo), piensa en voz
-// alta, habla con otro, o es ruido? Jev-free primario, Groq fallback,
-// heurística fail-open. Shadow por defecto: loguea y devuelve legacy.
+// ── Contextual addressing (Equipo v2, Phase 1 / track T1) ─────────────────
+// Decides whom each turn talks to: talking to me (Pablo), thinking aloud,
+// talking to someone else, or noise? Primary Jev-free, Groq fallback,
+// fail-open heuristic. Shadow by default: logs and returns legacy.
 //
-// Contrato:
+// Contract:
 //   classifyAddressing({ text, context }, opts)
 //     → { decision, confidence, source, ms }
 //   decision ∈ me_habla | piensa_en_voz_alta | habla_con_otro | ruido
 //   source   ∈ jev | groq | heuristica | legacy | bypass
-// Legacy (fail-open) = responder ⇒ decision me_habla.
+// Legacy (fail-open) = respond ⇒ me_habla decision.
 //
-// Modo (env PABLO_ADDRESSING, default shadow):
-//   live   → decide de verdad (jev → groq → heurística).
-//   shadow → clasifica igual, agrega JSONL a workspace/shadow/addressing.jsonl
-//            y devuelve legacy (me_habla). Sirve para comparar sin afectar turnos.
-//   off    → bypass total: no clasifica, no loguea, devuelve legacy.
+// Mode (env PABLO_ADDRESSING, default shadow):
+//   live   → really decides (jev → groq → heuristic).
+//   shadow → classifies the same, appends JSONL to workspace/shadow/addressing.jsonl
+//            and returns legacy (me_habla). Lets you compare without affecting turns.
+//   off    → total bypass: neither classifies nor logs, returns legacy.
 //
-// CERO hardcode: "pablo" en el texto es SEÑAL, nunca regla. El TO-vs-ABOUT se
-// decide por contexto (pronombres, tiempo verbal, chatActive, último turno).
+// ZERO hardcode: "pablo" in the text is a SIGNAL, never a rule. TO-vs-ABOUT is
+// decided by context (pronouns, verb tense, chatActive, last turn).
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -28,8 +28,8 @@ import { getLlmKeys } from './settings.js';
 
 export const DECISIONS = ['me_habla', 'piensa_en_voz_alta', 'habla_con_otro', 'ruido'];
 
-// decision → acción del turno. solo-contexto = el texto entra al contexto
-// pero no genera respuesta; ignorar = ni siquiera eso (basura/STT).
+// decision → turn action. solo-contexto = the text enters the context
+// but produces no reply; ignorar = not even that (garbage/STT).
 export const ADDRESSING_ACTION = {
   me_habla: 'responder',
   piensa_en_voz_alta: 'solo-contexto',
@@ -42,8 +42,8 @@ export const JEV_MODEL = 'jev-1.13-free';
 export const JEV_TIMEOUT_MS = 8000;
 export const GROQ_TIMEOUT_MS = 5000;
 
-// Pregunta `choice` TypeSafe (formato real docs.typesafe.ai/api, verificado
-// 09/11 contra Zen en vivo): criteria = mapa opción → descripción.
+// TypeSafe `choice` question (real format docs.typesafe.ai/api, verified
+// 09/11 against live Zen): criteria = option → description map.
 const JEV_QUESTION_ID = 'addressing';
 const JEV_CRITERIA = {
   me_habla: 'El hablante se dirige a Pablo/asistente: pregunta, pedido, orden o saludo en segunda persona.',
@@ -100,11 +100,11 @@ async function fetchWithTimeout(fetchFn, url, { timeoutMs, ...init }) {
   }
 }
 
-// ── Jev primario ─────────────────────────────────────────────────────────
-// POST TypeSafe real: { model, state, questions: { addressing: { type:
+// ── Primary Jev ────────────────────────────────────────────────────────
+// Real TypeSafe POST: { model, state, questions: { addressing: { type:
 // 'choice', instructions, criteria } } } → answers.addressing { choice,
-// confidence, probabilities }. (T1 lo había dejado especulativo; main lo
-// corrigió contra docs + smoke en vivo 09/11.)
+// confidence, probabilities }. (T1 had left it speculative; main fixed it
+// against docs + live smoke test on 09/11.)
 export async function callJev({ text, context = {}, key = null, keyPath = null, fetchFn = fetch, timeoutMs = JEV_TIMEOUT_MS } = {}) {
   const Z = key || readKey(keyPath);
   if (!Z) {
@@ -117,7 +117,7 @@ export async function callJev({ text, context = {}, key = null, keyPath = null, 
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${Z}`,
-      // Zen exige sesión (mismo header que el proveedor opencode en config.js).
+      // Zen requires a session (same header as the opencode provider in config.js).
       'x-opencode-session': 'equipo-addressing'
     },
     body: JSON.stringify({
@@ -144,7 +144,7 @@ export async function callJev({ text, context = {}, key = null, keyPath = null, 
   if (!decision) {
     throw new Error('Jev devolvió decisión irreconocible.');
   }
-  // confidence oficial; si falta, la prob de la opción ganadora.
+  // official confidence; if missing, the winning option's prob.
   const fromProbs = answer?.probabilities ? answer.probabilities[answer.choice] : undefined;
   return {
     decision,
@@ -159,12 +159,12 @@ export function jevAuthHeader(Z) {
 }
 
 // ── Groq fallback ────────────────────────────────────────────────────────
-// Reusa el path llm/groq EXISTENTE: URL, modelo y headers salen de
-// LLM_PROVIDERS.groq (config.js), la key de getLlmKeys('groq') (settings.js),
-// el body espeja buildBody() de llm.js y el parse usa parseJsonFromModel().
-// (llm.js rutea por proveedor ACTIVO, así que un completeChat directo llamaría
-// al proveedor equivocado con la key de groq: por eso el fetch va a la URL de
-// groq explícita, sin inventar protocolo.)
+// Reuses the EXISTING llm/groq path: URL, model and headers come from
+// LLM_PROVIDERS.groq (config.js), the key from getLlmKeys('groq') (settings.js),
+// the body mirrors buildBody() in llm.js and parsing uses parseJsonFromModel().
+// (llm.js routes by ACTIVE provider, so a direct completeChat would call
+// the wrong provider with the groq key: hence fetch goes to the explicit
+// groq URL, without inventing a protocol.)
 const GROQ_SYSTEM = [
   'Clasificás a quién habla cada turno. Respondé SOLO JSON: {"decision": <id>, "confidence": <0..1>}.',
   'Decisiones: me_habla (a Pablo/asistente: pregunta, pedido, orden, saludo en 2da persona),',
@@ -221,13 +221,13 @@ export async function callGroqAddressing({ text, context = {}, groqKey = null, f
   };
 }
 
-// ── Heurística fail-open (conducta legacy = responder) ───────────────────
-// Conservadora: default me_habla; solo patrones de alta señal desvían.
-// "pablo" SIEMPRE se combina con otra señal (pronombre/tiempo/contexto).
+// ── Fail-open heuristic (legacy behavior = respond) ──────────────────────
+// Conservative: me_habla default; only high-signal patterns divert.
+// "pablo" is ALWAYS combined with another signal (pronoun/tense/context).
 const RE_SEGUNDA = /\b(vos|t[uú]|te\b|ti\b|tu\b|ustedes?|contame|decime|explicame|ayudame|pod[eé]s|puedes|haceme|mostrame|pasame|che\b)/i;
 const RE_PREGUNTA = /\?\s*$/;
 const RE_IMPERATIVO = /\b(decime|contame|explic[aá]|busca|busc[aá]|abri|abr[ií]|cerr[aá]|pon[eé]|sac[aá]|mostr[aá]|pas[aá]|llam[aá]|escrib[ií]|cre[aá]|hac[eé])/i;
-// Tercera persona / pasado-narrado ⇒ HABLA DE, no LE HABLA.
+// Third person / narrated past ⇒ TALKING ABOUT, not TALKING TO.
 const RE_TERCERA = /\b([eé]l|ella|ellos|dijo|dice que|hizo|hace que|fue|era|estaba|tiene que|va a venir|vino|llam[oó]|me dijo|le dije)\b/i;
 const RE_PABLO = /pabl[oa]/i;
 const RE_PENSAR = /^(mmm+|eh+|este+|a ver|veamos|bueno,? (a ver|veamos)|y si |capaz( que)?|quiz[aá]s|no s[eé](,|\.|$)|dejame pensar|estoy pensando)/i;
@@ -250,16 +250,16 @@ export function heuristicAddressing({ text = '', context = {} } = {}) {
   const segunda = RE_SEGUNDA.test(t) || RE_PREGUNTA.test(t) || RE_IMPERATIVO.test(t);
   const tercera = RE_TERCERA.test(t);
 
-  // TO-vs-ABOUT-Pablo: "Pablo" + 2da persona/pregunta ⇒ LE HABLA;
-  // "Pablo" + 3ra persona/pasado-narrado ⇒ HABLA DE (con otro).
+  // TO-vs-ABOUT-Pablo: "Pablo" + 2nd person/question ⇒ TALKING TO;
+  // "Pablo" + 3rd person/narrated past ⇒ TALKING ABOUT (with someone else).
   if (mencionaPablo && tercera && !segunda) {
     return decide('habla_con_otro', 0.75);
   }
   if (mencionaPablo && segunda) {
     return decide('me_habla', 0.8);
   }
-  // "Pablo" solo, sin otra señal: el contexto manda (chat activo / me habló
-  // último ⇒ probablemente me habla; si no, habla con otro).
+  // "Pablo" alone, no other signal: context rules (active chat / talked to
+  // me last ⇒ probably talking to me; otherwise, talking to someone else).
   if (mencionaPablo) {
     if (chatActive || lastTurn === 'mine') {
       return decide('me_habla', 0.55);
@@ -267,14 +267,14 @@ export function heuristicAddressing({ text = '', context = {} } = {}) {
     return decide('habla_con_otro', 0.55);
   }
 
-  // Vocativo a OTRO nombre ("María, ¿…?", "che Juan,…") ⇒ habla con otro.
+  // Vocative to ANOTHER name ("María, ¿…?", "che Juan,…") ⇒ talking to someone else.
   if (/^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(,|\s+(¿|\?|qué|cuándo|cómo|dónde|por qué|me|te|se |le ))/u.test(t) && tercera) {
     return decide('habla_con_otro', 0.6);
   }
 
-  // Piensa en voz alta: muletillas de arranque + sin pregunta directa ni
-  // imperativo. Si el chat está activo y el último turno fue mío, igual puede
-  // ser para mí ⇒ me_habla con confianza baja (fail-open).
+  // Thinking aloud: opening fillers + no direct question or
+  // imperative. If the chat is active and the last turn was mine, it may still
+  // be for me ⇒ me_habla with low confidence (fail-open).
   if (RE_PENSAR.test(t) && !segunda) {
     if (chatActive && lastTurn === 'mine') {
       return decide('me_habla', 0.45);
@@ -282,21 +282,21 @@ export function heuristicAddressing({ text = '', context = {} } = {}) {
     return decide('piensa_en_voz_alta', 0.65);
   }
 
-  // Saludo corto ⇒ me habla (señal social directa).
+  // Short greeting ⇒ talking to me (direct social signal).
   if (RE_SALUDO.test(t) && t.length < 40) {
     return decide('me_habla', 0.7);
   }
 
-  // Pregunta o imperativo sin Pablo ⇒ me habla.
+  // Question or imperative without Pablo ⇒ talking to me.
   if (segunda) {
     return decide('me_habla', 0.65);
   }
 
-  // Default fail-open: ante la duda, RESPONDER (conducta legacy).
+  // Fail-open default: when in doubt, RESPOND (legacy behavior).
   return decide('me_habla', 0.4);
 }
 
-// ── Shadow log (JSONL, nunca incluye keys) ───────────────────────────────
+// ── Shadow log (JSONL, never includes keys) ──────────────────────────────
 export function appendShadowLog(entry, shadowPath = null) {
   const p = shadowPath || defaultShadowPath();
   mkdirSync(dirname(p), { recursive: true });
@@ -315,20 +315,20 @@ export function legacyResult(ms = 0) {
   return { decision: 'me_habla', confidence: 1, source: 'legacy', ms };
 }
 
-// ── Entrada principal ────────────────────────────────────────────────────
+// ── Main entry ─────────────────────────────────────────────────────────
 export async function classifyAddressing({ text = '', context = {} } = {}, opts = {}) {
   const started = Date.now();
   const mode = opts.mode || getAddressingMode();
   const fetchFn = opts.fetchFn || fetch;
-  const groqFn = opts.groqFn || null; // inyectable (tests); default = callGroqAddressing
+  const groqFn = opts.groqFn || null; // injectable (tests); default = callGroqAddressing
   const timeoutMs = opts.timeoutMs || JEV_TIMEOUT_MS;
 
   if (mode === 'off') {
     return { decision: 'me_habla', confidence: 1, source: 'bypass', ms: Date.now() - started };
   }
 
-  // Cadena live: jev → groq → heurística. Cualquier excepción cae al
-  // siguiente eslabón; la heurística nunca lanza (fail-open total).
+  // Live chain: jev → groq → heuristic. Any exception falls through to
+  // the next link; the heuristic never throws (total fail-open).
   const runChain = async () => {
     let result = null;
     try {
@@ -353,15 +353,15 @@ export async function classifyAddressing({ text = '', context = {} } = {}, opts 
 
   if (mode === 'shadow') {
     const legacy = legacyResult(Date.now() - started);
-    // Shadow NO espera (main 09/11): Jev frío tarda ~3s y ni shadow puede
-    // pagarlo en el hot path del turno. Clasifica en background y loguea
-    // al terminar. awaitShadow=true solo para tests deterministas.
+    // Shadow does NOT wait (main 09/11): cold Jev takes ~3s and not even shadow
+    // can afford it on the turn hot path. Classifies in background and logs
+    // on completion. awaitShadow=true only for deterministic tests.
     if (opts.awaitShadow) {
       const result = await runChain();
       try {
         appendShadowLog({ text, context, classification: result, legacy }, opts.shadowPath || null);
       } catch {
-        // El log nunca tumba el turno.
+        // Logging never breaks the turn.
       }
       return { ...legacy, shadowed: result };
     }
@@ -370,11 +370,11 @@ export async function classifyAddressing({ text = '', context = {} } = {}, opts 
         try {
           appendShadowLog({ text, context, classification: result, legacy }, opts.shadowPath || null);
         } catch {
-          // El log nunca tumba nada (ya estamos fuera del turno).
+          // Logging never breaks anything (already outside the turn).
         }
       },
       () => {
-        // runChain no rechaza (heurística fail-open), pero void exige handler.
+        // runChain never rejects (fail-open heuristic), but void requires a handler.
       }
     );
     return { ...legacy, shadowed: null };

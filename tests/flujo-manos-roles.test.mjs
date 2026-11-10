@@ -1,5 +1,5 @@
-// Track C (flujo-manos-plan): allow-list por rol + ctx.aprobadoOutreach.
-// Fakes puros sobre manos.js; NO importa capabilities.js (lo cablea main).
+// Track C (flujo-manos-plan): allow-list per role + ctx.aprobadoOutreach.
+// Pure fakes over manos.js; does NOT import capabilities.js (main wires it).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,22 +24,22 @@ const SRC = { companyId: EMPRESA, slug: SLUG };
 
 // ---------------------------------------------------------------- prompt
 
-test('prompt filtra por allow (full)', () => {
+test('prompt filters by allow (full)', () => {
   const p = renderManosPrompt('text', { allow: ['now'] });
   assert.ok(p.includes('- now:'), 'incluye la permitida');
-  // Ojo: el ejemplo de FORMATO menciona read_file literal; lo que filtra
-  // es la LISTA de tools (líneas '- nombre:').
+  // Note: the FORMATO example mentions read_file literally; what gets filtered
+  // is the tools LIST (lines '- name:').
   assert.ok(!p.includes('- read_file:'), 'excluye read_file');
   assert.ok(!p.includes('- run_cmd:'), 'excluye run_cmd');
 });
 
-test('prompt filtra por allow (audio)', () => {
+test('prompt filters by allow (audio)', () => {
   const p = renderManosPrompt('audio', { allow: ['now'] });
   assert.ok(p.includes('now'), 'incluye la permitida');
   assert.ok(!p.includes('read_file'), 'excluye read_file');
 });
 
-test('prompt allow=null lista todo (conducta histórica)', () => {
+test('prompt allow=null lists everything (historic behavior)', () => {
   const def = renderManosPrompt();
   const nul = renderManosPrompt('text', { allow: null });
   for (const n of ['read_file', 'write_file', 'run_cmd', 'fetch_url', 'now']) {
@@ -51,7 +51,7 @@ test('prompt allow=null lista todo (conducta histórica)', () => {
 
 // ---------------------------------------------------------------- loop
 
-test('loop rechaza fuera de allow sin ejecutar', async () => {
+test('loop rejects outside allow without executing', async () => {
   let llamadas = 0;
   registerTool({
     name: 'roles_test_espia',
@@ -93,7 +93,7 @@ test('loop rechaza fuera de allow sin ejecutar', async () => {
   }
 });
 
-test('loop allow=null ejecuta todo', async () => {
+test('loop allow=null executes everything', async () => {
   let n = 0;
   const fake = async () => {
     n += 1;
@@ -112,7 +112,7 @@ test('loop allow=null ejecuta todo', async () => {
   assert.equal(toolTurns[0].calls[0].ok, true);
 });
 
-test('loop sin allow (omitido) ejecuta todo', async () => {
+test('loop without allow (omitted) executes everything', async () => {
   const t = getTool('now');
   assert.ok(t, 'now registrada');
   let n = 0;
@@ -161,7 +161,7 @@ test('ctx.aprobadoOutreach default false', async () => {
   }
 });
 
-test('ctx.aprobadoOutreach llega desde source y desde top-level', async () => {
+test('ctx.aprobadoOutreach arrives from source and from top-level', async () => {
   let visto = null;
   registerTool({
     name: 'roles_test_ctx2',
@@ -203,7 +203,7 @@ test('ctx.aprobadoOutreach llega desde source y desde top-level', async () => {
   }
 });
 
-test('teardown: limpio el workspace temporal', () => {
+test('teardown: clean up the temp workspace', () => {
   rmSync(TMPWS, { recursive: true, force: true });
   assert.ok(true);
 });

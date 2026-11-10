@@ -3,28 +3,28 @@ import assert from 'node:assert/strict';
 
 import { BARGE_IN, evaluateBargeIn, idleBargeInState, trimPreBuffer } from '../src/lib/barge-in.ts';
 
-// El AudioWorklet de captura manda frames de 60 ms (16 kHz mono).
+// The capture AudioWorklet sends 60 ms frames (16 kHz mono).
 const FRAME_MS = 60;
 
-// Umbral real con la sensibilidad por defecto (55): 0.062 - 0.55 * 0.052.
+// Real threshold with the default sensitivity (55): 0.062 - 0.55 * 0.052.
 const START = 0.0334;
-// Por encima de esto un frame cuenta para confirmar (1.4 × START ≈ 0.0468).
+// Above this, a frame counts toward confirmation (1.4 × START ≈ 0.0468).
 const LOUD = START * BARGE_IN.confirmRatio;
 
-// Niveles RMS medidos en el pipeline real (0..1 sobre PCM 16 bit):
-//   sala en silencio con noiseSuppression   ~0.004
-//   ventilador / aire acondicionado          ~0.020  (bajo el umbral)
-//   eco del agente por el parlante           ~0.040  (sobre el umbral, bajo 1.4×)
-//   voz normal a 30 cm                        0.09 – 0.18
-//   portazo / golpe en la mesa                0.60 en un solo frame
+// RMS levels measured in the real pipeline (0..1 over 16-bit PCM):
+//   quiet room with noiseSuppression   ~0.004
+//   fan / air conditioning              ~0.020  (below the threshold)
+//   agent echo through the speaker       ~0.040  (above the threshold, below 1.4×)
+//   normal voice at 30 cm                0.09 – 0.18
+//   door slam / knock on the table       0.60 in a single frame
 const SALA = 0.004;
 const VENTILADOR = 0.02;
 const ECO_DEL_AGENTE = 0.04;
 const PORTAZO = 0.6;
 
-// Corre una tira de frames por el evaluador y devuelve la bitácora. `atMs`
-// es el momento en que la decisión está disponible: el worklet entrega el
-// frame recién cuando terminó de grabarlo, así que es el FIN del frame.
+// Runs a strip of frames through the evaluator and returns the log. `atMs`
+// is the moment the decision becomes available: the worklet delivers the
+// frame only once it has finished recording it, so it is the END of the frame.
 function reproducir(frames, opciones = {}) {
   const { agentSpeaking = true, userSpeaking = false, state = idleBargeInState() } = opciones;
   let actual = state;
@@ -53,16 +53,16 @@ const primero = (eventos, tipo) => eventos.find((evento) => evento.tipo === tipo
 const contar = (eventos, tipo) => eventos.filter((evento) => evento.tipo === tipo).length;
 const repetir = (valor, veces) => Array.from({ length: veces }, () => valor);
 
-test('un "perdón—" murmurado baja el volumen del agente pero no lo interrumpe', () => {
-  // Interjección bajo el aliento: ataque, un núcleo fuerte de 120 ms y se
-  // apaga. La persona no siguió hablando, así que el agente tiene que
-  // recuperar el volumen y seguir su turno.
+test('a mumbled "sorry—" ducks the agent volume but does not interrupt it', () => {
+  // Under-the-breath interjection: attack, a strong 120 ms core, then it
+  // fades out. The person did not keep talking, so the agent has to
+  // restore the volume and continue its turn.
   const { eventos, state } = reproducir([
     ...repetir(SALA, 5),
-    0.041, // "per-" arranca flojo: alcanza para duck, no para confirmar
-    0.098, // "-dón" núcleo
+    0.041, // "per-" starts weak: enough for duck, not to confirm
+    0.098, // "-dón" core
     0.072,
-    0.030, // se apaga
+    0.030, // goes quiet
     ...repetir(SALA, 6)
   ]);
 
@@ -73,18 +73,18 @@ test('un "perdón—" murmurado baja el volumen del agente pero no lo interrumpe
 
   const reset = primero(eventos, 'reset');
   assert.ok(reset, 'al quedarse callada hay que devolver el volumen');
-  // 240 ms de silencio (2 frames por debajo del umbral + histéresis de 160 ms).
+  // 240 ms of silence (2 frames below the threshold + 160 ms hysteresis).
   assert.ok(reset.atMs - 9 * FRAME_MS <= 240, `el volumen vuelve rápido (tardó ${reset.atMs - 9 * FRAME_MS} ms)`);
   assert.deepEqual(state, idleBargeInState(), 'y el estado queda limpio');
 });
 
-test('la persona arranca a hablar y sostiene la voz: corta al agente en ~360 ms', () => {
-  // Envolvente real de "perdón, pará un segundo": ataque suave y después
-  // energía sostenida de voz cerca del micrófono.
+test('the person starts talking and holds their voice: cuts the agent off at ~360 ms', () => {
+  // Real envelope of "sorry, hold on a second": soft attack, then
+  // sustained voice energy near the microphone.
   const voz = [0.042, 0.104, 0.155, 0.121, 0.168, 0.132, 0.149, 0.118];
   const { eventos } = reproducir([...repetir(SALA, 3), ...voz]);
 
-  const inicioVozMs = 3 * FRAME_MS; // la persona abre la boca acá
+  const inicioVozMs = 3 * FRAME_MS; // the person opens their mouth here
   const duck = primero(eventos, 'duck');
   const interrupt = primero(eventos, 'interrupt');
 
@@ -97,8 +97,8 @@ test('la persona arranca a hablar y sostiene la voz: corta al agente en ~360 ms'
   assert.ok(latencia <= BARGE_IN.confirmMs + 2 * FRAME_MS, `tiene que cortar apenas confirma (cortó a ${latencia} ms)`);
 });
 
-test('el ruido de fondo constante por debajo del umbral no toca al agente', () => {
-  // 5 segundos de ventilador con micro-variaciones.
+test('constant background noise below the threshold does not touch the agent', () => {
+  // 5 seconds of fan with micro-variations.
   const frames = Array.from({ length: 84 }, (_, index) => VENTILADOR + (index % 5) * 0.002);
   const { eventos, state } = reproducir(frames);
 
@@ -106,8 +106,8 @@ test('el ruido de fondo constante por debajo del umbral no toca al agente', () =
   assert.deepEqual(state, idleBargeInState());
 });
 
-test('un golpe seco (portazo) no alcanza para interrumpir', () => {
-  // Un único frame altísimo y de vuelta el silencio de la sala.
+test('a sharp knock (door slam) is not enough to interrupt', () => {
+  // A single very loud frame, then back to room silence.
   const { eventos, state } = reproducir([...repetir(SALA, 4), PORTAZO, ...repetir(SALA, 8)]);
 
   assert.equal(contar(eventos, 'interrupt'), 0, 'un transitorio no es una persona hablando');
@@ -116,12 +116,12 @@ test('un golpe seco (portazo) no alcanza para interrumpir', () => {
   assert.deepEqual(state, idleBargeInState());
 });
 
-test('el eco del propio agente por los parlantes no lo hace interrumpirse solo', () => {
-  // Caso peligroso: el parlante devuelve al micrófono la voz del agente.
-  // El eco es SOSTENIDO (dura todo el turno) y queda apenas por encima del
-  // umbral de arranque, pero por debajo de 1.4× el umbral. Por eso existe
-  // ese factor: si confirmáramos con el umbral pelado, el agente se
-  // cortaría solo a los 250 ms de empezar a hablar.
+test("the agent's own echo through the speakers does not make it interrupt itself", () => {
+  // Dangerous case: the speaker feeds the agent's voice back into the mic.
+  // The echo is SUSTAINED (it lasts the whole turn) and sits just above the
+  // start threshold, but below 1.4× the threshold. That is why the factor
+  // exists: if we confirmed with the bare threshold, the agent would cut
+  // itself off 250 ms into its own speech.
   const ecoSostenido = Array.from({ length: 50 }, (_, index) => ECO_DEL_AGENTE + (index % 3) * 0.002);
   assert.ok(ecoSostenido.every((rms) => rms > START && rms < LOUD), 'el eco vive entre el umbral y 1.4×');
 
@@ -132,45 +132,45 @@ test('el eco del propio agente por los parlantes no lo hace interrumpirse solo',
   assert.ok(contar(eventos, 'duck') > 0, 'sí baja el volumen, lo que además reduce el propio eco');
 });
 
-test('las pausas entre sílabas no borran lo acumulado, un silencio largo sí', () => {
+test('pauses between syllables do not erase the accumulation, a long silence does', () => {
   const conPausaCorta = reproducir([
-    0.12, 0.14, // 120 ms de voz
-    SALA, SALA, // 120 ms de aire entre palabras (< releaseMs)
-    0.13, 0.15, 0.12 // sigue hablando
+    0.12, 0.14, // 120 ms of voice
+    SALA, SALA, // 120 ms of air between words (< releaseMs)
+    0.13, 0.15, 0.12 // keeps talking
   ]);
   assert.ok(primero(conPausaCorta.eventos, 'interrupt'), 'hablar entrecortado igual interrumpe');
 
   const conPausaLarga = reproducir([
-    0.12, 0.14, // 120 ms de voz
-    ...repetir(SALA, 5), // 300 ms de silencio (> releaseMs): se soltó el duck
-    0.13, 0.15, 0.12 // vuelve a arrancar: la cuenta empieza de cero
+    0.12, 0.14, // 120 ms of voice
+    ...repetir(SALA, 5), // 300 ms of silence (> releaseMs): the duck released
+    0.13, 0.15, 0.12 // starts again: the count restarts from zero
   ]);
   assert.equal(contar(conPausaLarga.eventos, 'interrupt'), 0, 'después de un silencio largo hay que sostener de nuevo');
   assert.ok(primero(conPausaLarga.eventos, 'reset'), 'y el volumen del agente volvió durante el silencio');
 });
 
-test('después de interrumpir, el estado queda limpio para la próxima', () => {
-  // 4 frames de voz fuerte y el corte sale en el último.
+test('after interrupting, the state is clean for the next one', () => {
+  // 4 frames of loud voice and the cut fires on the last one.
   const primeraVez = reproducir(repetir(0.14, BARGE_IN.confirmMs / FRAME_MS));
   const interrupt = primero(primeraVez.eventos, 'interrupt');
 
   assert.ok(interrupt);
   assert.deepEqual(primeraVez.state, idleBargeInState(), 'sin residuos del corte anterior');
 
-  // Desde el corte la persona pasa a tener el turno: el resto de su frase ya
-  // no es barge-in y no tiene que ensuciar nada.
+  // From the cut on, the person holds the turn: the rest of their sentence is
+  // no longer barge-in and must not dirty anything.
   const restoDeLaFrase = reproducir(repetir(0.15, 12), { state: primeraVez.state, userSpeaking: true });
   assert.deepEqual(restoDeLaFrase.state, idleBargeInState());
 
-  // Contesta otro agente: un frame suelto no puede cortarlo.
+  // Another agent answers: a stray frame cannot cut it off.
   const siguiente = reproducir([PORTAZO, ...repetir(SALA, 5)], { state: restoDeLaFrase.state });
   assert.equal(contar(siguiente.eventos, 'interrupt'), 0, 'la próxima interrupción vuelve a exigir voz sostenida');
 });
 
-test('lo acumulado no sobrevive al final del turno del agente', () => {
-  // La persona empieza a hablar justo cuando el agente está terminando:
-  // acumula 180 ms y el audio del agente se acaba solo. Ese resto no puede
-  // quedar guardado para cortar al agente siguiente con un solo golpe.
+test("the accumulation does not survive the end of the agent's turn", () => {
+  // The person starts talking just as the agent is finishing:
+  // 180 ms accumulate and then the agent's audio ends on its own. That
+  // remainder cannot stay stored to cut the next agent off with a single knock.
   const casiConfirmado = reproducir(repetir(0.14, 3));
   assert.equal(casiConfirmado.state.loudMs, 180);
 
@@ -182,14 +182,14 @@ test('lo acumulado no sobrevive al final del turno del agente', () => {
   assert.equal(contar(agenteNuevo.eventos, 'interrupt'), 0, 'el agente nuevo no se come el resto del anterior');
 });
 
-test('mientras la persona ya tiene el turno no se evalúa barge-in', () => {
+test('while the person already holds the turn, barge-in is not evaluated', () => {
   const { eventos, state } = reproducir(repetir(0.2, 6), { userSpeaking: true });
   assert.equal(contar(eventos, 'interrupt'), 0, 'ya está grabando su turno: no hay a quién cortar');
   assert.equal(contar(eventos, 'duck'), 0);
   assert.deepEqual(state, idleBargeInState());
 });
 
-test('valores raros (NaN, duración cero, umbral inválido) no disparan nada', () => {
+test('weird values (NaN, zero duration, invalid threshold) trigger nothing', () => {
   const decision = evaluateBargeIn(idleBargeInState(), {
     rms: Number.NaN,
     durationMs: Number.NaN,
@@ -200,9 +200,9 @@ test('valores raros (NaN, duración cero, umbral inválido) no disparan nada', (
   assert.equal(decision.duck, false);
 });
 
-test('el pre-buffer guarda toda la ventana de confirmación: la frase llega entera', () => {
-  // Cada frame que se pierde del pre-buffer es un pedazo de la primera
-  // palabra que Whisper nunca ve.
+test('the pre-buffer keeps the whole confirmation window: the sentence arrives intact', () => {
+  // Every frame lost from the pre-buffer is a piece of the first
+  // word Whisper never sees.
   const frames = Array.from({ length: 40 }, (_, index) => ({ id: index, durationMs: FRAME_MS }));
   const guardados = trimPreBuffer(frames);
   const msGuardados = guardados.reduce((total, frame) => total + frame.durationMs, 0);

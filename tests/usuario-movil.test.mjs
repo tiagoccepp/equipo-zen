@@ -19,15 +19,15 @@ import {
   safeWorkspacePath
 } from '../server/lib/workforce.js';
 
-// Lo que el usuario le pidió a la empresa fue una APP: algo que se instala en
-// el celular, no una página. Estos tests son sobre esa promesa — que el sistema
-// distinga una app de una web, que lo diga con palabras que el equipo entienda,
-// y que mientras tanto no lo deje escribir fuera de su carpeta.
+// What the user asked the company for was an APP: something installed on the
+// phone, not a page. These tests are about that promise — that the system
+// tells an app from a web page, says it in words the team understands,
+// and meanwhile does not let it write outside its folder.
 
 const keyRing = { hasKeys: () => true };
 
-// Empresa de un nicho concreto, sin depender de los nombres de la plantilla:
-// se elige por stack, que es lo que define si lo entregado tiene que compilar.
+// A company from a concrete niche, without depending on template names:
+// picked by stack, which is what defines whether the deliverable must compile.
 function nuevaEmpresa(stack) {
   const store = new Store(':memory:');
   const template = companyTemplates.templates.find((t) => t.stack === stack);
@@ -37,8 +37,8 @@ function nuevaEmpresa(stack) {
   return { store, company };
 }
 
-// La carpeta real del proyecto, la misma que usa el motor. Se borra entera la
-// de la empresa al terminar: el workspace queda como estaba.
+// The real project folder, the same one the engine uses. The company's whole
+// folder is deleted at the end: the workspace stays as it was.
 function carpetaDelProyecto(t, company, project) {
   const dir = projectDir(company.id, project.slug);
   mkdirSync(dir, { recursive: true });
@@ -46,7 +46,7 @@ function carpetaDelProyecto(t, company, project) {
   return dir;
 }
 
-// Escribir como escribe un empleado: pasando por la guardia del sandbox.
+// Write like an employee writes: going through the sandbox guard.
 function escribir(company, project, relativo, contenido) {
   const destino = safeWorkspacePath(company.id, project.slug, relativo);
   mkdirSync(path.dirname(destino), { recursive: true });
@@ -54,12 +54,12 @@ function escribir(company, project, relativo, contenido) {
   return destino;
 }
 
-test('el estudio Android entrega un proyecto Gradle y el motor lo trata como app, no como sitio', (t) => {
+test('the Android studio ships a Gradle project and the engine treats it as an app, not a site', (t) => {
   const { store, company } = nuevaEmpresa('android');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
 
-  // El proyecto hereda el nicho: nadie tuvo que aclarar que es una app.
+  // The project inherits the niche: nobody had to clarify it is an app.
   assert.equal(project.stack, 'android');
   assert.equal(esProyectoMovil(project.stack), true, 'lo que entreguen tiene que compilar, no verse');
 
@@ -70,7 +70,7 @@ test('el estudio Android entrega un proyecto Gradle y el motor lo trata como app
   assert.equal(detectarProyecto(dir), 'android');
 });
 
-test('una app en React Native se reconoce por su punto de entrada: con package.json solo no alcanza', (t) => {
+test('a React Native app is recognized by its entry point: package.json alone is not enough', (t) => {
   const { store, company } = nuevaEmpresa('movil-rn');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
@@ -82,13 +82,13 @@ test('una app en React Native se reconoce por su punto de entrada: con package.j
   const entrada = escribir(company, project, 'App.jsx', "import { View } from 'react-native';");
   assert.equal(detectarProyecto(dir), 'react-native');
 
-  // El mismo equipo, otro día, escribe el punto de entrada sin JSX en el nombre.
+  // The same team, another day, writes the entry point without JSX in the name.
   rmSync(entrada);
   escribir(company, project, 'App.js', "import { View } from 'react-native';");
   assert.equal(detectarProyecto(dir), 'react-native', 'App.js también es un punto de entrada válido');
 });
 
-test('un proyecto web con su index.html no pasa por el compilador de apps', (t) => {
+test('a web project with its index.html does not go through the app compiler', (t) => {
   const { store, company } = nuevaEmpresa('web');
   const project = store.createProject({ companyId: company.id, title: 'Landing del club' });
   const dir = carpetaDelProyecto(t, company, project);
@@ -100,7 +100,7 @@ test('un proyecto web con su index.html no pasa por el compilador de apps', (t) 
   assert.equal(detectarProyecto(dir), null, 'una carpeta con index.html no es un proyecto móvil');
 });
 
-test('si entregan una web disfrazada de app, el rechazo dice qué archivo es y qué va en lugar del div', async (t) => {
+test('if they ship a web page disguised as an app, the rejection says which file it is and what goes instead of the div', async (t) => {
   const { store, company } = nuevaEmpresa('movil-rn');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
@@ -124,7 +124,7 @@ test('si entregan una web disfrazada de app, el rechazo dice qué archivo es y q
   assert.match(informe, /finish/, 'no puede cerrar la tarea hasta arreglarlo');
 });
 
-test('guardar en localStorage no funciona en un celular y el equipo se entera antes de cerrar la tarea', async (t) => {
+test('saving to localStorage does not work on a phone and the team finds out before closing the task', async (t) => {
   const { store, company } = nuevaEmpresa('movil-rn');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
@@ -151,13 +151,13 @@ test('guardar en localStorage no funciona en un celular y el equipo se entera an
   assert.ok(culpable, 'el rechazo explica que esas APIs no existen en una app móvil');
   assert.equal(culpable.archivo, path.join('src', 'almacenamiento.js'), 'y señala el archivo exacto');
 
-  // Sacado el archivo culpable, la misma app pasa: nada de falsos positivos que
-  // manden al equipo a romper código que estaba bien.
+  // With the guilty file removed, the same app passes: no false positives
+  // sending the team to break code that was fine.
   rmSync(guardado);
   assert.deepEqual(await revisarReactNative(dir), { ok: true });
 });
 
-test('cuando la app Android no compila, el equipo recibe archivo y línea, no el log entero de Gradle', () => {
+test('when the Android app does not compile, the team gets file and line, not the whole Gradle log', () => {
   const salida = [
     '> Task :app:preBuild UP-TO-DATE',
     '> Task :app:compileDebugKotlin FAILED',
@@ -188,13 +188,13 @@ test('cuando la app Android no compila, el equipo recibe archivo y línea, no el
   assert.match(informe, /finish/);
 });
 
-test('el equipo puede escribir el proyecto nativo entero, pero nada fuera de la carpeta del proyecto', (t) => {
+test('the team can write the whole native project, but nothing outside the project folder', (t) => {
   const { store, company } = nuevaEmpresa('android');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
 
-  // Todo esto es el entregable de un nicho móvil: si el sandbox lo bloquea, la
-  // app no existe.
+  // All of this is a mobile niche's deliverable: if the sandbox blocks it,
+  // the app does not exist.
   const delProyecto = [
     'settings.gradle.kts',
     'build.gradle.kts',
@@ -217,7 +217,7 @@ test('el equipo puede escribir el proyecto nativo entero, pero nada fuera de la 
     assert.ok(destino.startsWith(dir + path.sep), `${relativo} tiene que caer dentro del proyecto`);
   }
 
-  // Y lo que no es entregable de nadie sigue afuera.
+  // And what is nobody's deliverable stays out.
   assert.throws(() => safeWorkspacePath(company.id, project.slug, '../../../etc/passwd'), /fuera del proyecto/);
   assert.throws(() => safeWorkspacePath(company.id, project.slug, '/etc/passwd'), /inválida/);
   assert.throws(() => safeWorkspacePath(company.id, project.slug, 'app/../../fuera.kt'), /fuera del proyecto/);
@@ -227,14 +227,14 @@ test('el equipo puede escribir el proyecto nativo entero, pero nada fuera de la 
     'y el mensaje dice qué sí puede escribir');
 });
 
-// FALLA A PROPÓSITO: bug real del producto.
-// construirApp() se llama únicamente cuando el proyecto es de un nicho móvil
-// (workforce.js: `esProyectoMovil(goal?.stack)`). Si en la carpeta no hay ni
-// Gradle ni punto de entrada, devuelve { saltado: true } y renderBuildReport()
-// no dice nada: la tarea se cierra como buena. O sea, la web disfrazada de app
-// se detecta cuando ya se parece a una app, pero el disfraz más burdo —entregar
-// un index.html y listo— pasa derecho.
-test('si el proyecto es una app y en la carpeta hay una web, el motor tiene que rechazarla', async (t) => {
+// FAILS ON PURPOSE: real product bug.
+// construirApp() is only called when the project is from a mobile niche
+// (workforce.js: `esProyectoMovil(goal?.stack)`). If the folder has neither
+// Gradle nor an entry point, it returns { saltado: true } and renderBuildReport()
+// says nothing: the task closes as good. That is, the web page disguised as an app
+// is detected once it already looks like an app, but the crudest disguise —shipping
+// an index.html and done— sails through.
+test('if the project is an app and the folder holds a web page, the engine must reject it', async (t) => {
   const { store, company } = nuevaEmpresa('movil-rn');
   const project = store.createProject({ companyId: company.id, title: 'Turnos del club' });
   const dir = carpetaDelProyecto(t, company, project);
@@ -245,8 +245,8 @@ test('si el proyecto es una app y en la carpeta hay una web, el motor tiene que 
   assert.equal(esProyectoMovil(project.stack), true, 'el usuario pidió una app');
   assert.equal(detectarProyecto(dir), null, 'y en la carpeta no hay ninguna app');
 
-  // El nicho del proyecto viaja al motor: la carpeta sola no puede saber que
-  // acá iba una app y no un sitio.
+  // The project niche travels to the engine: the folder alone cannot know that
+  // an app belonged here and not a site.
   const build = await construirApp(dir, project.stack);
   assert.notEqual(
     renderBuildReport(build),

@@ -15,9 +15,9 @@ const EDGE_VOICES = {
 
 // Idioma configurado (tts.language): 'en*' usa las voces en-US.
 function edgeTable() {
-  return String(getTtsLanguage() || 'es').toLowerCase().startsWith('en') ? EDGE_VOICES.en : EDGE_VOICES.es;
+  return String(getTtsLanguage() || 'en').toLowerCase().startsWith('en') ? EDGE_VOICES.en : EDGE_VOICES.es;
 }
-const DEFAULT_EDGE_VOICE = 'es-ES-AlvaroNeural';
+const DEFAULT_EDGE_VOICE = 'en-US-AndrewNeural';
 const EDGE_TIMEOUT_MS = 20000;
 const MAX_EDGE_CHARS = 2000;
 

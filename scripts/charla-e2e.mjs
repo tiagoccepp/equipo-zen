@@ -1,10 +1,10 @@
-// Prueba de conversación real: le hablo al equipo como le habla el usuario.
+// Real conversation test: I talk to the team the way the user talks.
 //
-// No es un test unitario: abre un WebSocket contra el backend vivo, manda los
-// mensajes tal cual los escribiría una persona —suelto, incompleto, con
-// preguntas a mitad de camino— y mide qué entregan.
+// Not a unit test: it opens a WebSocket against the live backend, sends the
+// messages just as a person would write them —loose, incomplete, with
+// mid-way questions— and measures what they deliver.
 //
-// Uso:
+// Usage:
 //   node scripts/charla-e2e.mjs <plantilla> <titulo> "mensaje 1" "mensaje 2" ...
 //   node scripts/charla-e2e.mjs --escenario fasa
 
@@ -13,8 +13,8 @@ import WebSocket from 'ws';
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 const WS = BASE.replace('http', 'ws') + '/meeting';
 
-// Cómo habla el usuario de verdad, sacado de sus conversaciones: saludo, pedido
-// difuso, corrección a mitad de camino, pregunta abierta, y "dale".
+// How the real user talks, taken from their conversations: greeting, fuzzy
+// request, mid-way correction, open question, and "dale" ("go ahead").
 const ESCENARIOS = {
   fasa: {
     plantilla: 'movil-rn',
@@ -90,7 +90,7 @@ export async function charlar({ plantilla, titulo, mensajes, esperaTrabajoMs = 0
         if (i < mensajes.length) {
           log(`\n  YO » ${mensajes[i]}`);
           ws.send(JSON.stringify({ type: 'user_turn', text: mensajes[i++] }));
-          // Red de seguridad: si el equipo no contesta nada, se sigue igual.
+          // Safety net: if the team answers nothing, carry on anyway.
           programarSiguiente(45000);
         } else {
           clearTimeout(fin);
@@ -115,10 +115,10 @@ export async function charlar({ plantilla, titulo, mensajes, esperaTrabajoMs = 0
         log(`     ${m.text.slice(0, 150)}`);
       }
 
-      // Cuando el equipo se calla, mando el siguiente. Se reprograma con
-      // CUALQUIER señal de que el turno terminó: un saludo suelto puede no
-      // producir ninguna respuesta (todos en silencio por protocolo) y el
-      // script se quedaba esperando para siempre.
+      // When the team goes quiet, I send the next one. It reschedules on
+      // ANY signal that the turn ended: a lone greeting may produce no
+      // response at all (everyone silent by protocol) and the script would
+      // wait forever.
       if (['agent_turn_complete', 'agent_silence', 'no_agent_response', 'agents_idle', 'route_decision'].includes(m.type)) {
         programarSiguiente();
       }
@@ -130,7 +130,7 @@ export async function charlar({ plantilla, titulo, mensajes, esperaTrabajoMs = 0
     throw new Error('la reunión nunca se abrió');
   }
 
-  // Dejar trabajar al equipo si se pidió.
+  // Let the team work if asked.
   if (esperaTrabajoMs > 0) {
     log(`\n  … dejando trabajar ${Math.round(esperaTrabajoMs / 1000)}s`);
     await dormir(esperaTrabajoMs);
@@ -140,7 +140,7 @@ export async function charlar({ plantilla, titulo, mensajes, esperaTrabajoMs = 0
   return { company, project, turnos, detalle };
 }
 
-// Qué salió: lo que le importa al usuario, no métricas internas.
+// What came out: what matters to the user, not internal metrics.
 export function juzgar(detalle) {
   const tareas = detalle.tasks || [];
   const archivos = (detalle.project.files || []).map((f) => f.path);

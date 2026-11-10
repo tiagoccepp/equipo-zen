@@ -1,10 +1,10 @@
-// Smoke de personalidad 5 preguntas (dieta §5b): corre ANTES (system
-// congelado en /tmp/diet-antes.json, si existe) y DESPUÉS (código vivo) con el
-// mismo modelo y chequea MARCADORES conductuales, no texto exacto.
-// Pasa si DESPUÉS ≥ ANTES en marcadores y cero autofallos (gate relativo:
-// beam-free no emite [PIENSO]/preámbulos en ninguno de los dos, verificado
-// 09/11 — exigir absolutos fallaría también con el prompt original). Sin claves o sin red al proveedor:
-// imprime PERSONALITY_DEFERRED y sale 2 (diferir, no fallar).
+// Personality smoke with 5 questions (diet §5b): runs BEFORE (system
+// frozen in /tmp/diet-antes.json, if it exists) and AFTER (live code) with the
+// same model and checks behavioral MARKERS, not exact text.
+// It passes if AFTER ≥ BEFORE on markers and zero autofails (relative gate:
+// beam-free emits no [PIENSO]/preambles in either one, verified 09/11 —
+// demanding absolutes would fail with the original prompt too). Without keys or without network to the provider:
+// prints PERSONALITY_DEFERRED and exits 2 (defer, do not fail).
 // node tests/personality-smoke.mjs
 
 import { DatabaseSync } from 'node:sqlite';
@@ -27,7 +27,7 @@ const { ApiKeyRing } = await import(`${LIB}/key-ring.js`);
 const { completeChat } = await import(`${LIB}/llm.js`);
 const { stripPrivateBlocks, stripProgressBlocks, stripTaskTags } = await import(`${LIB}/text.js`);
 
-// Memoria sembrada desde los templates (lo que vería un Pablo fresco).
+// Memory seeded from the templates (what a fresh Pablo would see).
 const memTmp = mkdtempSync(join(tmpdir(), 'p-smoke-'));
 process.env.PABLO_MEMORY_DIR = memTmp;
 cpSync(join(here, '..', 'server', 'templates', 'pablo', 'SOUL.md'), join(memTmp, '4lvzknE8pY', 'memoria', 'SOUL.md'), { recursive: true });
@@ -169,7 +169,7 @@ for (let i = 0; i < PREGUNTAS.length; i += 1) {
   let rawAfter;
   try {
     if (p.tools) {
-      // Fase tools real (two-phase) antes del habla, como en vivo.
+      // Real tools phase (two-phase) before speaking, like in production.
       const phase = await maybeRunToolsPhase({
         turn: mkTurn(p.q), system: systemAfter, userContent: userAfter,
         keyRing: ring, emit: () => {}, source: 'audio', turnId: 'smoke', agentId: agent.id,
@@ -205,7 +205,7 @@ for (let i = 0; i < PREGUNTAS.length; i += 1) {
     }
     celdas.push({ nombre, despues: okA, antes: okB });
   }
-  // Auto-fails (§5b) sobre el DESPUÉS.
+  // Auto-fails (§5b) on the AFTER.
   const sp = spokenOf(rawAfter);
   const autofail = [
     ['habla español en modo EN', ES_RE.test(sp)],

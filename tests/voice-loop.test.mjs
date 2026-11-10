@@ -1,11 +1,11 @@
-// Test E2E del turno de voz (node:test, skipeable).
-// Requiere la app viva: si no hay backend en el puerto detectado, se skipea
-// con la instrucción para correrlo post-merge. La lógica vive en
-// scripts/voice-smoke.mjs; acá solo se adapta a node:test.
+// E2E test of the voice turn (node:test, skippable).
+// Requires the app live: if there is no backend on the detected port, it skips
+// with instructions to run it post-merge. The logic lives in
+// scripts/voice-smoke.mjs; here it is only adapted to node:test.
 //
 // Correr:
 //   node --test tests/voice-loop.test.mjs
-//   VOICE_PORT=46609 node --test tests/voice-loop.test.mjs   (puerto explícito)
+//   VOICE_PORT=46609 node --test tests/voice-loop.test.mjs   (explicit port)
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +24,7 @@ async function appViva(base) {
 }
 
 for (const caso of Object.keys(CASOS)) {
-  test(`turno de voz E2E [${caso}]`, { timeout: 180_000 }, async (t) => { // 2 intentos × (synth+collecta 30s) bajo carga de suite superan 90s
+  test(`voice turn E2E [${caso}]`, { timeout: 180_000 }, async (t) => { // 2 attempts × (30s synth+collect) under suite load exceed 90s
     if (!PORT) {
       t.skip('app DOWN: sin puerto (server.log ausente y sin VOICE_PORT). Post-merge: node scripts/voice-smoke.mjs [PORT] both');
       return;

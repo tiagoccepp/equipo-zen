@@ -3,15 +3,15 @@ import { existsSync, readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-// Compilación real de las apps móviles.
+// Real compilation of the mobile apps.
 //
-// Los nichos móviles entregan una APP NATIVA, no una web: el motor la compila
-// de verdad y le devuelve los errores del compilador al agente, igual que hace
-// verify.js con el HTML. Sin esto, "entregar una app" es entregar un texto que
-// se parece a una app.
+// The mobile niches deliver a NATIVE APP, not a web page: the engine really
+// compiles it and hands the compiler errors back to the agent, just like
+// verify.js does with HTML. Without this, "delivering an app" is delivering
+// text that looks like an app.
 //
-// Verificado en esta máquina: Gradle 9.1 + AGP 9 + Kotlin 2.2 + Compose,
-// compileSdk 36. Una compilación en frío tarda minutos; en caliente, ~5 s.
+// Verified on this machine: Gradle 9.1 + AGP 9 + Kotlin 2.2 + Compose,
+// compileSdk 36. A cold build takes minutes; a warm one, ~5s.
 
 const SDK_ROOT = () => process.env.ANDROID_HOME
   || process.env.ANDROID_SDK_ROOT
@@ -20,8 +20,8 @@ const SDK_ROOT = () => process.env.ANDROID_HOME
 const BUILD_TIMEOUT_MS = Number(process.env.NATIVE_BUILD_TIMEOUT_MS || 600000);
 
 function gradleBin() {
-  // El wrapper del proyecto sería lo ideal, pero los agentes no pueden escribir
-  // el jar binario del wrapper: se usa la distribución que ya está en la caché.
+  // The project wrapper would be ideal, but agents cannot write
+  // the wrapper's binary jar: the distribution already in the cache is used.
   const dists = path.join(process.env.HOME || '', '.gradle', 'wrapper', 'dists');
   let versiones = [];
   try {
@@ -56,8 +56,8 @@ function gradleBin() {
 }
 
 function javaHome() {
-  // Java 17 es el que pide AGP 9. /usr/libexec/java_home no está en Linux, así
-  // que se cae a JAVA_HOME si existe.
+  // Java 17 is what AGP 9 requires. /usr/libexec/java_home is not on Linux, so
+  // it falls back to JAVA_HOME when set.
   return process.env.JAVA_HOME || '/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home';
 }
 
@@ -79,9 +79,9 @@ function correr(cmd, args, { cwd, timeout = BUILD_TIMEOUT_MS, env = {} } = {}) {
   });
 }
 
-// Qué clase de proyecto hay en la carpeta. Devuelve null si no hay nada que
-// compilar. El orden importa: un proyecto Android puede tener scripts .py
-// sueltos y sigue siendo Android.
+// What kind of project lives in the folder. Returns null when there is
+// nothing to build. Order matters: an Android project may hold stray .py
+// scripts and still be Android.
 export function detectarProyecto(dir) {
   if (existsSync(path.join(dir, 'settings.gradle.kts')) || existsSync(path.join(dir, 'settings.gradle'))) {
     return 'android';
@@ -98,9 +98,9 @@ export function detectarProyecto(dir) {
   return null;
 }
 
-// Todos los .py del proyecto, en rutas relativas. Se saltean los intermedios y
-// el entorno virtual: compilar la biblioteca estándar de un venv son miles de
-// archivos y ni uno de ellos lo escribió el equipo.
+// Every .py in the project, as relative paths. Intermediates and the
+// virtual env are skipped: compiling a venv's stdlib is thousands of
+// files and not one of them was written by the team.
 const IGNORAR_PY = new Set(['__pycache__', 'node_modules', 'build', 'dist', 'venv', 'site-packages']);
 
 export function archivosPython(dir) {
@@ -128,19 +128,19 @@ export function archivosPython(dir) {
   return out.sort();
 }
 
-// Los errores del compilador, tal como los necesita el agente: archivo, línea y
-// qué está mal. Se recortan a los primeros porque arreglar el primero suele
-// hacer desaparecer la cascada.
+// Compiler errors, as the agent needs them: file, line, and
+// what is wrong. Trimmed to the first ones because fixing the first
+// usually makes the cascade disappear.
 export function parsearErroresKotlin(salida) {
   const errores = [];
   for (const linea of String(salida || '').split('\n')) {
-    // e: file:///ruta/Archivo.kt:12:5 Mensaje
+    // e: file:///path/File.kt:12:5 Message
     const kotlin = linea.match(/^e:\s+file:\/\/(\S+?):(\d+):(\d+)\s+(.+)$/);
     if (kotlin) {
       errores.push({ archivo: path.basename(kotlin[1]), linea: Number(kotlin[2]), que: kotlin[4].trim() });
       continue;
     }
-    // Errores de Gradle (configuración, dependencias, plugins).
+    // Gradle errors (configuration, dependencies, plugins).
     const gradle = linea.match(/^\s*>\s+(.+)$/);
     if (gradle && !/^\s*>\s+Task/.test(linea) && errores.length < 8) {
       const texto = gradle[1].trim();
@@ -149,7 +149,7 @@ export function parsearErroresKotlin(salida) {
       }
     }
   }
-  // Sin nada reconocible, se devuelve la cola del log: mejor algo que nada.
+  // With nothing recognizable, return the log tail: something beats nothing.
   if (errores.length === 0) {
     const cola = String(salida || '').split('\n').filter(Boolean).slice(-12).join('\n');
     if (cola) {
@@ -159,19 +159,19 @@ export function parsearErroresKotlin(salida) {
   return errores.slice(0, 8);
 }
 
-// Los errores de py_compile, con archivo y línea igual que los de Kotlin.
-// Python los emite en DOS formatos distintos y hay que entender los dos:
+// py_compile errors, with file and line just like the Kotlin ones.
+// Python emits them in TWO different formats and both must be understood:
 //
-//   1)   File "src/nucleo.py", line 12      ← SyntaxError y parientes
+//   1)   File "src/nucleo.py", line 12      ← SyntaxError and relatives
 //          def sumar(a, b)
 //                         ^
 //        SyntaxError: expected ':'
 //
 //   2) Sorry: IndentationError: expected an indented block … (main.py, line 3)
 //
-// El segundo aparece para IndentationError y TabError, que son justo los que un
-// modelo produce más seguido. Parsear solo el primero dejaba la falla más común
-// sin archivo ni línea.
+// The second shows up for IndentationError and TabError, which are exactly
+// what a model produces most often. Parsing only the first left the most
+// common failure without file or line.
 export function parsearErroresPython(salida, archivoPorDefecto = null) {
   const errores = [];
   const lineas = String(salida || '').split('\n');
@@ -179,14 +179,14 @@ export function parsearErroresPython(salida, archivoPorDefecto = null) {
   for (let i = 0; i < lineas.length; i += 1) {
     const linea = lineas[i];
 
-    // Formato 2: viene todo en un renglón, con el archivo y la línea al final.
+    // Format 2: everything on one line, with file and line at the end.
     const corto = linea.match(/^\s*Sorry:\s*(\w*(?:Error|Warning)):\s*(.+?)\s*\(([^,()]+),\s*line\s+(\d+)\)\s*$/);
     if (corto) {
       errores.push({ archivo: corto[3].trim(), linea: Number(corto[4]), que: `${corto[1]}: ${corto[2].trim()}` });
       continue;
     }
 
-    // Formato 1: la ubicación en un renglón y el mensaje unos renglones abajo.
+    // Format 1: location on one line, message a few lines below.
     const ubicacion = linea.match(/^\s*File "([^"]+)", line (\d+)/);
     if (ubicacion) {
       let que = '';
@@ -206,7 +206,7 @@ export function parsearErroresPython(salida, archivoPorDefecto = null) {
     }
   }
 
-  // Sin nada reconocible: mejor la cola del log que nada, igual que en Kotlin.
+  // With nothing recognizable: the log tail beats nothing, same as in Kotlin.
   if (errores.length === 0) {
     const cola = lineas.filter(Boolean).slice(-12).join('\n');
     if (cola) {
@@ -220,15 +220,16 @@ function pythonBin() {
   return process.env.PYTHON_BIN || 'python3';
 }
 
-// Compila TODOS los .py del proyecto con py_compile. Devuelve { ok, errores } o
-// { saltado, motivo } si no hay Python en la máquina.
+// Compiles EVERY .py in the project with py_compile. Returns { ok, errores } or
+// { saltado, motivo } when there is no Python on the machine.
 //
-// Se compila de a un archivo a propósito: py_compile con varios argumentos corta
-// en el primero que falla, y el agente aprovecha mucho mejor un paso si recibe
-// los tres módulos rotos de una que si los descubre de a uno por corrida.
+// One file at a time on purpose: py_compile with several args stops
+// at the first failure, and the agent gets far more out of one step when it
+// receives all three broken modules at once instead of discovering them one
+// per run.
 //
-// PYTHONPYCACHEPREFIX manda los .pyc a una carpeta temporal: sin eso, cada
-// verificación dejaba un __pycache__ dentro del entregable del usuario.
+// PYTHONPYCACHEPREFIX sends .pyc files to a temp folder: without it, every
+// verification left a __pycache__ inside the user's deliverable.
 export async function compilarPython(dir) {
   const python = pythonBin();
   const version = await correr(python, ['--version'], { cwd: dir, timeout: 15000 });
@@ -262,7 +263,7 @@ export async function compilarPython(dir) {
   return errores.length ? { ok: false, errores: errores.slice(0, 8) } : { ok: true, archivos: archivos.length };
 }
 
-// Compila la app Android. Devuelve { ok, apk, errores, motivo }.
+// Compiles the Android app. Returns { ok, apk, errores, motivo }.
 export async function compilarAndroid(dir) {
   const gradle = gradleBin();
   if (!gradle) {
@@ -285,7 +286,7 @@ export async function compilarAndroid(dir) {
     return { ok: false, errores: parsearErroresKotlin(r.salida) };
   }
 
-  // Buscar el APK que quedó.
+  // Find the APK that was produced.
   const buscarApk = async (base) => {
     for (const entry of await fs.readdir(base, { withFileTypes: true }).catch(() => [])) {
       const completo = path.join(base, entry.name);
@@ -302,7 +303,7 @@ export async function compilarAndroid(dir) {
   return { ok: true, apk };
 }
 
-// Instala el APK en el emulador y lo abre. Solo si hay dispositivo.
+// Installs the APK on the emulator and opens it. Only with a device present.
 export async function instalarYAbrir(apk, dir) {
   const adb = path.join(SDK_ROOT(), 'platform-tools', 'adb');
   if (!existsSync(adb) || !apk) {
@@ -319,7 +320,7 @@ export async function instalarYAbrir(apk, dir) {
     return { ok: false, motivo: `Could not install: ${install.salida.slice(-200)}` };
   }
 
-  // El paquete sale del manifiesto; sin él no se puede lanzar.
+  // The package comes from the manifest; without it there is nothing to launch.
   const manifiesto = await fs.readFile(path.join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf-8').catch(() => '');
   const gradleApp = await fs.readFile(path.join(dir, 'app', 'build.gradle.kts'), 'utf-8').catch(() => '');
   const paquete = manifiesto.match(/package="([^"]+)"/)?.[1]
@@ -335,15 +336,15 @@ export async function instalarYAbrir(apk, dir) {
   return { ok: true, instalado: true, paquete };
 }
 
-// Punto único: compila lo que haya y devuelve el informe para el agente.
-// `stackEsperado` es el nicho del proyecto: si es móvil y lo que hay en la
-// carpeta no es una app, eso NO es "nada que compilar" — es haber entregado
-// una web donde iba una app, que es justo lo que hay que impedir.
+// Single entry point: builds whatever is there and returns the agent report.
+// `stackEsperado` is the project niche: if it is mobile and what sits in the
+// folder is not an app, that is NOT "nothing to build" — it is having delivered
+// a web page where an app belonged, which is exactly what must be prevented.
 export async function construirApp(dir, stackEsperado = null) {
   const tipo = detectarProyecto(dir);
 
-  // Python: el entregable es un programa que se ejecuta. Que no haya ni un .py
-  // no es "nada que compilar" — es no haber entregado el programa.
+  // Python: the deliverable is a program that runs. Having not a single .py
+  // is not "nothing to build" — it is not having delivered the program.
   if (stackEsperado === 'python' && tipo !== 'python') {
     const hayWeb = existsSync(path.join(dir, 'index.html'));
     return {
@@ -360,8 +361,8 @@ export async function construirApp(dir, stackEsperado = null) {
     };
   }
 
-  // Un .py suelto no convierte un proyecto móvil en compilable: si acá iba una
-  // app, la falta de app se reporta igual que antes.
+  // A stray .py does not make a mobile project buildable: if an app belonged
+  // here, the missing app is reported just as before.
   const esperaMovil = stackEsperado === 'android' || stackEsperado === 'movil-rn';
   if (esperaMovil && tipo !== 'android' && tipo !== 'react-native') {
     const hayWeb = existsSync(path.join(dir, 'index.html'));
@@ -393,9 +394,9 @@ export async function construirApp(dir, stackEsperado = null) {
     return { tipo, ok: true, apk: build.apk, ejecucion: run };
   }
   if (tipo === 'react-native') {
-    // La app multiplataforma se valida sin instalar dependencias: se comprueba
-    // que el proyecto tenga forma de app móvil y que su JSX parsee. Un
-    // `npm install` por proyecto son cientos de MB y minutos por corrida.
+    // The cross-platform app is validated without installing dependencies: check
+    // that the project looks like a mobile app and that its JSX parses. An
+    // `npm install` per project is hundreds of MB and minutes per run.
     return { tipo, ...(await revisarReactNative(dir)) };
   }
   if (tipo === 'python') {
@@ -408,8 +409,8 @@ export async function construirApp(dir, stackEsperado = null) {
   return { tipo: null, saltado: true, motivo: 'Nothing to build here.' };
 }
 
-// Revisión de un proyecto React Native SIN instalar dependencias: que sea una
-// app móvil de verdad y no una web disfrazada.
+// Review of a React Native project WITHOUT installing dependencies: that it is
+// a real mobile app and not a disguised web page.
 export async function revisarReactNative(dir) {
   const errores = [];
   const pkgTexto = await fs.readFile(path.join(dir, 'package.json'), 'utf-8').catch(() => '');
@@ -427,7 +428,7 @@ export async function revisarReactNative(dir) {
     errores.push({ archivo: 'app.json', linea: null, que: 'missing app.json (the app name, slug, icon and splash)' });
   }
 
-  // Etiquetas HTML en el código: el error clásico de entregar una web.
+  // HTML tags in the code: the classic delivered-a-web-page mistake.
   const revisarJsx = async (base) => {
     for (const entry of await fs.readdir(base, { withFileTypes: true }).catch(() => [])) {
       if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
@@ -472,7 +473,7 @@ function tituloDelInforme(resultado) {
   return 'LA APP NO ES UNA APP MÓVIL VÁLIDA';
 }
 
-// El informe tal como lo lee el agente en su próximo paso.
+// The report as the agent reads it on its next step.
 export function renderBuildReport(resultado) {
   if (!resultado || resultado.ok || resultado.saltado) {
     return '';

@@ -152,7 +152,7 @@ export function renderSkillsSection(text, { scope = 'chat', max = 2, agent = nul
   if (matched.length === 0) {
     return '';
   }
-  const en = scope !== 'work' && String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const en = scope !== 'work' && String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
   // Techo total D6: 2 skills × cuerpo ya acotado no pueden pasar de 1500ch
   // en el prompt del turno (peor caso viejo: 8000ch). La 2ª se recorta o cae.
   const SKILLS_TOTAL_MAX = 1500;

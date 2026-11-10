@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { parseAgentToolEvent, parseClientMessage, parseServerMessage } from '../shared/protocol.ts';
 
-test('user_turn válido pasa; texto gigante se rechaza', () => {
+test('valid user_turn passes; giant text is rejected', () => {
   const ok = parseClientMessage(JSON.stringify({ type: 'user_turn', text: 'hola' }));
   assert.equal(ok.ok, true);
   assert.equal(ok.message.text, 'hola');
@@ -12,13 +12,13 @@ test('user_turn válido pasa; texto gigante se rechaza', () => {
   assert.equal(grande.ok, false);
 });
 
-test('tipo desconocido se rechaza en el servidor', () => {
+test('unknown type is rejected on the server', () => {
   const res = parseClientMessage(JSON.stringify({ type: 'hackeo', data: 1 }));
   assert.equal(res.ok, false);
   assert.match(res.error, /desconocido/);
 });
 
-test('spawn_agent: voz fuera de whitelist y style gigante se rechazan', () => {
+test('spawn_agent: off-whitelist voice and giant style are rejected', () => {
   const malaVoz = parseClientMessage(JSON.stringify({
     type: 'spawn_agent',
     agent: { name: 'Ana', title: 'QA', voice: 'Batman' }
@@ -33,7 +33,7 @@ test('spawn_agent: voz fuera de whitelist y style gigante se rechazan', () => {
   assert.equal(estiloGigante.ok, false);
 });
 
-test('spawn_agent válido normaliza listas desde string', () => {
+test('valid spawn_agent normalizes lists from string', () => {
   const res = parseClientMessage(JSON.stringify({
     type: 'spawn_agent',
     agent: { name: ' Ana ', title: 'QA', domains: 'testing, calidad', voice: 'F1', initialTasks: ['  probar login  '] }
@@ -44,20 +44,20 @@ test('spawn_agent válido normaliza listas desde string', () => {
   assert.deepEqual(res.message.agent.initialTasks, ['probar login']);
 });
 
-test('audio_chunk exige data acotada', () => {
+test('audio_chunk requires bounded data', () => {
   const ok = parseClientMessage(JSON.stringify({ type: 'audio_chunk', data: 'QUJD', mimeType: 'audio/pcm;rate=16000' }));
   assert.equal(ok.ok, true);
   const vacio = parseClientMessage(JSON.stringify({ type: 'audio_chunk', data: '' }));
   assert.equal(vacio.ok, false);
 });
 
-test('parseServerMessage: pasa tipos desconocidos y rechaza basura', () => {
+test('parseServerMessage: passes unknown types and rejects garbage', () => {
   assert.equal(parseServerMessage('{"type":"mensaje_nuevo","x":1}').type, 'mensaje_nuevo');
   assert.equal(parseServerMessage('no es json'), null);
   assert.equal(parseServerMessage('{"sinTipo":true}'), null);
 });
 
-test('agent_tool_call válido pasa; preview gigante o sin tool se rechaza', () => {
+test('valid agent_tool_call passes; giant preview or missing tool is rejected', () => {
   const ok = parseAgentToolEvent(JSON.stringify({
     type: 'agent_tool_call', turnId: 't1', agentId: 'bruno', tool: 'read', argsPreview: '{"path":"a.ts"}'
   }));
@@ -77,7 +77,7 @@ test('agent_tool_call válido pasa; preview gigante o sin tool se rechaza', () =
   assert.equal(otroTipo.ok, false);
 });
 
-test('agent_tool_done válido pasa; ok/ms inválidos se rechazan', () => {
+test('valid agent_tool_done passes; invalid ok/ms are rejected', () => {
   const ok = parseAgentToolEvent(JSON.stringify({
     type: 'agent_tool_done', turnId: 't1', agentId: 'bruno', tool: 'read', ok: true, ms: 42, outputPreview: 'contenido…'
   }));
@@ -96,19 +96,19 @@ test('agent_tool_done válido pasa; ok/ms inválidos se rechazan', () => {
   assert.equal(msMalo.ok, false);
 });
 
-test('el cuerpo del pedido usa el nombre de tope de tokens de cada proveedor', async () => {
-  // MiniMax usa max_completion_tokens; DeepSeek usa max_tokens y el otro lo
-  // ignora en silencio, así que equivocarse no falla: sale mal y no se nota.
+test("the request body uses each provider's token-cap name", async () => {
+  // MiniMax uses max_completion_tokens; DeepSeek uses max_tokens and the other one
+  // silently ignores it, so getting it wrong does not fail: it comes out wrong and nobody notices.
   const { LLM_PROVIDERS } = await import('../server/lib/config.js');
   assert.equal(LLM_PROVIDERS.minimax.tokenParam, 'max_completion_tokens');
   assert.equal(LLM_PROVIDERS.deepseek.tokenParam, 'max_tokens');
   assert.match(LLM_PROVIDERS.deepseek.url, /api\.deepseek\.com/);
   assert.deepEqual(LLM_PROVIDERS.deepseek.models, ['deepseek-v4-flash', 'deepseek-v4-pro']);
-  // DeepSeek piensa por defecto: hay que apagarlo para conversar rápido.
+  // DeepSeek thinks by default: it must be switched off for fast conversation.
   assert.equal(LLM_PROVIDERS.deepseek.thinking, 'disabled');
 });
 
-test('cambiar de proveedor no arrastra el modelo del otro', async () => {
+test("switching providers does not drag the other one's model", async () => {
   const { Store } = await import('../server/lib/store.js');
   const { ApiKeyRing } = await import('../server/lib/key-ring.js');
   const settings = await import('../server/lib/settings.js');
@@ -128,7 +128,7 @@ test('cambiar de proveedor no arrastra el modelo del otro', async () => {
   store.close();
 });
 
-test('cada proveedor guarda su clave por separado', async () => {
+test('each provider keeps its key separately', async () => {
   const { Store } = await import('../server/lib/store.js');
   const { ApiKeyRing } = await import('../server/lib/key-ring.js');
   const settings = await import('../server/lib/settings.js');
@@ -139,7 +139,7 @@ test('cada proveedor guarda su clave por separado', async () => {
   assert.deepEqual(settings.getLlmKeys('minimax'), ['clave-minimax-123456']);
   assert.deepEqual(settings.getLlmKeys('deepseek'), ['clave-deepseek-7890']);
 
-  // Ir y volver de proveedor no pierde ninguna.
+  // Going and coming back between providers loses none.
   settings.applySettings({ 'llm.provider': 'deepseek' });
   assert.deepEqual(settings.getLlmKeys(), ['clave-deepseek-7890']);
   settings.applySettings({ 'llm.provider': 'minimax' });

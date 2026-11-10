@@ -1,5 +1,5 @@
-// Tests Team v1: gate shouldConsult + consult + maybeConsultSala.
-// Modelo 100% fake: ningún test toca red ni keys reales.
+// Team v1 tests: gate shouldConsult + consult + maybeConsultSala.
+// 100% fake model: no test touches network or real keys.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -7,34 +7,34 @@ import { TEAM_NOTE_PREFIX, consult, shouldConsult } from '../server/lib/sala.js'
 import { maybeConsultSala } from '../server/lib/turn-pipeline.js';
 import { getSalaTimeoutMs, getSalaV1 } from '../server/lib/settings.js';
 
-// ── Gate: 8 casos ─────────────────────────────────────────────────────
+// ── Gate: 8 cases ─────────────────────────────────────────────────────
 
-test('gate: pedido corto simple → false (flujo normal)', () => {
+test('gate: short simple request → false (normal flow)', () => {
   assert.equal(shouldConsult('abrí el archivo readme'), false);
 });
 
-test('gate: pedido largo >200 chars → true', () => {
+test('gate: long request >200 chars → true', () => {
   const largo = 'necesito que revises el proyecto entero y me digas qué anda mal, '.repeat(5);
   assert.ok(largo.length > 200);
   assert.equal(shouldConsult(largo), true);
 });
 
-test('gate: keyword trade-off → true', () => {
+test('gate: trade-off keyword → true', () => {
   assert.equal(shouldConsult('rápido vs bien, ¿qué trade-off hacemos?'), true);
 });
 
-test('gate: keyword compará/conviene/analizá/pros-contras → true', () => {
+test('gate: compará/conviene/analizá/pros-contras keyword → true', () => {
   assert.equal(shouldConsult('compará estas dos opciones'), true);
   assert.equal(shouldConsult('¿qué conviene usar acá?'), true);
   assert.equal(shouldConsult('analizá este error'), true);
   assert.equal(shouldConsult('dame pros y contras'), true);
 });
 
-test('gate: segunda opinión → true', () => {
+test('gate: second-opinion keyword → true', () => {
   assert.equal(shouldConsult('quiero una segunda opinión del equipo'), true);
 });
 
-test('gate: route multi-dominio (≥2 targets, ≥2 dominios) → true', () => {
+test('gate: multi-domain route (≥2 targets, ≥2 domains) → true', () => {
   const route = {
     targets: [
       { agentId: 'a1', matchedDomains: ['codigo'] },
@@ -44,12 +44,12 @@ test('gate: route multi-dominio (≥2 targets, ≥2 dominios) → true', () => {
   assert.equal(shouldConsult('ok', route), true);
 });
 
-test('gate: saludo o cierre nunca abren sala aunque haya keyword', () => {
+test('gate: greeting or close never open a room even with a keyword', () => {
   assert.equal(shouldConsult('compará esto', { greeting: true, targets: [] }), false);
   assert.equal(shouldConsult('conviene cerrar', { closing: true, targets: [] }), false);
 });
 
-test('gate: texto vacío → false', () => {
+test('gate: empty text → false', () => {
   assert.equal(shouldConsult(''), false);
   assert.equal(shouldConsult(null), false);
 });
@@ -60,7 +60,7 @@ function fakeModel(texto) {
   return async () => ({ text: texto, model: 'fake' });
 }
 
-test('consult: flag off → null + sala_skip sin llamar al modelo', async () => {
+test('consult: flag off → null + sala_skip without calling the model', async () => {
   let llamadas = 0;
   const telemetria = [];
   const out = await consult({
@@ -77,7 +77,7 @@ test('consult: flag off → null + sala_skip sin llamar al modelo', async () => 
   assert.equal(telemetria[0][1].reason, 'flag_off');
 });
 
-test('consult: ok → NOTE con prefijo + sala_note', async () => {
+test('consult: ok → NOTE with prefix + sala_note', async () => {
   const telemetria = [];
   const out = await consult({
     text: 'compará hosting A vs B',
@@ -93,7 +93,7 @@ test('consult: ok → NOTE con prefijo + sala_note', async () => {
   assert.equal(telemetria[0][0], 'sala_note');
 });
 
-test('consult: timeout → null + sala_skip (flujo normal)', async () => {
+test('consult: timeout → null + sala_skip (normal flow)', async () => {
   const telemetria = [];
   const out = await consult({
     text: 'analizá pros y contras de migrar todo ya mismo por favor',
@@ -111,7 +111,7 @@ test('consult: timeout → null + sala_skip (flujo normal)', async () => {
   assert.equal(telemetria[0], 'sala_skip');
 });
 
-test('consult: fallo de modelo → null + sala_skip (nunca lanza)', async () => {
+test('consult: model failure → null + sala_skip (never throws)', async () => {
   const telemetria = [];
   const out = await consult({
     text: '¿qué conviene: A o B?',
@@ -126,7 +126,7 @@ test('consult: fallo de modelo → null + sala_skip (nunca lanza)', async () => 
   assert.equal(telemetria[0], 'sala_skip');
 });
 
-test('consult: gate negativo con flag on → null sin llamar al modelo', async () => {
+test('consult: negative gate with flag on → null without calling the model', async () => {
   let llamadas = 0;
   const out = await consult({
     text: 'abrí readme',
@@ -139,9 +139,9 @@ test('consult: gate negativo con flag on → null sin llamar al modelo', async (
   assert.equal(llamadas, 0);
 });
 
-// ── maybeConsultSala (punto de gate en turn-pipeline) ───────────────────
+// ── maybeConsultSala (gate point in turn-pipeline) ───────────────────
 
-test('maybeConsultSala: flag off → null (cero cambios)', async () => {
+test('maybeConsultSala: flag off → null (zero changes)', async () => {
   const out = await maybeConsultSala({
     text: 'compará A vs B en detalle',
     deps: { flagOn: false, completeChat: fakeModel('nunca') }
@@ -149,7 +149,7 @@ test('maybeConsultSala: flag off → null (cero cambios)', async () => {
   assert.equal(out, null);
 });
 
-test('maybeConsultSala: flag on + gate positivo → inyecta NOTE', async () => {
+test('maybeConsultSala: flag on + positive gate → injects NOTE', async () => {
   const out = await maybeConsultSala({
     text: '¿qué conviene: deploy hoy o esperar al lunes?',
     deps: { flagOn: true, timeoutMs: 2000, completeChat: fakeModel('Esperar: el deploy del viernes falló 2 veces.') }
@@ -157,7 +157,7 @@ test('maybeConsultSala: flag on + gate positivo → inyecta NOTE', async () => {
   assert.ok(out.startsWith(TEAM_NOTE_PREFIX));
 });
 
-test('maybeConsultSala: nunca lanza aunque deps explote', async () => {
+test('maybeConsultSala: never throws even if deps explodes', async () => {
   const out = await maybeConsultSala({
     text: 'compará todo',
     deps: { flagOn: true, completeChat: null }
@@ -166,17 +166,17 @@ test('maybeConsultSala: nunca lanza aunque deps explote', async () => {
 });
 
 // ── settings sala.* ───────────────────────────────────────────────────
-// NOTA: settings sin init (store null) → defaults. Estos asserts cubren
-// el default; con store real los getters leen sala.v1 / sala.timeoutMs.
+// NOTE: settings without init (null store) → defaults. These asserts cover
+// the default; with a real store the getters read sala.v1 / sala.timeoutMs.
 
 test('settings: defaults sala.v1=false, sala.timeoutMs=15000', () => {
   assert.equal(getSalaV1(), false);
   assert.equal(getSalaTimeoutMs(), 15000);
 });
 
-// PIPELINE_MANUAL (para ship): el pipeline vivo (meeting-session /
-// agent-runtime) todavía NO llama a maybeConsultSala — el cableado es
-// integración posterior (agent-runtime es de otro track). Verificación
-// manual al integrar: 1) flag off → turno idéntico; 2) flag on + pedido
-// simple → sin NOTE; 3) flag on + "compará/conviene" → NOTE en contexto
-// y Pablo responde sin mencionar al equipo; 4) timeout → turno normal.
+// PIPELINE_MANUAL (for ship): the live pipeline (meeting-session /
+// agent-runtime) does NOT call maybeConsultSala yet — wiring it is a
+// later integration (agent-runtime belongs to another track). Manual check
+// when integrating: 1) flag off → identical turn; 2) flag on + simple
+// request → no NOTE; 3) flag on + "compará/conviene" → NOTE in context
+// and Pablo answers without mentioning the team; 4) timeout → normal turn.

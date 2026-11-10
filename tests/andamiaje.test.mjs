@@ -23,11 +23,11 @@ const escritorPara = (d) => async (rel, contenido) => {
   writeFileSync(path.join(d, rel), contenido);
 };
 
-// El andamiaje dejó de ser un consejo: lo corre el motor. Está medido — de 18
-// proyectos, la única app bien armada fue la única donde el agente lo corrió
-// solo. Pedírselo no alcanzaba.
+// Scaffolding is no longer advice: the engine runs it. Measured — out of 18
+// projects, the only well-built app was the only one where the agent ran it
+// alone. Asking for it was not enough.
 
-test('cada nicho tiene su forma de nacer', () => {
+test('each niche has its own way of being born', () => {
   for (const stack of ['web', 'movil-rn', 'android', 'python', 'automatizacion']) {
     const receta = recetaPara(stack);
     assert.ok(receta, `${stack} necesita andamiaje`);
@@ -36,7 +36,7 @@ test('cada nicho tiene su forma de nacer', () => {
   }
 });
 
-test('un proyecto con trabajo adentro NO se vuelve a andamiar', async (t) => {
+test('a project with work inside is NOT scaffolded again', async (t) => {
   const d = carpeta(t);
   writeFileSync(path.join(d, 'index.html'), '<!doctype html><html></html>');
   assert.equal(proyectoVacio(d), false);
@@ -45,7 +45,7 @@ test('un proyecto con trabajo adentro NO se vuelve a andamiar', async (t) => {
   assert.equal(r.yaEstaba, true, 'no puede pisar el trabajo que ya está');
 });
 
-test('la bitácora y el diseño no cuentan como proyecto empezado', async (t) => {
+test('the log and the design do not count as a started project', async (t) => {
   const d = carpeta(t);
   writeFileSync(path.join(d, 'BITACORA.md'), '# Bitácora\n');
   writeFileSync(path.join(d, 'diseno.op'), '{}');
@@ -53,7 +53,7 @@ test('la bitácora y el diseño no cuentan como proyecto empezado', async (t) =>
   assert.equal(proyectoVacio(d), true, 'son artefactos de coordinación, no producto');
 });
 
-test('node_modules y build tampoco cuentan', async (t) => {
+test('node_modules and build do not count either', async (t) => {
   const d = carpeta(t);
   mkdirSync(path.join(d, 'node_modules'));
   mkdirSync(path.join(d, 'build'));
@@ -61,8 +61,8 @@ test('node_modules y build tampoco cuentan', async (t) => {
   assert.equal(proyectoVacio(d), true);
 });
 
-// Lo que pidió el usuario manda sobre el default.
-test('si el usuario nombró un comando, se usa el suyo', () => {
+// What the user asked for wins over the default.
+test('if the user named a command, theirs is used', () => {
   assert.equal(
     comandoPedidoPorElUsuario('quiero que lo hagas con `npm create vite@latest . -- --template react`'),
     'npm create vite@latest . -- --template react'
@@ -73,7 +73,7 @@ test('si el usuario nombró un comando, se usa el suyo', () => {
   );
 });
 
-test('un pedido normal no se confunde con un comando', () => {
+test('a normal request is not mistaken for a command', () => {
   for (const texto of [
     'quiero una app de mates',
     'que se vea lindo y tenga un botón grande',
@@ -83,25 +83,25 @@ test('un pedido normal no se confunde con un comando', () => {
   }
 });
 
-test('Android nace con un proyecto Gradle que el motor reconoce como app', async (t) => {
+test('Android is born with a Gradle project the engine recognizes as an app', async (t) => {
   const d = carpeta(t);
   const r = await andamiar(d, 'android', { escribir: escritorPara(d) });
   assert.equal(r.hecho, true, r.motivo);
   assert.equal(detectarProyecto(d), 'android', 'tiene que ser una app Android de verdad');
 
-  // Las trampas verificadas de AGP 9: Kotlin ya viene, aplicarlo aparte rompe.
+  // Verified AGP 9 gotchas: Kotlin already ships, applying it separately breaks the build.
   const raiz = readFileSync(path.join(d, 'build.gradle.kts'), 'utf-8');
   assert.ok(!/kotlin\.android/.test(raiz), 'aplicar kotlin.android con AGP 9 rompe la build');
   assert.match(raiz, /com\.android\.application/);
 
-  // El paquete del código y el namespace del módulo tienen que coincidir.
+  // The code package and the module namespace must match.
   const modulo = readFileSync(path.join(d, 'app/build.gradle.kts'), 'utf-8');
   const namespace = modulo.match(/namespace = "([^"]+)"/)?.[1];
   assert.ok(namespace, 'el módulo declara su namespace');
   assert.ok(existsSync(path.join(d, 'app/src/main/java', namespace.replace(/\./g, '/'), 'MainActivity.kt')));
 });
 
-test('Python nace con entorno, punto de entrada y dependencias declaradas', async (t) => {
+test('Python is born with environment, entry point and declared dependencies', async (t) => {
   const d = carpeta(t);
   const r = await andamiar(d, 'python', { escribir: escritorPara(d) });
   assert.equal(r.hecho, true, r.motivo);
@@ -111,9 +111,9 @@ test('Python nace con entorno, punto de entrada y dependencias declaradas', asyn
   assert.match(readFileSync(path.join(d, 'main.py'), 'utf-8'), /__main__/, 'con su guard de entrada');
 });
 
-test('un flujo nace con package.json aunque la carpeta tenga un nombre raro', async (t) => {
-  // `npm init` toma el nombre de la carpeta y falla si no es un nombre válido
-  // de paquete: pasó de verdad con una carpeta que empezaba con punto.
+test('a flow is born with package.json even when the folder has a weird name', async (t) => {
+  // `npm init` takes the folder name and fails if it is not a valid package
+  // name: really happened with a folder starting with a dot.
   const d = carpeta(t, '.Raro Nombre ');
   const r = await andamiar(d, 'automatizacion', { escribir: escritorPara(d) });
   assert.equal(r.hecho, true, r.motivo);
@@ -121,19 +121,19 @@ test('un flujo nace con package.json aunque la carpeta tenga un nombre raro', as
   assert.match(pkg.name, /^[a-z0-9-]+$/, `"${pkg.name}" tiene que ser un nombre npm válido`);
 });
 
-test('un nicho sin receta lo dice, no explota', async (t) => {
+test('a niche without a recipe says so, it does not blow up', async (t) => {
   const d = carpeta(t);
   const r = await andamiar(d, 'inventado', { escribir: escritorPara(d) });
   assert.equal(r.hecho, false);
   assert.match(r.motivo, /scaffolding/);
 });
 
-test('al agente se le dice que NO rehaga lo que ya está andamiado', () => {
+test('the agent is told NOT to redo what is already scaffolded', () => {
   const aviso = renderAndamiaje({ hecho: true, que: 'proyecto Expo', cmd: 'npx create-expo-app .' });
   assert.match(aviso, /YA ESTÁ ANDAMIADO/);
   assert.match(aviso, /NO lo rehagas/);
   assert.match(aviso, /create-expo-app/);
-  // Si no se andamió, no se le mete ruido en el prompt.
+  // If nothing was scaffolded, no noise is added to the prompt.
   assert.equal(renderAndamiaje({ hecho: false }), '');
   assert.equal(renderAndamiaje(null), '');
 });

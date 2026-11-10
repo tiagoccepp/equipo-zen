@@ -1,15 +1,15 @@
-// ── Orquestador: brief → plan → research → dispatch → tracking → replan ──
-// Track A. El Orquestador planifica meticuloso, investiga pre-hecho PRIMERO,
-// reparte a especialistas, pide roles al Spawner por protocolo y re-dispatcha
-// ante devoluciones del Tester (loop con máx rondas).
+// ── Orchestrator: brief → plan → research → dispatch → tracking → replan ──
+// Track A. The Orchestrator plans meticulously, researches pre-built FIRST,
+// hands out to specialists, requests roles from the Spawner by protocol and
+// re-dispatches on Tester returns (loop with max rounds).
 //
-// Aislamiento: importa SOLO team-protocol.js (+ nanoid). El Spawner, el
-// fetch web, la voz y el store entran por DEPS INYECTADAS en el constructor:
-// jamás imports directos (el Spawner es track B, la llamada es main).
+// Isolation: imports ONLY team-protocol.js (+ nanoid). The Spawner, web
+// fetch, voice and store arrive as INJECTED DEPS in the constructor:
+// never direct imports (the Spawner is track B, the call is main).
 //
-// Estado: memoria (Map por jobId). Cada dispatch se puede reflejar en la
-// tabla tasks existente si main pasa `store` (ver flujo-orquestador-plan.md:
-// tabla nueva NO — tasks/goals/task_comments ya modelan el tracking).
+// State: memory (Map per jobId). Each dispatch can be mirrored into the
+// existing tasks table when main passes `store` (see flujo-orquestador-plan.md:
+// NO new table — tasks/goals/task_comments already model tracking).
 
 import { nanoid } from 'nanoid';
 
@@ -24,7 +24,7 @@ import {
 export const MAX_RONDAS_DEFAULT = 3;
 export const MAX_FUENTES_DEFAULT = 3;
 
-// ── Intake: preguntas cuando falta info (Pablo-interfaz pide, no inventa) ──
+// ── Intake: questions when info is missing (Pablo-interface asks, never invents) ──
 
 export function preguntasFaltantes(brief) {
   const preguntas = [];
@@ -51,8 +51,8 @@ export function preguntasFaltantes(brief) {
 
 // ── Plan ────────────────────────────────────────────────────────────────
 
-// Las fases las propone el LLM del Orquestador (prompt, lo cablea main) o
-// main a mano; acá se ordenan, numeran y VALIDAN (contrato plan).
+// Phases are proposed by the Orchestrator LLM (prompt, wired by main) or
+// by main by hand; here they are ordered, numbered and VALIDATED (plan contract).
 export function crearPlan(brief, { jobId = null, fases = [] } = {}) {
   assertBrief(brief);
   const plan = {
@@ -69,8 +69,8 @@ export function crearPlan(brief, { jobId = null, fases = [] } = {}) {
   return assertPlan(plan);
 }
 
-// Orden de ejecución: verifica el DAG (dependeDe solo a anteriores ya lo
-// garantiza el contrato; esto lo recorre en orden seguro de todos modos).
+// Execution order: verifies the DAG (dependeDe only to earlier ones is already
+// guaranteed by the contract; this still walks it in safe order).
 export function ordenEjecucion(plan) {
   assertPlan(plan);
   const porN = new Map(plan.fases.map((f) => [f.n, f]));
@@ -89,14 +89,14 @@ export function ordenEjecucion(plan) {
   return orden;
 }
 
-// ── Research: pre-hecho primero (open source, libs, diseños) ─────────────
+// ── Research: pre-built first (open source, libs, designs) ─────────────
 
 const STOPWORDS = new Set([
   'una', 'uno', 'para', 'con', 'que', 'los', 'las', 'del', 'por', 'una',
   'the', 'and', 'for', 'with', 'quiero', 'hacer', 'esto', 'esta', 'este'
 ]);
 
-// Queries derivadas del objetivo + títulos de fases. Pura (testeable).
+// Queries derived from the objetivo + phase titles. Pure (testable).
 export function researchQueries(brief, plan = null) {
   assertBrief(brief);
   const palabras = String(brief.objetivo || '')
@@ -118,8 +118,8 @@ export function researchQueries(brief, plan = null) {
   return [...new Set(queries)].slice(0, 4);
 }
 
-// Ejecuta queries con fetchUrl INYECTADO (main pasa manos fetch_url o
-// web_search). Nunca lanza: cada fallo queda como hallazgo { error }.
+// Runs queries with INJECTED fetchUrl (main passes manos fetch_url or
+// web_search). Never throws: each failure lands as a { error } finding.
 export async function runResearch(queries, { fetchUrl = null, maxFuentes = MAX_FUENTES_DEFAULT } = {}) {
   const lista = (Array.isArray(queries) ? queries : []).slice(0, 4);
   const resultados = [];
@@ -140,7 +140,7 @@ export async function runResearch(queries, { fetchUrl = null, maxFuentes = MAX_F
   return resultados;
 }
 
-// Anexa el research al plan: qué pre-hecho se usa y por qué (o nada usable).
+// Appends research to the plan: which pre-built is used and why (or none usable).
 export function anexarResearch(plan, resultados, decisiones = []) {
   assertPlan(plan);
   const research = [];
@@ -162,7 +162,7 @@ export function anexarResearch(plan, resultados, decisiones = []) {
   return assertPlan({ ...plan, research });
 }
 
-// ── Dispatch + rechazo-1-vez + replan ───────────────────────────────────
+// ── Dispatch + reject-once + replan ───────────────────────────────────
 
 export function hacerDispatch(plan, faseN, { para = null, intento = 1, deadlineRelativo = null, coordinarCon = [] } = {}) {
   assertPlan(plan);
@@ -182,13 +182,13 @@ export function hacerDispatch(plan, faseN, { para = null, intento = 1, deadlineR
   });
 }
 
-// Clave de rechazo: mismo dueño + misma tarea (normalizada).
+// Rejection key: same dueño + same tarea (normalized).
 export function claveRechazo(dispatch) {
   return `${String(dispatch.para).toLowerCase()}::${String(dispatch.tarea).toLowerCase().trim()}`;
 }
 
-// Rechazo-1-vez con motivo → re-plan (cambia dueño o redefine) → dispatch
-// intento+1. Segundo rechazo de la misma clave → lanza RECHAZO_AGOTADO.
+// Reject-once with motivo → re-plan (changes dueño or redefines) → dispatch
+// intento+1. Second rejection of the same key → throws RECHAZO_AGOTADO.
 export function aplicarRechazo(job, dispatch, motivo, { nuevoDueño = null, nuevaTarea = null } = {}) {
   if (!motivo || !String(motivo).trim()) throw new Error('El rechazo requiere motivo');
   const clave = claveRechazo(dispatch);
@@ -219,7 +219,7 @@ export function aplicarRechazo(job, dispatch, motivo, { nuevoDueño = null, nuev
   return { plan: job.plan, dispatch: nuevo, dispatchRechazado: dispatch };
 }
 
-// ── Devolución del Tester → re-dispatch (loop con máx rondas) ────────────
+// ── Tester return → re-dispatch (loop with max rounds) ────────────
 
 export function aplicarDevolucion(job, devolucion, { maxRondas = MAX_RONDAS_DEFAULT } = {}) {
   assertDevolucion(devolucion);
@@ -259,9 +259,9 @@ export function aplicarDevolucion(job, devolucion, { maxRondas = MAX_RONDAS_DEFA
   return { estado: 'rework', ronda: job.ronda, redispatches };
 }
 
-// ── Voz en grupal: cada evento genera turno del dueño ────────────────────
-// Eventos: plan_listo, dispatch, entrega, devolucion, aprobado.
-// Devuelve { speaker, texto } o null si el evento no tiene voz.
+// ── Group-call voice: each event produces the owner's turn ────────────────────
+// Events: plan_listo, dispatch, entrega, devolucion, aprobado.
+// Returns { speaker, texto } or null when the event has no voice.
 
 export const VOCES_EVENTO = {
   plan_listo: 'Orquestador',
@@ -314,10 +314,10 @@ export function voicePayload(evento) {
   }
 }
 
-// ── Clase Orchestrator ──────────────────────────────────────────────────
-// Estado en memoria por job. Deps inyectadas: fetchUrl (research),
-// requestSpawn (track B por protocolo), announce (voz en llamada viva),
-// store (opcional: reflejo en tasks existentes).
+// ── Orchestrator class ──────────────────────────────────────────────────
+// In-memory state per job. Injected deps: fetchUrl (research),
+// requestSpawn (track B by protocol), announce (voice on live call),
+// store (optional: mirror into existing tasks).
 
 export class Orchestrator {
   constructor({ fetchUrl = null, requestSpawn = null, announce = null, store = null, now = null, maxRondas = MAX_RONDAS_DEFAULT } = {}) {
@@ -337,13 +337,13 @@ export class Orchestrator {
     try {
       this.announce(payload);
     } catch {
-      // La voz nunca rompe el flujo: si la llamada se cayó, se sigue mudo.
+      // Voice never breaks the flow: if the call dropped, continue muted.
     }
     return payload;
   }
 
-  // Intake de brief (Pablo): incompleto → preguntas; completo → job creado
-  // (sin plan todavía: el plan lo propone el LLM y entra por planificar).
+  // Brief intake (Pablo): incomplete → preguntas; complete → job created
+  // (no plan yet: the plan is proposed by the LLM and enters via planificar).
   intake(brief) {
     const preguntas = preguntasFaltantes(brief);
     if (preguntas.length > 0) {
@@ -364,8 +364,8 @@ export class Orchestrator {
     return { estado: 'brief_ok', job };
   }
 
-  // Plan meticuloso + research de pre-hecho anexado. Si falta rol para una
-  // fase (para='FALTA:<rol>'), pide al Spawner por protocolo antes del plan.
+  // Meticulous plan + appended pre-built research. When a phase lacks a role
+  // (para='FALTA:<rol>'), ask the Spawner by protocol before the plan.
   async planificar(jobId, fases, { research = true } = {}) {
     const job = this.jobOrThrow(jobId);
     let plan = crearPlan(job.brief, { jobId: job.id, fases });
@@ -403,7 +403,7 @@ export class Orchestrator {
     return job;
   }
 
-  // Spawn por PROTOCOLO (no import directo): firma acordada con track B.
+  // Spawn by PROTOCOL (no direct import): signature agreed with track B.
   // requestSpawn(req) -> { ok, agente?|existente?, motivo? }.
   async pedirRol(job, rolFaltante, capabilities = []) {
     const req = assertSpawnRequest({
@@ -422,7 +422,7 @@ export class Orchestrator {
     }
   }
 
-  // Dispatch de una fase a un dueño (existente o recién spawneado).
+  // Dispatch of one phase to one dueño (existing or freshly spawned).
   dispatchFase(jobId, faseN, opts = {}) {
     const job = this.jobOrThrow(jobId);
     if (!job.plan) throw new Error(`Job ${jobId} sin plan: primero planificar()`);

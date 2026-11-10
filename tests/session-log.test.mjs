@@ -4,12 +4,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-// Directorio aislado ANTES de importar el módulo (lo resuelve al cargarse).
+// Isolated directory BEFORE importing the module (it resolves it at load time).
 const dir = mkdtempSync(path.join(tmpdir(), 'equipo-log-'));
 process.env.SESSION_LOG_DIR = dir;
 const { flushLog, logEvent, readLog } = await import('../server/lib/session-log.js');
 
-test('queda registrado, textual, lo que la persona le pidió al equipo', async () => {
+test('what the person asked the team is recorded, as text', async () => {
   logEvent('mensaje_usuario', {
     empresa: 'NovaTech',
     via: 'voz',
@@ -25,7 +25,7 @@ test('queda registrado, textual, lo que la persona le pidió al equipo', async (
   assert.ok(last.at, 'lleva marca de tiempo');
 });
 
-test('nunca se escribe una clave al disco, ni suelta ni dentro del texto', async () => {
+test('a key is never written to disk, neither loose nor inside the text', async () => {
   logEvent('mensaje_usuario', {
     texto: 'mi clave es sk-abcdefghijklmnopqrstuvwxyz por si la necesitás',
     apiKey: 'sk-otra-clave-secreta-123456'
@@ -39,8 +39,8 @@ test('nunca se escribe una clave al disco, ni suelta ni dentro del texto', async
   assert.ok(dump.includes('secreto oculto'));
 });
 
-test('se puede reconstruir una conversación entera en orden', async () => {
-  // El caso de uso real: algo falló y hay que ver qué pasó, en secuencia.
+test('a whole conversation can be rebuilt in order', async () => {
+  // The real use case: something failed and you need to see what happened, in sequence.
   logEvent('mensaje_usuario', { texto: 'quiero una web', turnId: 't1' });
   logEvent('respuesta_agente', { agente: 'Renata', texto: '¿Es para vender o para mostrar?' });
   logEvent('mensaje_usuario', { texto: 'para mostrar', turnId: 't2' });
@@ -58,7 +58,7 @@ test('se puede reconstruir una conversación entera en orden', async () => {
   );
 });
 
-test('se puede filtrar por tipo y buscar texto (así encuentro el caso que falló)', async () => {
+test('can filter by type and search text (that is how I find the failing case)', async () => {
   logEvent('mensaje_usuario', { texto: 'la página del catálogo quedó rota' });
   await flushLog();
 
@@ -69,7 +69,7 @@ test('se puede filtrar por tipo y buscar texto (así encuentro el caso que fall�
   assert.ok(busqueda.some((e) => String(e.texto || '').includes('catálogo')));
 });
 
-test('un texto enorme se recorta en vez de reventar el archivo', async () => {
+test('a huge text is trimmed instead of blowing up the file', async () => {
   logEvent('mensaje_usuario', { texto: 'a'.repeat(50000) });
   await flushLog();
   const last = (await readLog({ kind: 'mensaje_usuario' })).at(-1);
@@ -77,8 +77,8 @@ test('un texto enorme se recorta en vez de reventar el archivo', async () => {
   assert.match(last.texto, /recortado 50000 chars/);
 });
 
-test('un log roto nunca tumba la conversación', async () => {
-  // Payload con referencia circular: no debe lanzar hacia arriba.
+test('a broken log never brings the conversation down', async () => {
+  // Payload with a circular reference: must not throw upwards.
   const circular = { nombre: 'bucle' };
   circular.yo = circular;
   assert.doesNotThrow(() => logEvent('mensaje_usuario', { texto: 'hola', circular }));
@@ -86,9 +86,9 @@ test('un log roto nunca tumba la conversación', async () => {
 });
 
 
-test('el payload no puede pisar el tipo de la entrada', async () => {
-  // Los eventos de trabajo traen su propio "kind" adentro; sin protección,
-  // el diario terminaba clasificando mal sus propias entradas.
+test('the payload cannot overwrite the entry type', async () => {
+  // Work events carry their own "kind" inside; without protection,
+  // the journal ended up misclassifying its own entries.
   logEvent('trabajo_file_written', { kind: 'file_written', path: 'index.html', agentName: 'Bruno' });
   await flushLog();
 

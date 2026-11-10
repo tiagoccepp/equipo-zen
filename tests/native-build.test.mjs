@@ -15,14 +15,14 @@ function carpeta() {
   return mkdtempSync(path.join(tmpdir(), 'equipo-nativa-'));
 }
 
-test('reconoce un proyecto Android por su Gradle', () => {
+test('recognizes an Android project by its Gradle file', () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'settings.gradle.kts'), 'rootProject.name = "app"');
   assert.equal(detectarProyecto(dir), 'android');
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('reconoce un proyecto React Native por su punto de entrada', () => {
+test('recognizes a React Native project by its entry point', () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'package.json'), '{}');
   writeFileSync(path.join(dir, 'App.jsx'), 'export default () => null;');
@@ -30,15 +30,15 @@ test('reconoce un proyecto React Native por su punto de entrada', () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('una carpeta con un index.html no es un proyecto móvil', () => {
+test('a folder with an index.html is not a mobile project', () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'index.html'), '<!doctype html><html></html>');
   assert.equal(detectarProyecto(dir), null);
   rmSync(dir, { recursive: true, force: true });
 });
 
-// El error que motivó todo esto: entregar una web y llamarla app.
-test('una web disfrazada de app móvil se rechaza', async () => {
+// The mistake that motivated all of this: shipping a web page and calling it an app.
+test('a web page disguised as a mobile app is rejected', async () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { react: '18' } }));
   writeFileSync(path.join(dir, 'App.jsx'), 'export default () => <div><h1>Hola</h1></div>;');
@@ -51,7 +51,7 @@ test('una web disfrazada de app móvil se rechaza', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('las APIs del navegador no existen en una app móvil', async () => {
+test('browser APIs do not exist in a mobile app', async () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { 'react-native': '0.75' } }));
   writeFileSync(path.join(dir, 'app.json'), '{"name":"app"}');
@@ -64,7 +64,7 @@ test('las APIs del navegador no existen en una app móvil', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('una app React Native bien armada pasa', async () => {
+test('a well-formed React Native app passes', async () => {
   const dir = carpeta();
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
     dependencies: { react: '18.3.1', 'react-native': '0.75.4', expo: '~51.0.0' }
@@ -81,7 +81,7 @@ test('una app React Native bien armada pasa', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('los errores del compilador Kotlin salen con archivo y línea', () => {
+test('Kotlin compiler errors come out with file and line', () => {
   const errores = parsearErroresKotlin([
     'e: file:///p/app/src/main/java/MainActivity.kt:17:2 Syntax error: Missing \'}\'.',
     'e: file:///p/app/src/main/java/ui/Home.kt:5:9 Unresolved reference: Modifier'
@@ -93,7 +93,7 @@ test('los errores del compilador Kotlin salen con archivo y línea', () => {
   assert.match(errores[1].que, /Unresolved reference/);
 });
 
-test('un fallo de Gradle sin errores de Kotlin igual devuelve algo útil', () => {
+test('a Gradle failure without Kotlin errors still returns something useful', () => {
   const errores = parsearErroresKotlin([
     'FAILURE: Build failed with an exception.',
     '* What went wrong:',
@@ -108,7 +108,7 @@ test('un fallo de Gradle sin errores de Kotlin igual devuelve algo útil', () =>
   assert.ok(!/--stacktrace/.test(texto), 'la ayuda de Gradle no es un error del agente');
 });
 
-test('el informe le dice al agente que arregle antes de cerrar', () => {
+test('the report tells the agent to fix before closing', () => {
   const informe = renderBuildReport({
     tipo: 'android',
     ok: false,
@@ -119,7 +119,7 @@ test('el informe le dice al agente que arregle antes de cerrar', () => {
   assert.match(informe, /finish/);
 });
 
-test('si compiló no hay informe', () => {
+test('if it compiled there is no report', () => {
   assert.equal(renderBuildReport({ tipo: 'android', ok: true }), '');
   assert.equal(renderBuildReport({ saltado: true, motivo: 'sin SDK' }), '');
 });

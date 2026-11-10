@@ -1,6 +1,6 @@
-// Tests computer tools (Manos 2B): open_url / window_list / screenshot.
-// CERO ventanas reales: toda interacción con el SO pasa por `computer`
-// (which/run/display), reemplazado acá con fakes vía _setComputer().
+// Computer tools tests (Manos 2B): open_url / window_list / screenshot.
+// ZERO real windows: every OS interaction goes through `computer`
+// (which/run/display), replaced here with fakes via _setComputer().
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync 
 import os from 'node:os';
 import path from 'node:path';
 
-// Sin proxy (misma razón que manos.test.mjs: Undici + stub local).
+// No proxy (same reason as manos.test.mjs: Undici + local stub).
 for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']) {
   delete process.env[k];
 }
@@ -51,9 +51,9 @@ function pngMinimo(ancho, alto) {
   return buf;
 }
 
-// Fake de computer: `instalados` = binarios que `which` encuentra;
-// `respuestas` = run(cmd, args) -> {ok, salida, error, expiro?} o función
-// que escribe archivos (screenshots) y devuelve el resultado.
+// Computer fake: `instalados` = binaries that `which` finds;
+// `respuestas` = run(cmd, args) -> {ok, salida, error, expiro?} or a function
+// that writes files (screenshots) and returns the result.
 function fakeComputer({ instalados = [], respuestas = {}, display = true, wayland = false } = {}) {
   const set = new Set(instalados);
   const llamadas = [];
@@ -84,7 +84,7 @@ function tool(name) {
 
 // --- open_url ----------------------------------------------------------------
 
-test('open_url: abre URL con xdg-open (sin shell, DISPLAY heredado)', async () => {
+test('open_url: opens a URL with xdg-open (no shell, inherited DISPLAY)', async () => {
   const llamadas = fakeComputer({ instalados: ['xdg-open'] });
   const r = await tool('open_url').execute({ target: 'https://google.com' }, ctx);
   assert.equal(r.ok, true);
@@ -94,7 +94,7 @@ test('open_url: abre URL con xdg-open (sin shell, DISPLAY heredado)', async () =
   assert.deepEqual(llamadas[0].args, ['https://google.com']);
 });
 
-test('open_url: target con ? & ; " llega como UN solo argv (prueba de no-shell)', async () => {
+test('open_url: target with ? & ; " arrives as ONE single argv (no-shell proof)', async () => {
   const llamadas = fakeComputer({ instalados: ['xdg-open'] });
   const nasty = 'https://x.com/buscar?q=hola mundo&n=1"; rm -rf /tmp/pwn; echo "';
   const r = await tool('open_url').execute({ target: nasty }, ctx);
@@ -103,13 +103,13 @@ test('open_url: target con ? & ; " llega como UN solo argv (prueba de no-shell)'
   assert.deepEqual(llamadas[0].args, [nasty]);
 });
 
-test('open_url: pedido explícito manda — URL con token en query NO se niega', async () => {
+test('open_url: explicit request wins — URL with token in query is NOT denied', async () => {
   fakeComputer({ instalados: ['xdg-open'] });
   const r = await tool('open_url').execute({ target: 'https://app.com/reset?token=abc123' }, ctx);
   assert.equal(r.ok, true);
 });
 
-test('open_url: niega SOLO secretos/credenciales', async () => {
+test('open_url: denies ONLY secrets/credentials', async () => {
   fakeComputer({ instalados: ['xdg-open'] });
   for (const target of [
     '/home/tito/proyecto/.env',
@@ -124,7 +124,7 @@ test('open_url: niega SOLO secretos/credenciales', async () => {
   }
 });
 
-test('open_url: vacío y demasiado largo', async () => {
+test('open_url: empty and too long', async () => {
   fakeComputer({ instalados: ['xdg-open'] });
   const v = await tool('open_url').execute({ target: '   ' }, ctx);
   assert.equal(v.ok, false);
@@ -134,14 +134,14 @@ test('open_url: vacío y demasiado largo', async () => {
   assert.match(l.error, /demasiado largo/);
 });
 
-test('open_url: sin xdg-open degrada con error claro', async () => {
+test('open_url: without xdg-open it degrades with a clear error', async () => {
   fakeComputer({ instalados: [] });
   const r = await tool('open_url').execute({ target: 'https://google.com' }, ctx);
   assert.equal(r.ok, false);
   assert.match(r.error, /sin xdg-open/);
 });
 
-test('open_url: xdg-open falla → error con motivo (y pista si no hay DISPLAY)', async () => {
+test('open_url: xdg-open fails → error with a reason (and a hint if there is no DISPLAY)', async () => {
   fakeComputer({
     instalados: ['xdg-open'],
     display: false,
@@ -153,7 +153,7 @@ test('open_url: xdg-open falla → error con motivo (y pista si no hay DISPLAY)'
   assert.match(r.error, /sin DISPLAY/);
 });
 
-test('open_url: timeout = ambiguo-ok (la app suele quedar abierta)', async () => {
+test('open_url: timeout = ambiguous-ok (the app usually stays open)', async () => {
   fakeComputer({
     instalados: ['xdg-open'],
     respuestas: { 'xdg-open': { ok: false, codigo: -1, expiro: true, salida: '', error: 'timeout 15s' } }
@@ -165,7 +165,7 @@ test('open_url: timeout = ambiguo-ok (la app suele quedar abierta)', async () =>
 
 // --- window_list ---------------------------------------------------------------
 
-test('window_list: backend wmctrl parsea título + app', async () => {
+test('window_list: wmctrl backend parses title + app', async () => {
   fakeComputer({
     instalados: ['wmctrl'],
     respuestas: {
@@ -184,7 +184,7 @@ test('window_list: backend wmctrl parsea título + app', async () => {
   assert.match(r.output, /Google — Mozilla Firefox \(firefox\)/);
 });
 
-test('window_list: backend xdotool (search + getwindowname por id)', async () => {
+test('window_list: xdotool backend (search + getwindowname by id)', async () => {
   const llamadas = fakeComputer({
     instalados: ['xdotool'],
     respuestas: async (cmd, args) => {
@@ -192,7 +192,7 @@ test('window_list: backend xdotool (search + getwindowname por id)', async () =>
       if (args[0] === 'getwindowname' && args[1] === '111') {
         return { ok: true, codigo: 0, salida: 'Editor — notas.txt\n', error: '' };
       }
-      return { ok: true, codigo: 0, salida: '\n', error: '' }; // 222 sin título → se salta
+      return { ok: true, codigo: 0, salida: '\n', error: '' }; // 222 untitled → skipped
     }
   });
   const r = await tool('window_list').execute({}, ctx);
@@ -202,7 +202,7 @@ test('window_list: backend xdotool (search + getwindowname por id)', async () =>
   assert.ok(llamadas.some((l) => l.args[0] === 'search'), 'hace search');
 });
 
-test('window_list: backend xwininfo (fallback real del box)', async () => {
+test("window_list: xwininfo backend (the box's real fallback)", async () => {
   fakeComputer({
     instalados: ['xwininfo'],
     respuestas: {
@@ -226,7 +226,7 @@ test('window_list: backend xwininfo (fallback real del box)', async () => {
   assert.match(r.output, /Calculadora \(Gnome-calc\)/);
 });
 
-test('window_list: sin backend o sin display → error claro', async () => {
+test('window_list: no backend or no display → clear error', async () => {
   fakeComputer({ instalados: [] });
   const sb = await tool('window_list').execute({}, ctx);
   assert.equal(sb.ok, false);
@@ -238,7 +238,7 @@ test('window_list: sin backend o sin display → error claro', async () => {
   assert.match(sd.error, /sin sesión gráfica/);
 });
 
-test('window_list: backend falla → error con backend nombrado', async () => {
+test('window_list: backend fails → error naming the backend', async () => {
   fakeComputer({
     instalados: ['wmctrl'],
     respuestas: { 'wmctrl': { ok: false, codigo: 1, salida: '', error: 'Cannot open display' } }
@@ -248,7 +248,7 @@ test('window_list: backend falla → error con backend nombrado', async () => {
   assert.match(r.error, /wmctrl/);
 });
 
-test('window_list: cero ventanas → mensaje, no error', async () => {
+test('window_list: zero windows → message, not an error', async () => {
   fakeComputer({
     instalados: ['wmctrl'],
     respuestas: { 'wmctrl': { ok: true, codigo: 0, salida: '\n', error: '' } }
@@ -260,7 +260,7 @@ test('window_list: cero ventanas → mensaje, no error', async () => {
 
 // --- screenshot ------------------------------------------------------------------
 
-test('screenshot: scrot-ok guarda shots/<ts>.png y reporta dims del IHDR', async () => {
+test('screenshot: scrot-ok saves shots/<ts>.png and reports IHDR dims', async () => {
   fakeComputer({
     instalados: ['scrot'],
     respuestas: async (cmd, args) => {
@@ -277,7 +277,7 @@ test('screenshot: scrot-ok guarda shots/<ts>.png y reporta dims del IHDR', async
   assert.equal(readdirSync(dir).filter((f) => f.endsWith('.png')).length, 1);
 });
 
-test('screenshot: fallback — si scrot falla prueba con gnome-screenshot', async () => {
+test('screenshot: fallback — if scrot fails it tries gnome-screenshot', async () => {
   const llamadas = fakeComputer({
     instalados: ['scrot', 'gnome-screenshot'],
     respuestas: async (cmd, args) => {
@@ -292,7 +292,7 @@ test('screenshot: fallback — si scrot falla prueba con gnome-screenshot', asyn
   assert.deepEqual(llamadas.map((l) => l.cmd), ['scrot', 'gnome-screenshot']);
 });
 
-test('screenshot: ffmpeg usa x11grab con el display', async () => {
+test('screenshot: ffmpeg uses x11grab with the display', async () => {
   const llamadas = fakeComputer({
     instalados: ['ffmpeg'],
     respuestas: async (cmd, args) => {
@@ -308,9 +308,9 @@ test('screenshot: ffmpeg usa x11grab con el display', async () => {
   assert.ok(ff.args.includes(':0'), 'pasa display');
 });
 
-test('screenshot: xwd en dos pasos (xwd + ffmpeg convierte)', async () => {
-  // ffmpeg-direct va ANTES que xwd en el orden: para llegar a xwd, el
-  // x11grab directo tiene que fallar pero el binario ffmpeg existir.
+test('screenshot: xwd in two steps (xwd + ffmpeg converts)', async () => {
+  // ffmpeg-direct goes BEFORE xwd in the order: to reach xwd, the
+  // direct x11grab must fail while the ffmpeg binary still exists.
   const llamadas = fakeComputer({
     instalados: ['xwd', 'ffmpeg'],
     respuestas: async (cmd, args) => {
@@ -331,7 +331,7 @@ test('screenshot: xwd en dos pasos (xwd + ffmpeg convierte)', async () => {
   assert.deepEqual(llamadas.map((l) => l.cmd), ['ffmpeg', 'xwd', 'ffmpeg']);
 });
 
-test('screenshot: sin backend o sin display → error claro', async () => {
+test('screenshot: no backend or no display → clear error', async () => {
   fakeComputer({ instalados: [] });
   const sb = await tool('screenshot').execute({}, ctx);
   assert.equal(sb.ok, false);
@@ -343,7 +343,7 @@ test('screenshot: sin backend o sin display → error claro', async () => {
   assert.match(sd.error, /sin sesión gráfica/);
 });
 
-test('screenshot: PNG corrupto reporta tamaño desconocido (no rompe)', async () => {
+test('screenshot: corrupt PNG reports unknown size (does not break)', async () => {
   fakeComputer({
     instalados: ['scrot'],
     respuestas: async (cmd, args) => {
@@ -358,7 +358,7 @@ test('screenshot: PNG corrupto reporta tamaño desconocido (no rompe)', async ()
 
 // --- gate ------------------------------------------------------------------
 
-test('gate: abre/navega/pantalla/captura/ventana matchean ES+EN', () => {
+test('gate: open/navigate/screen/capture/window match ES+EN', () => {
   for (const texto of [
     'abrí google en el navegador',
     'abre el archivo en el visor',
@@ -377,7 +377,7 @@ test('gate: abre/navega/pantalla/captura/ventana matchean ES+EN', () => {
   }
 });
 
-test('gate: charla normal NO matchea (abril/listo son falsos amigos)', () => {
+test('gate: normal chat does NOT match (abril/listo are false friends)', () => {
   for (const texto of [
     'hola, ¿cómo andás?',
     'contame un chiste',
@@ -391,7 +391,7 @@ test('gate: charla normal NO matchea (abril/listo son falsos amigos)', () => {
 
 // --- prompt ------------------------------------------------------------------
 
-test('prompt: voz y full listan las 3 computer tools, 1 línea cada una', () => {
+test('prompt: voice and full list the 3 computer tools, 1 line each', () => {
   for (const src of ['audio', 'text']) {
     const out = renderManosPrompt(src);
     for (const name of ['open_url', 'window_list', 'screenshot']) {
@@ -402,9 +402,9 @@ test('prompt: voz y full listan las 3 computer tools, 1 línea cada una', () => 
   }
 });
 
-// --- loop end-to-end (modelo fake) -------------------------------------------------
+// --- end-to-end loop (fake model) -------------------------------------------------
 
-test('loop: turno "abrí google" usa open_url y resume', async () => {
+test('loop: "abrí google" turn uses open_url and summarizes', async () => {
   fakeComputer({ instalados: ['xdg-open'] });
   let n = 0;
   const { toolSummary, toolTurns } = await runToolLoop({
@@ -423,9 +423,9 @@ test('loop: turno "abrí google" usa open_url y resume', async () => {
   assert.match(toolSummary, /open_url: ok/);
 });
 
-// --- regresión run_cmd -------------------------------------------------------
+// --- run_cmd regression -------------------------------------------------------
 
-test('regresión: clasificarComando permite xdg-open/brave en vivo (ya andaba)', () => {
+test('regression: clasificarComando allows xdg-open/brave live (already worked)', () => {
   for (const cmd of [
     'xdg-open https://google.com',
     'xdg-open "https://x.com/?a=1&b=2"',
@@ -436,7 +436,7 @@ test('regresión: clasificarComando permite xdg-open/brave en vivo (ya andaba)',
   }
 });
 
-test('xauthEnv: respeta XAUTHORITY existente y descubre cookie mutter si falta', async () => {
+test('xauthEnv: respects existing XAUTHORITY and discovers mutter cookie if missing', async () => {
   const { xauthEnv } = await import('../server/lib/manos.js');
   const prev = process.env.XAUTHORITY;
   try {

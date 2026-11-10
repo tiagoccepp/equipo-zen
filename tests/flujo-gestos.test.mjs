@@ -1,4 +1,4 @@
-// Motor de gestos T2a: protocolo [[gesto:NOMBRE]] + registro A (50 glifos).
+// T2a gesture engine: [[gesto:NAME]] protocol + registry A (50 glyphs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -24,64 +24,64 @@ import {
 
 // ── parseGesto ─────────────────────────────────────────────────────────
 
-test('parse: tag simple → gesto + texto limpio', () => {
+test('parse: simple tag → gesture + clean text', () => {
   const r = parseGesto('hola [[gesto:saludar]] cómo va');
   assert.equal(r.gesto, 'saludar');
   assert.equal(r.cleanText, 'hola cómo va');
 });
 
-test('parse: case-insensitive + espacios + tildes', () => {
+test('parse: case-insensitive + spaces + accents', () => {
   assert.equal(parseGesto('x [[GESTO:Saludar]] y').gesto, 'saludar');
   assert.equal(parseGesto('x [[gesto:Pulgar Arriba]] y').gesto, 'pulgar_arriba');
   assert.equal(parseGesto('x [[gesto:guiño]] y').gesto, 'guino');
   assert.equal(parseGesto('x [[gesto:  risa  ]] y').gesto, 'risa');
 });
 
-test('parse: múltiple → primer VÁLIDO gana, todos se limpian', () => {
+test('parse: multiple → first VALID wins, all get cleaned', () => {
   const r = parseGesto('a [[gesto:sonrisa]] b [[gesto:enojo]] c');
   assert.equal(r.gesto, 'sonrisa');
   assert.equal(r.cleanText, 'a b c');
-  // Primero desconocido → se sigue buscando (el común "primer tag gana"
-  // vale cuando todos son válidos).
+  // First unknown → keep searching (the usual "first tag wins"
+  // holds when all are valid).
   const r2 = parseGesto('a [[gesto:noexiste]] b [[gesto:calma]] c');
   assert.equal(r2.gesto, 'calma');
   assert.equal(r2.cleanText, 'a b c');
 });
 
-test('parse: ausente → null y texto intacto', () => {
+test('parse: absent → null and intact text', () => {
   const r = parseGesto('hola mundo sin tags');
   assert.equal(r.gesto, null);
   assert.equal(r.cleanText, 'hola mundo sin tags');
 });
 
-test('parse: desconocido → null pero el tag se quita igual', () => {
+test('parse: unknown → null but tag is still removed', () => {
   const r = parseGesto('hola [[gesto:zzz_nope]] mundo');
   assert.equal(r.gesto, null);
   assert.equal(r.cleanText, 'hola mundo');
 });
 
-test('parse: solo-tag → texto vacío; colapsa espacios', () => {
+test('parse: tag-only → empty text; collapses spaces', () => {
   assert.equal(parseGesto('[[gesto:saludar]]').cleanText, '');
   assert.equal(parseGesto('hola   [[gesto:saludar]]   mundo').cleanText, 'hola mundo');
 });
 
-test('parse: entradas raras no tiran', () => {
+test('parse: weird inputs do not throw', () => {
   assert.deepEqual(parseGesto(''), { gesto: null, cleanText: '' });
   assert.deepEqual(parseGesto(null), { gesto: null, cleanText: '' });
   assert.deepEqual(parseGesto(undefined), { gesto: null, cleanText: '' });
   assert.equal(parseGesto('[[gesto:]]').gesto, null);
-  assert.equal(parseGesto('[[gesto:saludar]').gesto, null); // tag roto: no es tag
+  assert.equal(parseGesto('[[gesto:saludar]').gesto, null); // broken tag: not a tag
 });
 
-test('parse: figuras de estado también son gestos válidos', () => {
+test('parse: state figures are also valid gestures', () => {
   assert.equal(parseGesto('x [[gesto:hablando]]').gesto, 'hablando');
   assert.equal(parseGesto('x [[gesto:cube]]').gesto, 'cube');
   assert.equal(parseGesto('x [[gesto:IDLE]]').gesto, 'idle');
 });
 
-// ── Registro backend ───────────────────────────────────────────────────
+// ── Backend registry ─────────────────────────────────────────────────
 
-test('VALID_GESTOS: 100 (A+B) + 5 estados + 5 shapes', () => {
+test('VALID_GESTOS: 100 (A+B) + 5 states + 5 shapes', () => {
   assert.equal(GESTOS_A.length, 50);
   for (const n of GESTOS_A) assert.ok(VALID_GESTOS.has(n), `falta ${n}`);
   for (const n of [...STATE_NAMES, ...SHAPE_NAMES]) {
@@ -90,7 +90,7 @@ test('VALID_GESTOS: 100 (A+B) + 5 estados + 5 shapes', () => {
   assert.equal(VALID_GESTOS.size, 100 + STATE_NAMES.length + SHAPE_NAMES.length);
 });
 
-test('registerGestos: suma B sin pisar A', () => {
+test('registerGestos: adds B without overwriting A', () => {
   const before = VALID_GESTOS.size;
   const r = registerGestos(['fuego_boreal_zzz', 'saludar', 'agua_mansa_zzz']);
   assert.equal(r.added, 2);
@@ -98,15 +98,15 @@ test('registerGestos: suma B sin pisar A', () => {
   assert.equal(VALID_GESTOS.size, before + 2);
   assert.ok(isValidGesto('FUEGO_boreal_ZZZ'));
   assert.equal(parseGesto('x [[gesto:agua_mansa_zzz]]').gesto, 'agua_mansa_zzz');
-  // Limpieza: no dejar basura para otros tests del archivo.
+  // Cleanup: leave no junk for other tests in this file.
   VALID_GESTOS.delete('fuego_boreal_zzz');
   VALID_GESTOS.delete('agua_mansa_zzz');
   assert.ok(listGestos().length >= 60);
 });
 
-// ── Registro A (frontend, import directo vía type-stripping) ────────────
+// ── Registry A (frontend, direct import via type-stripping) ───────────
 
-test('GLYPHS_A: 50 únicos, snake_case, con tags', () => {
+test('GLYPHS_A: 50 unique, snake_case, with tags', () => {
   assert.equal(GLYPHS_A.length, 50);
   assert.equal(GLYPH_A_NAMES.length, 50);
   assert.equal(new Set(GLYPH_A_NAMES).size, 50);
@@ -117,11 +117,11 @@ test('GLYPHS_A: 50 únicos, snake_case, con tags', () => {
   }
 });
 
-test('cruce: GESTOS_A (backend) == GLYPH_A_NAMES (frontend)', () => {
+test('cross-check: GESTOS_A (backend) == GLYPH_A_NAMES (frontend)', () => {
   assert.deepEqual(new Set(GESTOS_A), new Set(GLYPH_A_NAMES));
 });
 
-test('lookup: case-insensitive, tildes, null si no existe', () => {
+test('lookup: case-insensitive, accents, null if missing', () => {
   assert.equal(lookupGlyphA('SALUDAR')?.name, 'saludar');
   assert.equal(lookupGlyph('Guiño')?.name, 'guino');
   assert.equal(lookupGlyph('pulgar arriba')?.name, 'pulgar_arriba');
@@ -130,7 +130,7 @@ test('lookup: case-insensitive, tildes, null si no existe', () => {
   assert.equal(foldGlyphName('  GUIÑO  '), 'guino');
 });
 
-test('registerExtraGlyphs: B no pisa A; lookupGlyph ve extras', () => {
+test('registerExtraGlyphs: B does not overwrite A; lookupGlyph sees extras', () => {
   const fake = { name: 'saludar', tags: ['x'], points: () => new Float32Array(3) };
   const extra = {
     name: 'gesto_extra_zzz',
@@ -145,7 +145,7 @@ test('registerExtraGlyphs: B no pisa A; lookupGlyph ve extras', () => {
   assert.equal(lookupGlyph('saludar')?.tags.includes('x'), false); // A intacto
 });
 
-test('puntos: longitud, rango [-1,1], finitos (los 50)', () => {
+test('points: length, range [-1,1], finite (all 50)', () => {
   const COUNT = 240;
   for (const g of GLYPHS_A) {
     const pts = g.points(COUNT, 7);
@@ -159,7 +159,7 @@ test('puntos: longitud, rango [-1,1], finitos (los 50)', () => {
   }
 });
 
-test('puntos: deterministas por seed (los 50)', () => {
+test('points: deterministic per seed (all 50)', () => {
   for (const g of GLYPHS_A) {
     const a = g.points(120, 42);
     const b = g.points(120, 42);
@@ -167,7 +167,7 @@ test('puntos: deterministas por seed (los 50)', () => {
   }
 });
 
-test('puntos: seeds distintas → puntos distintos (los 50)', () => {
+test('points: different seeds → different points (all 50)', () => {
   for (const g of GLYPHS_A) {
     const a = g.points(120, 1);
     const b = g.points(120, 2);
@@ -175,18 +175,18 @@ test('puntos: seeds distintas → puntos distintos (los 50)', () => {
   }
 });
 
-test('puntos: counts chicos y grandes no tiran', () => {
+test('points: small and large counts do not throw', () => {
   for (const g of GLYPHS_A) {
     assert.equal(g.points(1, 0).length, 3, g.name);
     assert.equal(g.points(720, 9).length, 720 * 3, g.name);
   }
 });
 
-// ── Cruce B (integración main): GESTOS_B == GLYPHS_B, 100 únicos ────────
+// ── Cross-check B (main integration): GESTOS_B == GLYPHS_B, 100 unique ──
 import { GESTOS_B } from '../server/lib/gestos.js';
 import { GLYPHS_B } from '../src/fx/glyphs-b.ts';
 
-test('cruce: GESTOS_B (backend) == GLYPHS_B (frontend), A∩B=∅', () => {
+test('cross-check: GESTOS_B (backend) == GLYPHS_B (frontend), A∩B=∅', () => {
   const namesB = GLYPHS_B.map((g) => g.name);
   assert.equal(namesB.length, 50);
   assert.deepEqual(new Set(GESTOS_B), new Set(namesB));
@@ -195,7 +195,7 @@ test('cruce: GESTOS_B (backend) == GLYPHS_B (frontend), A∩B=∅', () => {
   assert.ok(VALID_GESTOS.size >= 110); // 100 + 5 estados + 5 shapes
 });
 
-test('parse: gesto de B resuelve (backend valida los 100)', () => {
+test('parse: B gesture resolves (backend validates all 100)', () => {
   const r = parseGesto('miren [[gesto:cohete]] despegamos');
   assert.equal(r.gesto, 'cohete');
   assert.equal(r.cleanText, 'miren despegamos');

@@ -1,4 +1,4 @@
-// Cliente Pablo ↔ backend Equipo (HTTP + WebSocket). Delgado: la UI vive en app.ts.
+// Pablo client ↔ Equipo backend (HTTP + WebSocket). Thin: UI lives in app.ts.
 
 import { desktopApiBase } from './lib/tauri.ts';
 
@@ -12,13 +12,13 @@ export interface Agent {
 
 export interface ClientEvents {
   onReady: (agents: Agent[], meetingId?: string) => void;
-  // source distingue texto normal de avisos del sistema ('X has joined').
+  // source tells normal text apart from system notices ('X has joined').
   onUserText: (text: string, source?: string) => void;
   onRoute: (names: string[]) => void;
   onAgentStart: (agentId: string, turnId?: string) => void;
   onSpeakStart: (agentId: string) => void;
   onProgress: (agentId: string, text: string) => void;
-  // Actividad de tools en vivo: feed compacto, no chat principal.
+  // Live tool activity: compact feed, not main chat.
   onToolCall: (agentId: string, tool: string, argsPreview: string, turnId?: string) => void;
   onToolDone: (agentId: string, tool: string, ok: boolean, ms: number, outputPreview: string, turnId?: string) => void;
   onDelta: (agentId: string, delta: string) => void;
@@ -28,7 +28,7 @@ export interface ClientEvents {
   onAudioStart: (turnId: string, agentId: string) => void;
   onAudioEnd: (turnId: string, agentId: string) => void;
   onAgentState: (agentId: string, state: string) => void;
-  // Gesto semántico v2: el modelo pidió morphéar el orbe a un glifo.
+  // Semantic gesture v2: the model asked to morph the orb into a glyph.
   onGesto: (agentId: string, gesto: string) => void;
   onInterrupted: (agentId: string, turnId?: string) => void;
   onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
@@ -62,7 +62,7 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function findOrCreatePabloSpace(): Promise<{ companyId: string; goalId: string }> {
   const data = await apiJson<{ companies: Array<{ id: string; name: string }> }>('/api/companies');
-  // Legacy 'Sofia': la DB aún puede no estar migrada.
+  // Legacy 'Sofia': the DB may still be unmigrated.
   let company = (data.companies || []).find((c) => c.name === 'Pablo' || c.name === 'Sofia');
   if (!company) {
     const created = await apiJson<{ company: { id: string } }>('/api/companies', {
@@ -102,7 +102,7 @@ export async function firstProject(companyId: string): Promise<string | null> {
   return data.projects?.[0]?.id || null;
 }
 
-/** MP3 directo del servidor (Edge): para "probar voz" sin gastar turno LLM. */
+/** Direct MP3 from the server (Edge): for "probar voz" without spending an LLM turn. */
 export async function decir(texto: string): Promise<string> {
   const data = await apiJson<{ audio?: string }>(
     `/api/decir?texto=${encodeURIComponent(texto)}`
@@ -163,8 +163,8 @@ export async function saveSettings(patch: Record<string, string>): Promise<Publi
   return data.settings;
 }
 
-// Estado del watchdog de sidecars STT/TTS (fetch directo, sin WS).
-// Espeja server/lib/sidecars.js getSidecarStatus (solo lectura).
+// STT/TTS sidecar watchdog state (direct fetch, no WS).
+// Mirrors server/lib/sidecars.js getSidecarStatus (read-only).
 export interface SidecarStatus {
   name: string;
   status: string;
@@ -180,7 +180,7 @@ export async function getSidecars(): Promise<SidecarStatus[]> {
   return data.sidecars || [];
 }
 
-// Audio routing (PipeWire): espeja server/lib/audio.js listDevices.
+// Audio routing (PipeWire): mirrors server/lib/audio.js listDevices.
 export interface AudioDevice {
   id: number;
   name: string;
@@ -252,7 +252,7 @@ export class Client {
     this.ws = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'hello', companyId, goalId, meetingId: meetingId || undefined }));
-      // Pablo habla: sin esto el servidor jamás emite audio (voiceEnabled).
+      // Pablo speaks: without this the server never emits audio (voiceEnabled).
       ws.send(JSON.stringify({ type: 'set_voice', enabled: true }));
     };
     ws.onmessage = (event) => {
@@ -392,9 +392,9 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId }));
   }
 
-  /** Telemetría de voz del cliente (VAD/barge por turno): para afinar
-   *  umbrales con datos reales en vez de adivinar. Fire-and-forget.
-   *  §3a: valores mixtos (números + reopened:boolean + hintEnd:string). */
+  /** Client voice telemetry (VAD/barge per turn): for tuning
+   *  thresholds with real data instead of guessing. Fire-and-forget.
+   *  §3a: mixed values (numbers + reopened:boolean + hintEnd:string). */
   voiceStats(stats: Record<string, number | string | boolean>): void {
     this.ws?.send(JSON.stringify({ type: 'client_stats', stats }));
   }
@@ -411,7 +411,7 @@ export class Client {
     try {
       this.ws?.close();
     } catch {
-      // Ya cerrado.
+      // Already closed.
     }
     this.ws = null;
   }

@@ -1,5 +1,5 @@
-// Mira cómo avanza un proyecto mientras el equipo trabaja. Sirve para ver de
-// verdad qué entregan, en vez de suponerlo.
+// Watch how a project progresses while the team works. Useful to see for
+// real what they deliver, instead of assuming it.
 //
 //   node scripts/mirar-trabajo.mjs <titulo-del-proyecto> [minutos]
 

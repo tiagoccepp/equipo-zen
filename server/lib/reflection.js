@@ -36,7 +36,7 @@ const REFLECTION_FORMAT_EN = [
 ].join('\n');
 
 function reflectionFormat() {
-  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
   return en ? REFLECTION_FORMAT_EN : REFLECTION_FORMAT_ES;
 }
 

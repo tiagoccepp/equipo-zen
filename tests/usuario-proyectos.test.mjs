@@ -9,13 +9,12 @@ import { isMeetingLive, MeetingSession } from '../server/lib/meeting-session.js'
 import { Store } from '../server/lib/store.js';
 import { esProyectoMovil, projectDir } from '../server/lib/workforce.js';
 
-// El recorrido de alguien organizando su trabajo: abre su empresa, crea
-// proyectos, entra a uno, lo renombra y borra los que ya no le sirven. Nada de
-// esto puede llevarse por delante lo que hay en el proyecto de al lado.
+// The journey of someone organizing their work: opens their company, creates
+// projects, enters one, renames it, and deletes the ones no longer needed.
+// None of this may run over what lives in the project next door.
 
-// Una plantilla que NO sea web, para poder comprobar que el proyecto hereda el
-// nicho de la empresa. Se elige por su stack: los nombres de las plantillas y
-// de su gente cambian.
+// A template that is NOT web, to check the project inherits the company's
+// niche. Picked by its stack: template names and their people's names change.
 function plantillaDeNicho() {
   return companyTemplates.templates.find((item) => esProyectoMovil(item.stack))
     || companyTemplates.templates[0];
@@ -23,11 +22,11 @@ function plantillaDeNicho() {
 
 function nuevaEmpresa(t, plantilla = companyTemplates.templates[0], nombre = 'Mi empresa') {
   const store = new Store(':memory:');
-  // Igual que el alta desde la app: la plantilla con el nombre que puso el dueño.
+  // Same as signing up from the app: the template with the name the owner gave.
   const company = store.createCompanyFromTemplate({ ...plantilla, name: nombre }, 'user');
   t.after(() => {
     store.close();
-    // Todo lo que la empresa escribió en disco vive bajo workspace/<empresa>/.
+    // Everything the company wrote to disk lives under workspace/<company>/.
     rmSync(path.dirname(projectDir(company.id, 'general')), { recursive: true, force: true });
   });
   return { store, company };
@@ -45,7 +44,7 @@ function fakeSocket() {
   };
 }
 
-// La carpeta del proyecto tal como queda después de que el equipo trabajó.
+// The project folder as it looks after the team worked.
 function conArchivos(companyId, slug, archivos) {
   const dir = projectDir(companyId, slug);
   mkdirSync(dir, { recursive: true });
@@ -55,8 +54,8 @@ function conArchivos(companyId, slug, archivos) {
   return dir;
 }
 
-// Un proyecto con todo lo que se le cuelga usándolo: una reunión con lo que se
-// habló, una tarea trabajada, su corrida y un comentario entre compañeros.
+// A project with everything hung off it by using it: a meeting with what was
+// said, a worked task, its run, and a comment between teammates.
 function proyectoConTrabajo(store, company, titulo) {
   const project = store.createProject({ companyId: company.id, title: titulo, brief: `Lo de ${titulo}` });
   const meeting = store.createMeeting({ companyId: company.id, goalId: project.id });
@@ -74,7 +73,7 @@ function proyectoConTrabajo(store, company, titulo) {
   return { project, meeting, taskId, alguien };
 }
 
-test('abro mi empresa desde una plantilla: viene con el equipo armado, sin proyectos, y los que creo aparecen en la lista', (t) => {
+test('I open my company from a template: it comes with the team assembled, no projects, and the ones I create show in the list', (t) => {
   const plantilla = plantillaDeNicho();
   const { store, company } = nuevaEmpresa(t, plantilla, 'Estudio de Nino');
 
@@ -95,13 +94,13 @@ test('abro mi empresa desde una plantilla: viene con el equipo armado, sin proye
   assert.equal(lista.find((p) => p.id === uno.id).brief, 'Reservar turnos desde el celu');
   assert.equal(new Set(lista.map((p) => p.slug)).size, 2, 'cada proyecto con su carpeta');
 
-  // El nicho de la empresa manda: un estudio móvil no arranca proyectos web.
+  // The company's niche rules: a mobile studio does not start web projects.
   assert.equal(uno.stack, company.stack);
   assert.equal(dos.stack, company.stack);
   assert.equal(esProyectoMovil(uno.stack), esProyectoMovil(plantilla.stack));
 });
 
-test('entro a un proyecto y lo que hablo queda ahí adentro; mientras la reunión siga abierta el proyecto no se puede borrar', (t) => {
+test('I enter a project and what I say stays inside; while the meeting stays open the project cannot be deleted', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const landing = store.createProject({ companyId: company.id, title: 'Landing del bar' });
   const otro = store.createProject({ companyId: company.id, title: 'Panel interno' });
@@ -121,12 +120,12 @@ test('entro a un proyecto y lo que hablo queda ahí adentro; mientras la reunió
   assert.deepEqual(store.userRequestForGoal(landing.id), ['quiero la carta del bar con fotos']);
   assert.deepEqual(store.userRequestForGoal(otro.id), [], 'mi pedido no se filtra al otro proyecto');
 
-  // La regla que protege de borrar el piso mientras hay alguien parado encima.
+  // The rule that protects against deleting the floor while someone stands on it.
   const conGenteAdentro = (goalId) => store.meetingsForProject(goalId).some((m) => isMeetingLive(m.id));
   assert.equal(conGenteAdentro(landing.id), true, 'con la reunión abierta, borrar el proyecto queda bloqueado');
   assert.equal(conGenteAdentro(otro.id), false);
 
-  // Y al cerrarla se libera: el proyecto no queda trabado para siempre.
+  // And closing it frees it: the project does not stay stuck forever.
   const meetingId = session.meeting.id;
   session.closeCurrentMeeting('la terminé');
   assert.equal(isMeetingLive(meetingId), false);
@@ -134,7 +133,7 @@ test('entro a un proyecto y lo que hablo queda ahí adentro; mientras la reunió
   assert.equal(store.deleteProject(landing.id).reuniones, 1, 'ahora sí lo puedo borrar');
 });
 
-test('le corrijo el nombre al proyecto y sigue siendo el mismo: la carpeta y los archivos quedan donde estaban', (t) => {
+test("I fix the project's name and it is still the same one: the folder and files stay where they were", (t) => {
   const { store, company } = nuevaEmpresa(t);
   const project = store.createProject({ companyId: company.id, title: 'Landin del bar' });
   const dir = conArchivos(company.id, project.slug, { 'index.html': '<h1>Bar</h1>' });
@@ -150,15 +149,15 @@ test('le corrijo el nombre al proyecto y sigue siendo el mismo: la carpeta y los
   assert.equal(fila.title, 'Landing del bar', 'en la lista ya se ve el nombre nuevo');
   assert.equal(fila.brief, 'ahora con la carta');
 
-  // Borrar el nombre y guardar (el PATCH manda title.trim(), o sea '') no
-  // puede dejar el proyecto sin nombre en la lista: el alta ya rechaza el
-  // nombre vacío, renombrar tiene que ser igual de firme.
+  // Clearing the name and saving (the PATCH sends title.trim(), i.e. '') must not
+  // leave the project nameless in the list: signup already rejects the empty name,
+  // renaming must be just as firm.
   const enBlanco = store.updateProject(project.id, { title: '   ', brief: 'ahora con la carta' });
   assert.equal(enBlanco.title, 'Landing del bar', 'un nombre en blanco no pisa el que tenía');
   assert.equal(store.listProjects(company.id)[0].title, 'Landing del bar');
 });
 
-test('borro un proyecto y se va todo lo suyo: la reunión, lo que se habló, las tareas, los comentarios y las corridas', (t) => {
+test('I delete a project and everything of its goes: the meeting, what was said, the tasks, comments, and runs', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const { project, meeting, taskId } = proyectoConTrabajo(store, company, 'Menú digital');
   const dir = conArchivos(company.id, project.slug, { 'index.html': '<h1>Menú</h1>' });
@@ -176,14 +175,14 @@ test('borro un proyecto y se va todo lo suyo: la reunión, lo que se habló, las
   assert.equal(store.recentWorkRuns(company.id).length, 0);
   assert.deepEqual(store.listProjects(company.id), [], 'ya no aparece en mi lista');
 
-  // La carpeta la borra la app, y para eso necesita saber cuál es y que no la
-  // esté usando nadie más. Si este dato viniera mal, se borrarían archivos ajenos.
+  // The app deletes the folder, and for that it needs to know which one and that
+  // nobody else uses it. If this data were wrong, other people's files would be deleted.
   assert.equal(resultado.carpetaCompartida, false);
   assert.equal(projectDir(resultado.companyId, resultado.slug), dir);
   assert.ok(existsSync(path.join(dir, 'index.html')), 'los archivos siguen hasta que la app borre esa carpeta');
 });
 
-test('borrar un proyecto no le toca nada al proyecto de al lado', (t) => {
+test('deleting a project touches nothing in the project next door', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const viejo = proyectoConTrabajo(store, company, 'Landing vieja');
   const queSigue = proyectoConTrabajo(store, company, 'Tienda nueva');
@@ -204,7 +203,7 @@ test('borrar un proyecto no le toca nada al proyecto de al lado', (t) => {
   assert.equal(readFileSync(path.join(dirQueSigue, 'index.html'), 'utf-8'), '<h1>Tienda</h1>');
 });
 
-test('dos proyectos con el mismo nombre no se pisan los archivos', (t) => {
+test("two projects with the same name do not step on each other's files", (t) => {
   const { store, company } = nuevaEmpresa(t);
   const delBar = store.createProject({ companyId: company.id, title: 'Landing' });
   const deLaPeluqueria = store.createProject({ companyId: company.id, title: 'Landing' });
@@ -224,7 +223,7 @@ test('dos proyectos con el mismo nombre no se pisan los archivos', (t) => {
   assert.deepEqual(store.listProjects(company.id).map((p) => p.id), [deLaPeluqueria.id]);
 });
 
-test('un proyecto que abrí y nunca usé se ve en la lista y se borra sin drama', (t) => {
+test('a project I opened and never used shows in the list and deletes without drama', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const vacio = store.createProject({ companyId: company.id, title: 'Idea suelta' });
 
@@ -248,10 +247,10 @@ test('un proyecto que abrí y nunca usé se ve en la lista y se borra sin drama'
   assert.equal(store.deleteProject(vacio.id), null, 'si le doy borrar dos veces no se rompe nada');
 });
 
-// Las metas anteriores a los proyectos quedaron TODAS en la carpeta 'general'
-// (migración v5). Borrar la que ahora es un proyecto no puede llevarse los
-// archivos de las otras.
-test('si el proyecto comparte la carpeta "general" con trabajo viejo, el borrado avisa para no llevárselo puesto', (t) => {
+// Goals from before projects ALL ended up in the 'general' folder
+// (migration v5). Deleting the one that is now a project must not take the
+// others' files.
+test('if the project shares the "general" folder with old work, deletion warns so it does not take it down', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const proyecto = store.createProject({ companyId: company.id, title: 'General' });
   assert.equal(proyecto.slug, 'general');
@@ -271,10 +270,10 @@ test('si el proyecto comparte la carpeta "general" con trabajo viejo, el borrado
   assert.equal(readFileSync(path.join(dir, 'index.html'), 'utf-8'), '<h1>Lo de marzo</h1>');
 });
 
-// Una reunión que no produce entregables deja su registro de acuerdos aparte
-// (lo que hace el cierre cuando no hay nada que construir). Ese registro
-// sobrevive al proyecto a propósito: es historia de la empresa.
-test('borrar el proyecto no puede vaciar los acuerdos que quedaron anotados en su reunión', (t) => {
+// A meeting that produces no deliverables leaves its agreement record aside
+// (what closing does when there is nothing to build). That record survives the
+// project on purpose: it is company history.
+test('deleting the project cannot empty the agreements recorded in its meeting', (t) => {
   const { store, company } = nuevaEmpresa(t);
   const landing = store.createProject({ companyId: company.id, title: 'Landing del bar' });
   const meeting = store.createMeeting({ companyId: company.id, goalId: landing.id });

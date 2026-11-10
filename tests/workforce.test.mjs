@@ -31,7 +31,7 @@ function newCompany() {
   return { store, company, workforce, events };
 }
 
-test('el sandbox no deja escapar de la carpeta del proyecto', () => {
+test('the sandbox does not let escapes from the project folder', () => {
   assert.throws(() => safeWorkspacePath('emp1', 'proy', '../otra/index.html'), /fuera del proyecto/);
   assert.throws(() => safeWorkspacePath('emp1', 'proy', '/etc/passwd'), /inválida/);
   assert.throws(() => safeWorkspacePath('emp1', 'proy', '.env'), /fuera del proyecto/);
@@ -42,7 +42,7 @@ test('el sandbox no deja escapar de la carpeta del proyecto', () => {
   assert.match(ok, /emp1\/proy\/css\/estilos\.css$/);
 });
 
-test('el contenido del archivo se acepta en cualquiera de sus formas', () => {
+test('file content is accepted in any of its shapes', () => {
   assert.equal(
     extractFileContent('{"action":"write_file","path":"a.html"}\n<<<CONTENIDO\n<h1>hola</h1>\nCONTENIDO>>>', {}),
     '<h1>hola</h1>'
@@ -52,7 +52,7 @@ test('el contenido del archivo se acepta en cualquiera de sus formas', () => {
   assert.equal(extractFileContent('nada', {}), '');
 });
 
-test('revisa un compañero con skills afines, nunca el propio autor', () => {
+test('a teammate with matching skills reviews, never the author themselves', () => {
   const { store, company, workforce } = newCompany();
   const team = store.listAgents({ companyId: company.id });
   const bruno = team.find((a) => a.name === 'Bruno');
@@ -63,7 +63,7 @@ test('revisa un compañero con skills afines, nunca el propio autor', () => {
   assert.notEqual(reviewer.role, 'contratista', 'el contratista no revisa entregables');
 });
 
-test('al terminar un entregable se le pide revisión a un compañero', () => {
+test('when a deliverable finishes, a teammate is asked to review', () => {
   const { store, company, workforce, events } = newCompany();
   const team = store.listAgents({ companyId: company.id });
   const bruno = team.find((a) => a.name === 'Bruno');
@@ -84,11 +84,11 @@ test('al terminar un entregable se le pide revisión a un compañero', () => {
   assert.equal(store.getTask(taskId).review_status, 'pendiente');
   assert.ok(events.some((e) => e.kind === 'review_requested'));
 
-  // La cola la toma el revisor.
+  // The queue is picked up by the reviewer.
   assert.ok(store.workQueue(company.id).some((t) => t.id === revisiones[0].id));
 });
 
-test('no se revisa lo que no produjo archivos ni las correcciones (evita el ida y vuelta infinito)', () => {
+test('what produced no files is not reviewed, nor are fixes (avoids the infinite back-and-forth)', () => {
   const { store, company, workforce } = newCompany();
   const team = store.listAgents({ companyId: company.id });
   const bruno = team.find((a) => a.name === 'Bruno');
@@ -116,7 +116,7 @@ test('no se revisa lo que no produjo archivos ni las correcciones (evita el ida 
   assert.equal(store.tasksForGoal(goal.id).filter((t) => t.kind === 'revision').length, 0);
 });
 
-test('cada proyecto tiene su carpeta aunque se repita el título', () => {
+test('each project gets its folder even if the title repeats', () => {
   const { store, company } = newCompany();
   const a = store.createGoal({ companyId: company.id, title: 'Sitio web' });
   const b = store.createGoal({ companyId: company.id, title: 'Sitio web' });
@@ -126,9 +126,9 @@ test('cada proyecto tiene su carpeta aunque se repita el título', () => {
   assert.equal(c.slug, 'sitio-web-3');
 });
 
-test('quien entra a un proyecto ya empezado ve el contenido y su identidad visual', async () => {
-  // El caso real: Bruno hizo la web y Delia entró después. Sin esto, Delia
-  // regeneraba index.html con su propio estilo y borraba el trabajo.
+test('whoever joins a project already started sees the content and its visual identity', async () => {
+  // The real case: Bruno made the web and Delia joined later. Without this,
+  // Delia regenerated index.html in her own style and wiped the work.
   const dir = mkdtempSync(path.join(tmpdir(), 'equipo-proy-'));
   writeFileSync(path.join(dir, 'index.html'), [
     '<!doctype html><html lang="es"><head><style>',
@@ -154,20 +154,20 @@ test('quien entra a un proyecto ya empezado ve el contenido y su identidad visua
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('un proyecto vacío no arrastra identidad de nadie', async () => {
+test('an empty project carries no identity from anyone', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'equipo-vacio-'));
   assert.equal(await readProjectState(dir, []), null);
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('dos empleados no trabajan a la vez sobre el mismo proyecto', async (t) => {
-  // Bruno y Delia escribiendo index.html en paralelo se sobreescribían.
+test('two employees do not work at once on the same project', async (t) => {
+  // Bruno and Delia writing index.html in parallel overwrote each other.
   const { store, company, workforce } = newCompany();
   const team = store.listAgents({ companyId: company.id });
   const meeting = store.createMeeting({ companyId: company.id });
   const goal = store.createGoal({ companyId: company.id, meetingId: meeting.id, title: 'Web nueva' });
 
-  // Dos que produzcan, sin depender de los nombres de una plantilla concreta.
+  // Two producing ones, without depending on the names of any concrete template.
   const productores = team.filter((a) => a.role === 'worker').slice(0, 2);
   assert.equal(productores.length, 2, 'la plantilla tiene que traer al menos dos personas que produzcan');
   for (const agente of productores) {
@@ -175,14 +175,14 @@ test('dos empleados no trabajan a la vez sobre el mismo proyecto', async (t) => 
     store.assignTaskToGoal(id, goal.id, { kind: 'entregable' });
   }
 
-  // El contrato ya está escrito: si no, la spec de fase 1 bloquearía la
-  // construcción y lo que se mediría sería esa compuerta, no el arbitraje.
+  // The contract is already written: otherwise the phase-1 spec would block
+  // construction and what gets measured would be that gate, not the arbitration.
   const dir = projectDir(company.id, goal.slug);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'PROYECTO.md'), '## Qué construimos\nUna web.\n');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
-  // Se intercepta la ejecución: interesa el arbitraje, no el trabajo real.
+  // Execution is intercepted: the arbitration matters, not the real work.
   const arrancadas = [];
   workforce.executeTask = async (companyId, agent) => {
     arrancadas.push(agent.name);
@@ -193,16 +193,16 @@ test('dos empleados no trabajan a la vez sobre el mismo proyecto', async (t) => 
   await workforce.tick();
   assert.equal(arrancadas.length, 1, 'entra uno solo; el otro espera su turno');
 
-  // Liberado el proyecto, entra el segundo.
+  // With the project released, the second one comes in.
   await new Promise((resolve) => setTimeout(resolve, 80));
   await workforce.tick();
   assert.equal(arrancadas.length, 2);
   assert.notEqual(arrancadas[0], arrancadas[1]);
 });
 
-test('el JSON de la acción se separa de CUALQUIER marcador de contenido', () => {
-  // Sin esto, una respuesta con edit_file mezclaba el JSON con el HTML (lleno
-  // de llaves) y la acción se descartaba: 10 pasos quemados, cero avance.
+test('the action JSON is split off from ANY content marker', () => {
+  // Without this, a response with edit_file mixed the JSON with the HTML (full
+  // of braces) and the action was dropped: 10 steps burned, zero progress.
   const conEdit = [
     '{"action":"edit_file","path":"index.html"}',
     '<<<BUSCAR',
@@ -220,7 +220,7 @@ test('el JSON de la acción se separa de CUALQUIER marcador de contenido', () =>
   assert.equal(splitBeforeHeredoc('{"action":"finish","summary":"listo"}').trim(), '{"action":"finish","summary":"listo"}');
 });
 
-test('editar tolera que el modelo no reproduzca la indentación exacta', () => {
+test('edit tolerates the model not reproducing the exact indentation', () => {
   const archivo = [
     '<body>',
     '  <section id="servicios">',
@@ -229,7 +229,7 @@ test('editar tolera que el modelo no reproduzca la indentación exacta', () => {
     '</body>'
   ].join('\n');
 
-  // Copia "de memoria": mismo texto, espacios distintos.
+  // Copied "from memory": same text, different spacing.
   const editado = applyEdit(
     archivo,
     '<section id="servicios">\n<h2>Nuestras soluciones</h2>\n</section>',
@@ -239,14 +239,14 @@ test('editar tolera que el modelo no reproduzca la indentación exacta', () => {
   assert.match(editado, /<body>/, 'el resto del archivo queda intacto');
 });
 
-test('editar avisa con precisión cuando no puede aplicar el cambio', () => {
+test('edit warns precisely when it cannot apply the change', () => {
   const archivo = '<p>uno</p>\n<p>dos</p>\n<p>uno</p>';
   assert.throws(() => applyEdit(archivo, '<p>tres</p>', 'x'), /no está en el archivo/);
   assert.throws(() => applyEdit(archivo, '<p>uno</p>', 'x'), /aparece 2 veces/);
   assert.throws(() => applyEdit(archivo, '   ', 'x'), /vacío/);
 });
 
-test('la bitácora acumula lo que dejó cada uno', async () => {
+test('the log accumulates what each one left', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'equipo-bitacora-'));
 
   await anotarEnBitacora(dir, { agente: 'Bruno', tarea: 'Armar la home', resumen: 'Hice el hero y el pie.' });

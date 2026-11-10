@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// El diario en disco no es parte de lo que se prueba acá y resuelve su
-// destino al importarse: se apaga ANTES de cargar los módulos para que
-// correr los tests no deje archivos sueltos en server/data/logs.
+// The on-disk journal is not part of what is tested here and resolves its
+// destination at import time: it is switched off BEFORE loading modules so
+// running the tests leaves no stray files under server/data/logs.
 process.env.SESSION_LOG = '0';
 
 const { companyTemplates } = await import('../server/lib/config.js');
@@ -27,8 +27,8 @@ function socketFalso() {
   };
 }
 
-// Sentarse en una reunión: la que se pida, en el proyecto que se pida.
-// Sin claves no se llama a ningún modelo.
+// Sitting down in a meeting: whichever one is asked for, in whichever
+// project is asked for. Without keys no model is ever called.
 function abrirReunion(t, store, { companyId, goalId = null, meetingId = null } = {}) {
   const socket = socketFalso();
   const session = new MeetingSession(socket, new ApiKeyRing([]), store);
@@ -37,16 +37,16 @@ function abrirReunion(t, store, { companyId, goalId = null, meetingId = null } =
   return { session, socket };
 }
 
-// Hablar como el usuario: el mensaje entra a la reunión en el acto. Se
-// cancela la espera de paciencia para que el test no dependa del reloj ni
-// arrastre un ruteo detrás.
+// Talking as the user: the message enters the meeting on the spot. The
+// patience wait is cancelled so the test does not depend on the clock nor
+// drag a routing behind it.
 function decir(session, texto) {
   session.enqueueUserTurn(texto, 'text');
   clearTimeout(session.pendingUser.timer);
   session.pendingUser = null;
 }
 
-test('la reunión que abrís parado en un proyecto queda guardada adentro de ese proyecto', async (t) => {
+test('a meeting opened while standing on a project is saved inside that project', async (t) => {
   const { store, company } = nuevaEmpresa();
   const catalogo = store.createProject({ companyId: company.id, title: 'Catálogo de la ferretería' });
   const blog = store.createProject({ companyId: company.id, title: 'Blog de novedades' });
@@ -62,7 +62,7 @@ test('la reunión que abrís parado en un proyecto queda guardada adentro de ese
   assert.equal(ready.project.id, catalogo.id);
   assert.equal(ready.project.title, 'Catálogo de la ferretería');
 
-  // Reiniciar la reunión no te saca del proyecto: la nueva sigue adentro.
+  // Restarting the meeting does not kick you out of the project: the new one stays inside.
   const primera = session.meeting.id;
   await session.handleClientMessage({ type: 'reset' });
   assert.notEqual(session.meeting.id, primera);
@@ -70,10 +70,10 @@ test('la reunión que abrís parado en un proyecto queda guardada adentro de ese
   assert.equal(store.meetingsForProject(catalogo.id).length, 2);
 });
 
-test('una reunión vieja sin proyecto la adopta el proyecto donde la retomás, con todo lo hablado', (t) => {
+test('an old meeting with no project is adopted by the project where you resume it, with everything discussed', (t) => {
   const { store, company } = nuevaEmpresa();
 
-  // Como quedaron las reuniones de antes de que existieran los proyectos.
+  // Like meetings from before projects existed ended up.
   const { session: suelta } = abrirReunion(t, store, { companyId: company.id });
   assert.equal(suelta.meeting.goal_id, null);
   decir(suelta, 'necesito una landing para la panadería, con las fotos de las facturas');
@@ -102,7 +102,7 @@ test('una reunión vieja sin proyecto la adopta el proyecto donde la retomás, c
   assert.equal(ready.project.id, panaderia.id);
 });
 
-test('una reunión de otro proyecto no se retoma acá: se abre una nueva y no se mezcla nada', (t) => {
+test('a meeting from another project is not resumed here: a new one opens and nothing gets mixed', (t) => {
   const { store, company } = nuevaEmpresa();
   const menu = store.createProject({ companyId: company.id, title: 'Menú del bodegón' });
   const reservas = store.createProject({ companyId: company.id, title: 'Reservas online' });
@@ -112,7 +112,7 @@ test('una reunión de otro proyecto no se retoma acá: se abre una nueva y no se
   const reunionDelMenu = enMenu.meeting.id;
   enMenu.close();
 
-  // Parado en Reservas, pidiendo aquella reunión: no se la puede llevar.
+  // Standing on Reservas, asking for that meeting: it cannot take it along.
   const { session: enReservas, socket } = abrirReunion(t, store, {
     companyId: company.id,
     goalId: reservas.id,
@@ -126,8 +126,8 @@ test('una reunión de otro proyecto no se retoma acá: se abre una nueva y no se
   decir(enReservas, 'la reserva se confirma por mail');
   assert.deepEqual(store.userRequestForGoal(menu.id), ['el menú va con fotos grandes de cada plato']);
 
-  // Y desde su propio proyecto sí se retoma: lo que la frenaba era el
-  // proyecto equivocado, no que la reunión estuviera cerrada para siempre.
+  // And from its own project it does resume: what blocked it was the
+  // wrong project, not that the meeting was closed forever.
   const { session: devuelta } = abrirReunion(t, store, {
     companyId: company.id,
     goalId: menu.id,
@@ -136,7 +136,7 @@ test('una reunión de otro proyecto no se retoma acá: se abre una nueva y no se
   assert.equal(devuelta.meeting.id, reunionDelMenu);
 });
 
-test('lo que le pediste al equipo llega entero y en el orden en que lo dijiste', (t) => {
+test('what you asked the team arrives whole and in the order you said it', (t) => {
   const { store, company } = nuevaEmpresa();
   const proyecto = store.createProject({ companyId: company.id, title: 'Menú del bodegón' });
   const { session } = abrirReunion(t, store, { companyId: company.id, goalId: proyecto.id });
@@ -153,7 +153,7 @@ test('lo que le pediste al equipo llega entero y en el orden en que lo dijiste',
   ], 'tus palabras completas, en orden, y sin las respuestas del equipo en el medio');
 });
 
-test('lo que hablás en un proyecto no se le cuela al de al lado', (t) => {
+test('what you discuss in one project does not leak into the next one', (t) => {
   const { store, company } = nuevaEmpresa();
   const sushi = store.createProject({ companyId: company.id, title: 'Delivery de sushi' });
   const vivero = store.createProject({ companyId: company.id, title: 'Sitio del vivero' });
@@ -174,7 +174,7 @@ test('lo que hablás en un proyecto no se le cuela al de al lado', (t) => {
   ]);
 });
 
-test('cuando alguien del equipo le pasa el trabajo a otro por su nombre, le queda a esa persona y en este proyecto', (t) => {
+test('when a teammate hands work to another by name, it lands on that person and in this project', (t) => {
   const { store, company } = nuevaEmpresa();
   const vivero = store.createProject({ companyId: company.id, title: 'Sitio del vivero' });
   const { session } = abrirReunion(t, store, { companyId: company.id, goalId: vivero.id });
@@ -197,7 +197,7 @@ test('cuando alguien del equipo le pasa el trabajo a otro por su nombre, le qued
   assert.equal(store.listProjects(company.id).length, 1, 'no se abrió ningún proyecto fantasma');
 });
 
-test('si la misma tarea se repite en dos turnos, en el tablero queda una sola', (t) => {
+test('if the same task repeats across two turns, the board keeps only one', (t) => {
   const { store, company } = nuevaEmpresa();
   const vivero = store.createProject({ companyId: company.id, title: 'Sitio del vivero' });
   const { session } = abrirReunion(t, store, { companyId: company.id, goalId: vivero.id });
@@ -206,17 +206,17 @@ test('si la misma tarea se repite en dos turnos, en el tablero queda una sola', 
   const [quien, otro] = session.sessionAgents.filter((a) => a.role === 'worker');
 
   session.processAgentTaskCommands(ceo.id, `[TAREA_CREAR: ${quien.name}: escribir la home del vivero]`);
-  // Otra persona repite el mismo encargo, escrito distinto: es el mismo trabajo.
+  // Someone else repeats the same errand, worded differently: it is the same job.
   session.processAgentTaskCommands(otro.id, `Como decíamos, [TAREA_CREAR: ${quien.name}: Escribir la home del vivero]`);
 
   assert.equal(store.workQueue(company.id).length, 1, 'no se trabaja dos veces lo mismo');
 
-  // Pero un pedido de verdad distinto sí entra.
+  // But a genuinely different request does get in.
   session.processAgentTaskCommands(ceo.id, `[TAREA_CREAR: ${quien.name}: escribir la página de contacto]`);
   assert.equal(store.workQueue(company.id).length, 2);
 });
 
-test('la CEO no se queda con lo que hay que construir: al arrancar lo tiene quien sabe hacerlo', async (t) => {
+test('the CEO does not keep what must be built: when work starts it sits with whoever knows how', async (t) => {
   const { store, company } = nuevaEmpresa();
   const proyecto = store.createProject({ companyId: company.id, title: 'Sitio de la ferretería' });
   const { session } = abrirReunion(t, store, { companyId: company.id, goalId: proyecto.id });
@@ -238,10 +238,10 @@ test('la CEO no se queda con lo que hay que construir: al arrancar lo tiene quie
   assert.ok(destino.domains.some((d) => /html/.test(d)), 'fue a parar a quien tiene el oficio');
   assert.equal(store.workQueue(company.id)[0].goal_id, proyecto.id);
 
-  // Y ahora el mismo pedido como lo hace cualquiera: en castellano llano, sin
-  // nombrar una sola tecnología. Nadie pide "una landing en html con
-  // formularios"; se pide "la landing del catálogo". Tiene que terminar igual:
-  // construyéndola quien tiene el oficio, no la jefa.
+  // And now the same request the way anyone makes it: in plain language,
+  // without naming a single technology. Nobody asks for "una landing en html
+  // con formularios"; they ask for "la landing del catálogo". It must end the
+  // same way: built by whoever has the trade, not the boss.
   await session.handleClientMessage({
     type: 'add_task',
     agentId: ceo.id,
@@ -261,7 +261,7 @@ test('la CEO no se queda con lo que hay que construir: al arrancar lo tiene quie
   );
 });
 
-test('al ponerse a trabajar, el proyecto se queda con el pedido en tus palabras', async (t) => {
+test('when work starts, the project keeps the request in your own words', async (t) => {
   const { store, company } = nuevaEmpresa();
   const proyecto = store.createProject({ companyId: company.id, title: 'Menú digital' });
   assert.equal(proyecto.brief, '', 'arranca sin nada escrito');

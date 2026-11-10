@@ -25,31 +25,31 @@ function memoryWithLastAgent(agentId) {
   };
 }
 
-test('isClosingSignal: frases explícitas cierran a cualquier longitud', () => {
+test('isClosingSignal: explicit phrases close at any length', () => {
   assert.equal(isClosingSignal(normalize('bueno, con esto queda claro el plan')), true);
   assert.equal(isClosingSignal(normalize('cambiemos de tema por favor')), true);
 });
 
-test('isClosingSignal: palabras sueltas solo en enunciados cortos', () => {
+test('isClosingSignal: loose words only in short utterances', () => {
   assert.equal(isClosingSignal(normalize('para')), true);
   assert.equal(isClosingSignal(normalize('listo, gracias')), true);
   assert.equal(isClosingSignal(normalize('el sistema para pedidos no anda')), false);
   assert.equal(isClosingSignal(normalize('necesito parar el proceso de alto consumo')), false);
 });
 
-test('isClosingSignal: nunca cierra si hay pregunta', () => {
+test('isClosingSignal: never closes if there is a question', () => {
   assert.equal(isClosingSignal(normalize('¿qué API usamos para el dashboard?')), false);
   assert.equal(isClosingSignal(normalize('¿listo?')), false);
 });
 
-test('route: pregunta con "para" no cierra y rutea por dominio', () => {
+test('route: question with "para" does not close and routes by domain', () => {
   const router = new AgentRouter(AGENTS);
   const route = router.route('¿Qué API usamos para el dashboard?', memoryWithLastAgent('operaciones'));
   assert.ok(!route.closing);
   assert.ok(route.targets.some((t) => t.agentId === 'programacion'));
 });
 
-test('route: cierre real va solo al último agente con score 99', () => {
+test('route: real close goes only to the last agent with score 99', () => {
   const router = new AgentRouter(AGENTS);
   const route = router.route('listo, queda claro', memoryWithLastAgent('programacion'));
   assert.equal(route.closing, true);
@@ -58,21 +58,21 @@ test('route: cierre real va solo al último agente con score 99', () => {
   assert.equal(route.targets[0].score, 99);
 });
 
-test('route: saludo puro marca greeting con todos los agentes', () => {
+test('route: pure greeting marks greeting with all agents', () => {
   const router = new AgentRouter(AGENTS);
   const route = router.route('hola equipo', memoryWithLastAgent(null));
   assert.equal(route.greeting, true);
   assert.equal(route.targets.length, 2);
 });
 
-test('route: mención con límite de palabra ("sistemática" no menciona a Julio)', () => {
+test('route: mention with word boundary ("sistemática" does not mention Julio)', () => {
   const router = new AgentRouter(AGENTS);
   const route = router.route('la sistemática de ventas necesita revisión del inventario', memoryWithLastAgent(null));
   assert.ok(!route.targets.some((t) => t.agentId === 'programacion' && t.directMention));
   assert.ok(route.targets.some((t) => t.agentId === 'operaciones'));
 });
 
-test('route: dominio multi-palabra matchea completo', () => {
+test('route: multi-word domain matches whole', () => {
   const router = new AgentRouter(AGENTS);
   const route = router.route('la base de datos y el backend andan lentos', memoryWithLastAgent(null));
   const julio = route.targets.find((t) => t.agentId === 'programacion');
@@ -80,7 +80,7 @@ test('route: dominio multi-palabra matchea completo', () => {
   assert.deepEqual(julio.matchedDomains.sort(), ['backend', 'base de datos']);
 });
 
-test('nextContextualTarget exige mención explícita del otro agente', () => {
+test('nextContextualTarget requires explicit mention of the other agent', () => {
   const router = new AgentRouter(AGENTS);
   const route = { targets: [{ agentId: 'programacion' }] };
   const memory = {
@@ -96,7 +96,7 @@ test('nextContextualTarget exige mención explícita del otro agente', () => {
   assert.equal(router.nextContextualTarget('revisemos', route, memorySinMencion), null);
 });
 
-test('un "hola" pelado lo contesta solo la CEO, no los ocho a coro', () => {
+test('a bare "hola" is answered only by the CEO, not all eight in chorus', () => {
   const router = new AgentRouter([
     { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true },
@@ -110,7 +110,7 @@ test('un "hola" pelado lo contesta solo la CEO, no los ocho a coro', () => {
   }
 });
 
-test('un saludo al grupo sí lo contesta el equipo', () => {
+test('a greeting to the group is answered by the team', () => {
   const router = new AgentRouter([
     { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true }
@@ -123,7 +123,7 @@ test('un saludo al grupo sí lo contesta el equipo', () => {
   }
 });
 
-test('saludar a alguien por su nombre no arrastra al resto', () => {
+test('greeting someone by name does not drag the rest', () => {
   const router = new AgentRouter([
     { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true }
@@ -133,7 +133,7 @@ test('saludar a alguien por su nombre no arrastra al resto', () => {
   assert.equal(ruta.targets[0].name, 'Bruno');
 });
 
-test('sin CEO en la mesa, el saludo simple lo toma alguien igual', () => {
+test('without a CEO at the table, someone still takes the simple greeting', () => {
   const router = new AgentRouter([
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true },
     { id: 'p', name: 'Pablo', role: 'worker', aliases: ['pablo'], domains: ['diseno'], enabled: true }
@@ -142,7 +142,7 @@ test('sin CEO en la mesa, el saludo simple lo toma alguien igual', () => {
   assert.equal(ruta.targets.length, 1, 'uno solo, no los dos');
 });
 
-test('preséntense / cada uno convoca a todo el equipo', () => {
+test('preséntense / each one summons the whole team', () => {
   const router = new AgentRouter([
     { id: 'ceo', name: 'Renata', role: 'ceo', aliases: ['renata'], domains: ['estrategia'], enabled: true },
     { id: 'b', name: 'Bruno', role: 'worker', aliases: ['bruno'], domains: ['frontend'], enabled: true }

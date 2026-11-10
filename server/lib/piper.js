@@ -13,7 +13,7 @@ export function mapVoiceToPiper(voice) {
   const v = String(voice || '').trim().toUpperCase();
   // El idioma sigue a la VOZ (tts.language), igual que el prompt: con 'en'
   // van las voces inglesas, si no las españolas de siempre.
-  const en = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
   if (v.startsWith('F')) {
     return en ? 'jenny' : 'daniela';
   }

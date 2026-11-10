@@ -21,13 +21,13 @@ import {
   wave
 } from '../src/fx/morph.ts';
 
-// Las figuras de fx/morph son targets puros: N puntos en un cubo ~unitario.
-// Lo que se prueba: counts exactos, determinismo por seed, puntos SOBRE la
-// superficie que dicen ser, y morphStep como interpolación sana.
+// The fx/morph shapes are pure targets: N points in a ~unit cube.
+// What is tested: exact counts, determinism by seed, points ON the
+// surface they claim to be, and morphStep as a sound interpolation.
 
 const SHAPES_NODOM = { sphere, torus, cube, wave, ring };
 
-test('todos los generadores devuelven exactamente count*3 floats', () => {
+test('all generators return exactly count*3 floats', () => {
   for (const [name, fn] of Object.entries(SHAPES_NODOM)) {
     for (const count of [1, 7, 150, 720]) {
       const pts = name === 'wave' ? fn(count, 1.2) : fn(count, 0.5);
@@ -38,7 +38,7 @@ test('todos los generadores devuelven exactamente count*3 floats', () => {
   }
 });
 
-test('misma seed → mismos puntos; distinta seed → distintos', () => {
+test('same seed → same points; different seed → different ones', () => {
   for (const [name, fn] of Object.entries({ sphere, torus, cube, ring })) {
     const a = fn(200, 1.3);
     const b = fn(200, 1.3);
@@ -46,12 +46,12 @@ test('misma seed → mismos puntos; distinta seed → distintos', () => {
     const c = fn(200, 2.7);
     assert.notDeepEqual(a, c, `${name} ignora la seed`);
   }
-  // wave es función de phase, no de seed.
+  // wave is a function of phase, not seed.
   assert.deepEqual(wave(100, 0.4), wave(100, 0.4));
   assert.notDeepEqual(wave(100, 0.4), wave(100, 1.9));
 });
 
-test('sphere: puntos sobre la esfera unitaria, reparto parejo', () => {
+test('sphere: points on the unit sphere, even spread', () => {
   const pts = sphere(500, 2.117);
   let arriba = 0;
   for (let i = 0; i < 500; i += 1) {
@@ -62,7 +62,7 @@ test('sphere: puntos sobre la esfera unitaria, reparto parejo', () => {
   assert.ok(Math.abs(arriba - 250) < 25, `hemisferios: ${arriba}/500`);
 });
 
-test('torus: puntos sobre el tubo (distancia al anillo = tubo)', () => {
+test('torus: points on the tube (ring distance = tube)', () => {
   const pts = torus(400, 0.8);
   for (let i = 0; i < 400; i += 1) {
     const x = pts[i * 3];
@@ -74,7 +74,7 @@ test('torus: puntos sobre el tubo (distancia al anillo = tubo)', () => {
   assert.ok(TORUS_R + TORUS_TUBE < 1, 'el toro se sale del cubo unitario');
 });
 
-test('cube: puntos sobre las caras, las 6 caras presentes', () => {
+test('cube: points on the faces, all 6 faces present', () => {
   const pts = cube(600, 1.1);
   const faces = new Set();
   for (let i = 0; i < 600; i += 1) {
@@ -90,14 +90,14 @@ test('cube: puntos sobre las caras, las 6 caras presentes', () => {
   assert.equal(faces.size, 6, `caras cubiertas: ${[...faces].join(',')}`);
 });
 
-test('wave: grilla acotada, amplitud acotada, phase la mueve', () => {
+test('wave: bounded grid, bounded amplitude, phase moves it', () => {
   const a = wave(256, 0);
   for (let i = 0; i < 256; i += 1) {
     assert.ok(Math.abs(a[i * 3]) <= WAVE_EXTENT + 1e-6, 'x fuera de la grilla');
     assert.ok(Math.abs(a[i * 3 + 1]) <= WAVE_EXTENT + 1e-6, 'y fuera de la grilla');
     assert.ok(Math.abs(a[i * 3 + 2]) <= WAVE_AMP + 1e-6, `z=${a[i * 3 + 2]}`);
   }
-  // La phase mueve la superficie pero no la grilla.
+  // Phase moves the surface but not the grid.
   const b = wave(256, 2);
   for (let i = 0; i < 256; i += 1) {
     assert.equal(a[i * 3], b[i * 3]);
@@ -106,7 +106,7 @@ test('wave: grilla acotada, amplitud acotada, phase la mueve', () => {
   assert.notDeepEqual(a, b);
 });
 
-test('ring: círculo de radio fijo en el plano, casi plano', () => {
+test('ring: fixed-radius circle in the plane, almost flat', () => {
   const pts = ring(300, 0.3);
   for (let i = 0; i < 300; i += 1) {
     const r = Math.hypot(pts[i * 3], pts[i * 3 + 1]);
@@ -115,7 +115,7 @@ test('ring: círculo de radio fijo en el plano, casi plano', () => {
   }
 });
 
-test('torus/cube/ring viven dentro del cubo [-1,1]', () => {
+test('torus/cube/ring live inside the [-1,1] cube', () => {
   for (const [name, fn] of Object.entries({ torus, cube, ring })) {
     const pts = fn(720, 4.4);
     for (const v of pts) {
@@ -124,20 +124,20 @@ test('torus/cube/ring viven dentro del cubo [-1,1]', () => {
   }
 });
 
-test('morphStep: t=0 devuelve from, t=1 devuelve to (exactos)', () => {
+test('morphStep: t=0 returns from, t=1 returns to (exact)', () => {
   const from = sphere(120, 1);
   const to = torus(120, 1);
   const buf = new Float32Array(from.length);
   assert.deepEqual(morphStep(buf, from, to, 0), from);
   assert.deepEqual(morphStep(buf, from, to, 1), to);
-  // t=0.5 con smoothstep(0.5)=0.5 es el punto medio exacto.
+  // t=0.5 with smoothstep(0.5)=0.5 is the exact midpoint.
   morphStep(buf, from, to, 0.5);
   for (let i = 0; i < buf.length; i += 1) {
     assert.ok(Math.abs(buf[i] - (from[i] + to[i]) / 2) < 1e-6, `i=${i}`);
   }
 });
 
-test('morphStep: monótono (a más t, más cerca del destino)', () => {
+test('morphStep: monotonic (higher t, closer to target)', () => {
   const from = cube(150, 2);
   const to = ring(150, 2);
   const buf = new Float32Array(from.length);
@@ -155,13 +155,13 @@ test('morphStep: monótono (a más t, más cerca del destino)', () => {
   assert.equal(d1, 0);
 });
 
-test('morphStep: longitudes distintas tiran RangeError', () => {
+test('morphStep: mismatched lengths throw RangeError', () => {
   const a = sphere(10, 0);
   const b = sphere(11, 0);
   assert.throws(() => morphStep(new Float32Array(30), a, b, 0.5), RangeError);
 });
 
-test('easings: [0,1], extremos exactos, monótonos', () => {
+test('easings: [0,1], exact endpoints, monotonic', () => {
   for (const fn of [smoothstep, easeInOutCubic]) {
     assert.equal(fn(0), 0);
     assert.equal(fn(1), 1);
@@ -172,13 +172,13 @@ test('easings: [0,1], extremos exactos, monótonos', () => {
       assert.ok(v >= prev - 1e-12, 'no monótono');
       prev = v;
     }
-    // Fuera de rango se clampéa, no se rompe.
+    // Out of range clamps, does not break.
     assert.equal(fn(-3), 0);
     assert.equal(fn(99), 1);
   }
 });
 
-test('generateShape despacha a cada figura', () => {
+test('generateShape dispatches to each shape', () => {
   assert.equal(MORPH_SHAPES.length, 5);
   for (const shape of MORPH_SHAPES) {
     const pts = generateShape(shape, 60, { seed: 1, phase: 0.5 });
@@ -188,11 +188,11 @@ test('generateShape despacha a cada figura', () => {
   assert.deepEqual(generateShape('wave', 49, { phase: 1 }), wave(49, 1));
 });
 
-test('text() sin DOM tira error claro (no rompe node)', () => {
+test('text() without DOM throws a clear error (does not break node)', () => {
   assert.equal(typeof document, 'undefined');
   assert.throws(() => text(100, 'hola'), /necesita DOM/);
 });
 
-test('count inválido tira, no devuelve basura', () => {
+test('invalid count throws, does not return garbage', () => {
   assert.throws(() => sphere(NaN, 0), RangeError);
 });

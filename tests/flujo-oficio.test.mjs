@@ -13,13 +13,13 @@ import {
   STACKS
 } from '../server/lib/playbooks.js';
 
-// El flujo del oficio: qué se hace primero, con qué comando se verifica y qué no
-// hay que volver a tocar. Es lo que faltaba en las corridas reales — se escribían
-// cinco archivos sin plan, el punto de entrada quedaba con la plantilla por
-// defecto y los pasos se agotaban antes del finish.
+// The craft flow: what comes first, which command verifies it, and what must
+// not be touched again. This was missing in real runs — five files were written
+// with no plan, the entry point kept the default template, and steps ran out
+// before finish.
 //
-// Todo lo de acá se mide contra los archivos y contra las plantillas: nada de
-// nombres de empleados, que cambian con cada plantilla.
+// Everything here is measured against files and templates: no employee names,
+// which change with each template.
 
 const TOPE_FLUJO = 900;
 const TOPE_ROLES = 700;
@@ -32,15 +32,15 @@ function leerPlaybook(nombre) {
   return readFileSync(new URL(`../server/playbooks/${nombre}.md`, import.meta.url), 'utf-8').trim();
 }
 
-// Sin tildes y en minúsculas: el playbook está escrito para leerse, no para que
-// el test adivine cómo se acentuó cada palabra.
+// No accents, all lowercase: the playbook is written to be read, not for
+// the test to guess how each word was accented.
 function normalizar(texto) {
   return String(texto).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
-// El comando con el que se verifica en cada nicho antes de dar algo por hecho.
-// Es el mismo que ofrece la terminal del equipo (herramientas.js) y el que corre
-// el motor para aceptar el finish.
+// The command used to verify in each niche before taking anything for granted.
+// It is the same one offered by the team terminal (herramientas.js) and the one
+// the engine runs to accept finish.
 const VERIFICACION = {
   web: 'node --check',
   automatizacion: 'node flujo.js',
@@ -49,7 +49,7 @@ const VERIFICACION = {
   python: 'python3 main.py'
 };
 
-test('cada nicho declarado tiene su flujo, y el motor lo entrega', () => {
+test('each declared niche has its flow, and the engine delivers it', () => {
   for (const stack of STACKS) {
     const archivo = leerPlaybook(`flujo-${stack}`);
     assert.ok(archivo.length > 200, `flujo-${stack}.md tiene que existir y decir algo`);
@@ -59,7 +59,7 @@ test('cada nicho declarado tiene su flujo, y el motor lo entrega', () => {
   }
 });
 
-test('ningún flujo se pasa del presupuesto del prompt', () => {
+test('no flow exceeds the prompt budget', () => {
   for (const stack of STACKS) {
     const largo = leerPlaybook(`flujo-${stack}`).length;
     assert.ok(
@@ -71,7 +71,7 @@ test('ningún flujo se pasa del presupuesto del prompt', () => {
   assert.ok(roles <= TOPE_ROLES, `roles.md mide ${roles} caracteres y el tope es ${TOPE_ROLES}`);
 });
 
-test('cada flujo dice qué verificar y con qué comando exacto, antes del finish', () => {
+test('each flow states what to verify and with which exact command, before finish', () => {
   for (const stack of STACKS) {
     const flujo = leerPlaybook(`flujo-${stack}`);
     assert.ok(VERIFICACION[stack], `apareció el nicho ${stack}: decí acá con qué comando se verifica`);
@@ -84,7 +84,7 @@ test('cada flujo dice qué verificar y con qué comando exacto, antes del finish
   }
 });
 
-test('los comandos que manda el flujo son comandos que la terminal permite', () => {
+test('the commands the flow sends are commands the terminal allows', () => {
   for (const stack of STACKS) {
     const flujo = leerPlaybook(`flujo-${stack}`);
     const comandos = [...flujo.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
@@ -97,7 +97,7 @@ test('los comandos que manda el flujo son comandos que la terminal permite', () 
   }
 });
 
-test('cada flujo es una lista numerada y sin saltos: el orden es el contenido', () => {
+test('each flow is a numbered list with no gaps: the order is the content', () => {
   for (const stack of STACKS) {
     const flujo = leerPlaybook(`flujo-${stack}`);
     const pasos = [...flujo.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
@@ -106,7 +106,7 @@ test('cada flujo es una lista numerada y sin saltos: el orden es el contenido', 
   }
 });
 
-test('cada flujo nombra los errores de siempre del nicho y cuándo no iterar', () => {
+test('each flow names the niche\'s usual errors and when not to iterate', () => {
   for (const stack of STACKS) {
     const flujo = leerPlaybook(`flujo-${stack}`);
     const errores = flujo.split(/ERRORES DE SIEMPRE:/)[1] || '';
@@ -116,9 +116,9 @@ test('cada flujo nombra los errores de siempre del nicho y cuándo no iterar', (
   }
 });
 
-test('los errores de cada nicho son de ESE nicho, no advertencias genéricas', () => {
-  // Lo que se rompe siempre en cada lugar. Si esto se vuelve genérico, el flujo
-  // dejó de servir: el agente ya tiene el criterio técnico para lo general.
+test('each niche\'s errors belong to THAT niche, not generic warnings', () => {
+  // What always breaks in each place. If this goes generic, the flow stops
+  // being useful: the agent already has the technical judgment for the general.
   const propios = {
     web: ['tokens.css', 'href="#"'],
     automatizacion: ['datos de ejemplo', 'credenciales'],
@@ -135,9 +135,9 @@ test('los errores de cada nicho son de ESE nicho, no advertencias genéricas', (
   }
 });
 
-test('roles.md menciona los oficios que de verdad existen en las plantillas', () => {
-  // Los oficios se derivan de las plantillas por role y por título, nunca por
-  // nombre propio: Renata puede llamarse de otra forma mañana.
+test('roles.md mentions the crafts that really exist in the templates', () => {
+  // Crafts derive from templates by role and title, never by proper name:
+  // Renata may be called something else tomorrow.
   const clases = [
     { oficio: 'quien coordina', esta: (e) => e.role === 'ceo', menciones: ['ceo', 'coordina'] },
     { oficio: 'quien afina perfiles', esta: (e) => e.role === 'contratista', menciones: ['contratista', 'afina perfiles'] },
@@ -162,7 +162,7 @@ test('roles.md menciona los oficios que de verdad existen en las plantillas', ()
   }
 });
 
-test('roles.md dice qué NO hace cada oficio y cuándo entra', () => {
+test('roles.md states what each craft does NOT do and when it steps in', () => {
   const roles = leerPlaybook('roles');
   const negaciones = [...roles.matchAll(/\bNO\b/g)];
   assert.ok(negaciones.length >= 5, `cada oficio necesita su límite: hay ${negaciones.length} "NO" y son 5 oficios`);
@@ -170,22 +170,22 @@ test('roles.md dice qué NO hace cada oficio y cuándo entra', () => {
   assert.ok(/consultar|consultale/i.test(roles), 'si algo es de otro oficio, se consulta en vez de invadirlo');
 });
 
-test('un stack desconocido cae al flujo de web, como el resto de los playbooks', () => {
+test('an unknown stack falls back to the web flow, like the rest of the playbooks', () => {
   const web = renderFlujo(DEFAULT_STACK);
   for (const raro of [undefined, null, '', 'cobol', 'movil']) {
     assert.equal(renderFlujo(raro), web, `renderFlujo(${JSON.stringify(raro)}) tiene que caer a ${DEFAULT_STACK}`);
   }
 });
 
-test('el prompt de trabajo enchufa el flujo y los roles', () => {
+test('the work prompt wires the flow and the roles', () => {
   const motor = readFileSync(new URL('../server/lib/workforce.js', import.meta.url), 'utf-8');
   assert.ok(/renderFlujo\(goal\?\.stack\)/.test(motor), 'executeWork tiene que inyectar renderFlujo(goal?.stack)');
   assert.ok(/renderRoles\(\)/.test(motor), 'executeWork tiene que inyectar renderRoles()');
 });
 
-test('el flujo y los roles caben en el presupuesto del prompt de trabajo', () => {
-  // La regla medida del proyecto: cuando la documentación tapa al protocolo, el
-  // modelo deja de emitir acciones. El agregado se mide entero, no por archivo.
+test('the flow and roles fit the work prompt budget', () => {
+  // The project's measured rule: when documentation drowns the protocol, the
+  // model stops emitting actions. The aggregate is measured whole, not per file.
   let peor = 0;
   for (const stack of STACKS) {
     const agregado = `${renderFlujo(stack)}\n${renderRoles()}`.length;
@@ -194,14 +194,14 @@ test('el flujo y los roles caben en el presupuesto del prompt de trabajo', () =>
   assert.ok(peor <= 1800, `el agregado al prompt de trabajo llegó a ${peor} caracteres y el techo acordado es 1800`);
 });
 
-test('la documentación de oficio del prompt de trabajo tiene techo medido', () => {
-  // Antes esto se medía comparando dos bloques de documentación entre sí (flujo
-  // + roles contra criterio + diseño), y ese guard premiaba lo que hay que
-  // evitar: engordar el criterio para poder engordar el flujo. Lo que importa es
-  // el total contra el protocolo, que es lo que se midió cuando el modelo dejó
-  // de emitir acciones. Medido en un proyecto movil-rn real: el protocolo del
-  // system pesa ~3.200 caracteres, así que 4.200 de documentación deja la
-  // relación en 1,3:1 — lejos del 7:1 que rompió las corridas.
+test('the work prompt craft docs have a measured ceiling', () => {
+  // This used to be measured by comparing two doc blocks against each other (flow
+  // + roles vs criteria + design), and that guard rewarded what must be avoided:
+  // fattening the criteria to justify fattening the flow. What matters is the
+  // total vs the protocol, which is what was measured when the model stopped
+  // emitting actions. Measured on a real movil-rn project: the system protocol
+  // weighs ~3,200 chars, so 4,200 of docs keeps the ratio at 1.3:1 — far from
+  // the 7:1 that broke the runs.
   for (const stack of STACKS) {
     const doc = `${renderPlaybooks(stack)}\n${renderFlujo(stack)}\n${renderRoles()}`.length;
     assert.ok(
@@ -211,12 +211,12 @@ test('la documentación de oficio del prompt de trabajo tiene techo medido', () 
   }
 });
 
-test('el piso de diseño no le pide CSS a un nicho que no hace CSS', () => {
-  // Esto era un bug real: diseno.md estaba escrito en vocabulario web y viajaba
-  // igual a los cinco nichos. En movil-rn el prompt decía "Colores y medidas
-  // SIEMPRE desde tokens.css con var(--…)" tres líneas debajo de "Estilos con
-  // StyleSheet.create. Nada de CSS." — y una web disfrazada de app es exactamente
-  // lo que revisarReactNative() rechaza después.
+test('the design floor does not ask CSS from a niche that does no CSS', () => {
+  // This was a real bug: diseno.md was written in web vocabulary and shipped
+  // unchanged to all five niches. In movil-rn the prompt said "Colors and sizes
+  // ALWAYS from tokens.css with var(--…)" three lines below "Styles with
+  // StyleSheet.create. No CSS." — and a web page disguised as an app is exactly
+  // what revisarReactNative() rejects later.
   const soloWeb = ['tokens.css', 'var(--', '<style', 'href="#"', 'prefers-reduced-motion', 'alt en'];
   for (const stack of STACKS) {
     const piso = renderDesignStandard(stack);
@@ -234,10 +234,10 @@ test('el piso de diseño no le pide CSS a un nicho que no hace CSS', () => {
   assert.ok(renderDesignStandard('web').includes('var(--'), 'en web el piso SÍ tiene que exigir var(--…)');
 });
 
-test('cada nicho nombra su propio archivo de tokens, no el de web', () => {
-  // El motor le dice "si el proyecto está vacío escribí <archivo de tokens>". Si
-  // ese nombre es tokens.css en un proyecto React Native, la primera acción de la
-  // corrida contradice el playbook del nicho.
+test('each niche names its own tokens file, not the web one', () => {
+  // The engine says "if the project is empty write <tokens file>". If that
+  // name is tokens.css in a React Native project, the run's first action
+  // contradicts the niche playbook.
   assert.equal(archivoDeTokens('web'), 'tokens.css');
   assert.match(String(archivoDeTokens('movil-rn')), /theme\.js$/);
   assert.match(String(archivoDeTokens('android')), /Tokens\.kt$/);

@@ -1,5 +1,5 @@
-// Audio routing: parsers con fixtures reales + operaciones con run fakes.
-// NUNCA toca audio real: todo comando PipeWire pasa por un runner inyectado.
+// Audio routing: parsers with real fixtures + operations with fake runs.
+// It NEVER touches real audio: every PipeWire command goes through an injected runner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -28,7 +28,7 @@ import {
 const FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const read = (name) => readFileSync(join(FIX, name), 'utf8');
 
-// Runner fake: mapa 'cmd args...' → {code, stdout}. Registra argv exactos.
+// Fake runner: 'cmd args...' map → {code, stdout}. Records exact argv.
 function fakeRun(routes, log = []) {
   return async (cmd, args = []) => {
     log.push([cmd, ...args]);
@@ -46,41 +46,41 @@ const META = read('pw-metadata-default.txt');
 const WPCTL = read('wpctl-status.txt');
 const WPCTL_NAMES = read('wpctl-status-names.txt');
 
-test('parsePwDump: sinks/sources/streams reales del box', () => {
+test('parsePwDump: real sinks/sources/streams from the box', () => {
   const { sinks, sources, streams } = parsePwDump(DUMP);
   assert.deepEqual(sinks.map((s) => s.id), [60, 70, 80]);
   assert.ok(sinks.every((s) => s.name && s.description));
   assert.ok(sinks.find((s) => s.id === 80).name.startsWith('bluez_output'));
   assert.ok(sources.some((s) => s.id === 59));
-  // Streams de la app: equipo 101+110; Brave 112 no es nuestro.
+  // App streams: equipo 101+110; Brave 112 is not ours.
   const ours = streams.filter(isAppStream).map((s) => s.id);
   assert.deepEqual(ours, [101, 110]);
   assert.equal(isAppStream(streams.find((s) => s.id === 112)), false);
-  // Volumen/mute parseados (sink 80: mute false, vol numérico).
+  // Parsed volume/mute (sink 80: mute false, numeric vol).
   const awk = sinks.find((s) => s.id === 80);
   assert.equal(awk.muted, false);
   assert.ok(typeof awk.volume === 'number' && awk.volume > 0);
 });
 
-test('parsePwDump rechaza JSON inválido', () => {
+test('parsePwDump rejects invalid JSON', () => {
   assert.throws(() => parsePwDump('no-json{{'), /JSON inválido/);
   assert.throws(() => parsePwDump('{"a":1}'), /inesperada/);
 });
 
-test('parseDefaultMetadata: efectivo sobre configurado', () => {
+test('parseDefaultMetadata: effective over configured', () => {
   const d = parseDefaultMetadata(META);
   assert.equal(d.sink, 'bluez_output.0D_45_E7_0E_0B_A8.1');
   assert.equal(d.source, 'alsa_input.pci-0000_00_1f.3.analog-stereo');
   assert.deepEqual(parseDefaultMetadata('nada útil\n'), { sink: null, source: null });
 });
 
-test('parseWpctlStatus: ids, volúmenes y defaults (descripciones)', () => {
+test('parseWpctlStatus: ids, volumes and defaults (descriptions)', () => {
   const { sinks, sources, streams } = parseWpctlStatus(WPCTL);
   assert.deepEqual(sinks.map((s) => s.id), [60, 70, 80]);
   assert.deepEqual(sinks.filter((s) => s.isDefault).map((s) => s.id), [80]);
   assert.deepEqual(sources.filter((s) => s.isDefault).map((s) => s.id), [59]);
   assert.equal(sinks.find((s) => s.id === 80).volume, 0.73);
-  // Streams: solo clientes (101/110/112/33), no puertos (109, 111...).
+  // Streams: clients only (101/110/112/33), not ports (109, 111...).
   assert.deepEqual(streams.map((s) => s.id), [33, 101, 110, 112]);
   assert.ok(streams.every((s) => s.app.length > 0));
 });
@@ -90,14 +90,14 @@ test('parseWpctlStatus -n: node.names', () => {
   assert.ok(sinks.find((s) => s.id === 80).name.startsWith('bluez_output'));
 });
 
-test('isAppStream matchea equipo/equipo-node, no el resto', () => {
+test('isAppStream matches equipo/equipo-node, not the rest', () => {
   assert.ok(APP_STREAM_RE.test('equipo-node'));
   assert.equal(isAppStream({ app: 'Brave', nodeName: 'Brave', binary: 'brave' }), false);
   assert.equal(isAppStream({ app: 'WebKitWebProcess', nodeName: 'x', binary: 'y' }), false);
   assert.equal(isAppStream(null), false);
 });
 
-test('resolveNode: por id o nombre; default → null', () => {
+test('resolveNode: by id or name; default → null', () => {
   const nodes = [{ id: 80, name: 'bluez_x' }, { id: 60, name: 'alsa_y' }];
   assert.equal(resolveNode(nodes, 80).name, 'bluez_x');
   assert.equal(resolveNode(nodes, '80').name, 'bluez_x');
@@ -107,7 +107,7 @@ test('resolveNode: por id o nombre; default → null', () => {
   assert.equal(resolveNode(nodes, ''), null);
 });
 
-test('listDevices vía pw-dump marca defaults (fake, sin audio real)', async () => {
+test('listDevices via pw-dump marks defaults (fake, no real audio)', async () => {
   const devices = await listDevices({
     run: fakeRun({ 'pw-dump': DUMP, 'pw-metadata -n default': META })
   });
@@ -116,7 +116,7 @@ test('listDevices vía pw-dump marca defaults (fake, sin audio real)', async () 
   assert.equal(devices.sources.find((s) => s.isDefault).id, 59);
 });
 
-test('listDevices fallback a wpctl si falta pw-dump', async () => {
+test('listDevices falls back to wpctl when pw-dump is missing', async () => {
   const log = [];
   const devices = await listDevices({
     run: fakeRun({
@@ -127,21 +127,21 @@ test('listDevices fallback a wpctl si falta pw-dump', async () => {
   });
   assert.equal(devices.backend, 'wpctl');
   assert.deepEqual(devices.sinks.map((s) => s.id), [60, 70, 80]);
-  // Nombres de -n + descripciones lindas del status normal.
+  // Names from -n + friendly descriptions from the normal status.
   assert.ok(devices.sinks.find((s) => s.id === 60).name.startsWith('alsa_output'));
   assert.match(devices.sinks.find((s) => s.id === 60).description, /Audio Interno/);
   assert.ok(devices.sinks.every((s) => s.muted === null));
   assert.ok(log[0][0] === 'pw-dump', 'intenta pw-dump primero');
 });
 
-test('listDevices sin backend → error claro', async () => {
+test('listDevices without backend → clear error', async () => {
   await assert.rejects(
     () => listDevices({ run: fakeRun({}) }),
     /PipeWire no disponible/
   );
 });
 
-test('moveAppStreams pinnea 101+110 al sink (argv exacto, sin shell)', async () => {
+test('moveAppStreams pins 101+110 to the sink (exact argv, no shell)', async () => {
   const log = [];
   const devices = await listDevices({ run: fakeRun({ 'pw-dump': DUMP, 'pw-metadata -n default': META }) });
   const routes = {
@@ -159,7 +159,7 @@ test('moveAppStreams pinnea 101+110 al sink (argv exacto, sin shell)', async () 
   ]);
 });
 
-test('moveAppStreams sin streams vivos no falla', async () => {
+test('moveAppStreams with no live streams does not fail', async () => {
   const log = [];
   const r = await moveAppStreams(80, {
     run: fakeRun({}, log),
@@ -169,7 +169,7 @@ test('moveAppStreams sin streams vivos no falla', async () => {
   assert.deepEqual(log, []);
 });
 
-test('unpinAppStreams vuelve a -1 (auto)', async () => {
+test('unpinAppStreams goes back to -1 (auto)', async () => {
   const log = [];
   const devices = await listDevices({ run: fakeRun({ 'pw-dump': DUMP, 'pw-metadata -n default': META }) });
   const r = await unpinAppStreams({
@@ -182,7 +182,7 @@ test('unpinAppStreams vuelve a -1 (auto)', async () => {
   assert.deepEqual(r.unpinned, [101, 110]);
 });
 
-test('setDefaultNode resuelve nombre → id', async () => {
+test('setDefaultNode resolves name → id', async () => {
   const log = [];
   const n = await setDefaultNode('bluez_output.0D_45_E7_0E_0B_A8.1', {
     run: fakeRun({ 'wpctl set-default 80': '' }, log),
@@ -213,7 +213,7 @@ test('setNodeVolume/mute: clamp + argv', async () => {
   assert.throws(() => formatVolume('xx'), /inválido/);
 });
 
-test('beepWavBytes: WAV 16-bit válido', () => {
+test('beepWavBytes: valid 16-bit WAV', () => {
   const wav = beepWavBytes({ freq: 880, ms: 400, rate: 48000 });
   assert.equal(wav.subarray(0, 4).toString(), 'RIFF');
   assert.equal(wav.subarray(8, 12).toString(), 'WAVE');
@@ -221,7 +221,7 @@ test('beepWavBytes: WAV 16-bit válido', () => {
   assert.equal(wav.readUInt16LE(20), 1); // PCM
 });
 
-test('playTestTone usa --target y limpia el tmp', async () => {
+test('playTestTone uses --target and cleans up tmp', async () => {
   const log2 = [];
   const r2 = await playTestTone('bluez_output.x', {
     run: async (cmd, args) => {
@@ -235,7 +235,7 @@ test('playTestTone usa --target y limpia el tmp', async () => {
   });
   assert.equal(r2.ok, true);
   assert.equal(log2.length, 1);
-  // Sin sink → sin --target (va al default del sistema).
+  // No sink → no --target (goes to the system default).
   const log3 = [];
   await playTestTone('', {
     run: async (cmd, args) => {
@@ -265,7 +265,7 @@ test('applyAudioSettings followDefault → unpin, no set-default', async () => {
   assert.ok(log.every((argv) => argv[0] !== 'wpctl' || argv[1] !== 'set-default'), 'sin set-default');
 });
 
-test('applyAudioSettings output fijo → set-default + move', async () => {
+test('applyAudioSettings fixed output → set-default + move', async () => {
   const log = [];
   const r = await applyAudioSettings(
     { output: 'alsa_output.pci-0000_00_1f.3.analog-stereo', input: 'default', followDefault: false },
@@ -284,7 +284,7 @@ test('applyAudioSettings output fijo → set-default + move', async () => {
   assert.ok(log.some((a) => a.join(' ') === 'wpctl set-default 60'));
 });
 
-test('applyAudioSettings sink inexistente → {ok:false}, sin tirar', async () => {
+test('applyAudioSettings missing sink → {ok:false}, without throwing', async () => {
   const r = await applyAudioSettings(
     { output: 'no-existe', input: 'default', followDefault: false },
     { run: fakeRun({ 'pw-dump': DUMP, 'pw-metadata -n default': META }) }
@@ -293,7 +293,7 @@ test('applyAudioSettings sink inexistente → {ok:false}, sin tirar', async () =
   assert.match(r.error, /desconocido/);
 });
 
-test('applyAudioSettings sin backend → {ok:false}', async () => {
+test('applyAudioSettings without backend → {ok:false}', async () => {
   const r = await applyAudioSettings(
     { output: 'x', input: 'default', followDefault: false },
     { run: fakeRun({}) }
@@ -302,7 +302,7 @@ test('applyAudioSettings sin backend → {ok:false}', async () => {
   assert.match(r.error, /PipeWire no disponible/);
 });
 
-// ── Settings keys (store fake, sin SQLite) ──────────────────────────
+// ── Settings keys (fake store, no SQLite) ──────────────────────────
 
 import {
   applySettings,
@@ -331,7 +331,7 @@ test('settings audio: defaults (followDefault true)', () => {
   assert.deepEqual(publicSettings().audio, { output: 'default', input: 'default', followDefault: true });
 });
 
-test('settings audio: patch válido aplica + inválido se descarta', () => {
+test('settings audio: valid patch applies + invalid is discarded', () => {
   const store = fakeStore();
   initSettings(store, { setKeys: () => {} });
   const applied = applySettings({
@@ -342,11 +342,11 @@ test('settings audio: patch válido aplica + inválido se descarta', () => {
   assert.deepEqual(applied.sort(), ['audio.followDefault', 'audio.input', 'audio.output']);
   assert.equal(getAudioOutput(), 'bluez_output.0D_45_E7_0E_0B_A8.1');
   assert.equal(getAudioFollowDefault(), false);
-  // Inválidos: nombre con shell chars, followDefault no-booleano.
+  // Invalid: name with shell chars, non-boolean followDefault.
   const applied2 = applySettings({ 'audio.output': 'x; rm -rf /', 'audio.followDefault': 'maybe' });
   assert.deepEqual(applied2, []);
   assert.equal(getAudioOutput(), 'bluez_output.0D_45_E7_0E_0B_A8.1', 'no pisa con inválido');
-  // Vacío borra override → vuelve a default.
+  // Empty clears override → back to default.
   applySettings({ 'audio.output': '' });
   assert.equal(getAudioOutput(), 'default');
 });

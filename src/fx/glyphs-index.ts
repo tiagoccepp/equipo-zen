@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Índice combinado de glifos (A de T2a + B de T2b). Los renderers
-// (orb-morph.ts, orb3d.ts) usan ESTE módulo: GLYPH_REGISTRY, lookupGlyph,
-// listGlyphNames. Claves normalizadas con foldGlyphName (case/tilde/
-// espacios), igual que glyphs-a.ts.
+// Combined glyph index (A from T2a + B from T2b). Renderers
+// (orb-morph.ts, orb3d.ts) use THIS module: GLYPH_REGISTRY, lookupGlyph,
+// listGlyphNames. Keys normalized with foldGlyphName (case/accent/spaces),
+// same as glyphs-a.ts.
 //
-// Puente con T2a: al cargar también registra B en glyphs-a vía
-// registerExtraGlyphs, así el lookupGlyph de A queda completo aunque un
-// renderer lo use directo. Ante colisión gana A (hoy: 0 colisiones).
+// Bridge with T2a: at load it also registers B into glyphs-a via
+// registerExtraGlyphs, so A's lookupGlyph stays complete even if a
+// renderer uses it directly. On collision A wins (today: 0 collisions).
 // ═══════════════════════════════════════════════════════════════════════
 
 import { GLYPHS_A, foldGlyphName, registerExtraGlyphs } from './glyphs-a.ts';

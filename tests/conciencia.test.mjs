@@ -7,7 +7,7 @@ import { renderConciencia, estadoVivo, TOPE_CONCIENCIA } from '../server/lib/con
 
 const plantillas = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
-// Se filtra por role, nunca por nombre de plantilla: las plantillas cambian.
+// Filter by role, never by template name: templates change.
 function escenario() {
   const store = new Store(':memory:');
   const company = store.createCompanyFromTemplate(
@@ -18,7 +18,7 @@ function escenario() {
   return { store, company, goal, equipo };
 }
 
-// Una tarea con su archivo y su dueño, en el estado que pida el caso.
+// A task with its file and its owner, in whatever state the case needs.
 function tarea(store, goal, agente, { archivo = null, estado = 'pending', kind = 'entregable', phase = 2, texto = null, padre = null } = {}) {
   const id = store.insertTask(null, agente.id, {
     text: texto || `escribir ${archivo || 'algo'}`,
@@ -34,7 +34,7 @@ function tarea(store, goal, agente, { archivo = null, estado = 'pending', kind =
   return store.getTask(id);
 }
 
-test('ve al compañero que está escribiendo AHORA, con nombre y archivo', () => {
+test('sees the teammate writing RIGHT NOW, with name and file', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const otro = equipo[1];
@@ -50,7 +50,7 @@ test('ve al compañero que está escribiendo AHORA, con nombre y archivo', () =>
   assert.match(bloque, /index\.html/, 'y en qué archivo');
 });
 
-test('no se ve a sí mismo trabajando: eso se leería como que otro le tomó el archivo', () => {
+test('does not see itself working: that would read as someone else having taken the file', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const mia = tarea(store, goal, yo, { archivo: 'app.js', estado: 'in_progress' });
@@ -66,7 +66,7 @@ test('no se ve a sí mismo trabajando: eso se leería como que otro le tomó el 
   assert.ok(!enCurso.includes(yo.name), 'no aparece a sí mismo por nombre');
 });
 
-test('sabe qué YA se entregó, por quién, y que eso se edita en vez de rehacerse', () => {
+test('knows what is already DONE, by whom, and that it gets edited instead of redone', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const autora = equipo[1];
@@ -83,7 +83,7 @@ test('sabe qué YA se entregó, por quién, y que eso se edita en vez de rehacer
   assert.match(bloque, /no lo rehagas|no rehagas/i);
 });
 
-test('lo entregado por uno mismo dice "vos", así no se lo atribuye a un compañero', () => {
+test('what you delivered yourself says "vos", so it is not attributed to a teammate', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   tarea(store, goal, yo, { archivo: 'tokens.css', estado: 'done' });
@@ -96,13 +96,13 @@ test('lo entregado por uno mismo dice "vos", así no se lo atribuye a un compañ
   assert.match(bloque, /tokens\.css \(vos\)/);
 });
 
-test('la cola dice de quién depende cada cosa que espera', () => {
+test('the queue says who each waiting thing depends on', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const otro = equipo[1];
   const tercero = equipo[2] || equipo[1];
-  // El otro tiene index.html tomado AHORA; lo que espera ese mismo archivo
-  // depende de él, no de la suerte.
+  // The other one holds index.html RIGHT NOW; whatever waits on that same file
+  // depends on them, not on luck.
   tarea(store, goal, otro, { archivo: 'index.html', estado: 'in_progress' });
   tarea(store, goal, tercero, { archivo: 'index.html', estado: 'pending' });
   const mia = tarea(store, goal, yo, { archivo: 'app.js', estado: 'in_progress' });
@@ -116,7 +116,7 @@ test('la cola dice de quién depende cada cosa que espera', () => {
   assert.match(enCola, new RegExp(otro.name), 'nombra a quien tiene el archivo');
 });
 
-test('una revisión en cola espera al autor del entregable que revisa', () => {
+test('a queued review waits for the author of the deliverable it reviews', () => {
   const { store, goal, equipo } = escenario();
   const autor = equipo[0];
   const qa = equipo[1];
@@ -132,10 +132,10 @@ test('una revisión en cola espera al autor del entregable que revisa', () => {
   assert.match(bloque, new RegExp(`tras ${autor.name}`), 'la revisión cuelga de quien entregó');
 });
 
-test('el archivo que necesito va PRIMERO si lo está escribiendo otro', () => {
+test('the file I need goes FIRST if someone else is writing it', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
-  // Tres compañeros trabajando; el que me importa es el que tiene MI archivo.
+  // Three teammates working; the one that matters is whoever holds MY file.
   const otros = equipo.filter((a) => a.id !== yo.id);
   tarea(store, goal, otros[0], { archivo: 'datos.json', estado: 'in_progress' });
   tarea(store, goal, otros[1] || otros[0], { archivo: 'estilos.css', estado: 'in_progress' });
@@ -152,7 +152,7 @@ test('el archivo que necesito va PRIMERO si lo está escribiendo otro', () => {
   assert.match(bloque, /consultar/, 'y le dice qué hacer: preguntar en vez de duplicar');
 });
 
-test('sin equipo no genera ruido: el bloque queda vacío', () => {
+test('without a team it makes no noise: the block stays empty', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const mia = tarea(store, goal, yo, { archivo: 'index.html', estado: 'in_progress' });
@@ -164,7 +164,7 @@ test('sin equipo no genera ruido: el bloque queda vacío', () => {
   assert.equal(bloque, '', 'un agente solo en su proyecto no lee un cartel vacío');
 });
 
-test('las decisiones y los seguimientos no ensucian el presente del equipo', () => {
+test('decisions and follow-ups do not pollute the team present', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   tarea(store, goal, equipo[1], { kind: 'decision', texto: 'usar verde oscuro como color base' });
@@ -178,13 +178,13 @@ test('las decisiones y los seguimientos no ensucian el presente del equipo', () 
   assert.equal(bloque, '', 'nadie trabaja un acuerdo: en el estado vivo no existe');
 });
 
-test('sin proyecto no hay bloque (y no explota)', () => {
+test('without a project there is no block (and nothing blows up)', () => {
   const { store, equipo } = escenario();
   assert.equal(renderConciencia(store, { goalId: null, agentId: equipo[0].id }), '');
   assert.deepEqual(estadoVivo(store, null), { ahora: [], listos: [], cola: [] });
 });
 
-test('con 20 tareas el bloque no crece: sigue bajo el tope de 900', () => {
+test('with 20 tasks the block does not grow: it stays under the 900 cap', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   for (let i = 0; i < 20; i += 1) {
@@ -209,7 +209,7 @@ test('con 20 tareas el bloque no crece: sigue bajo el tope de 900', () => {
   assert.match(bloque, /es tuyo/, 'la regla que lo desbloquea nunca se cae');
 });
 
-test('una ruta larga conserva el nombre del archivo, no la carpeta', () => {
+test('a long path keeps the file name, not the folder', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   const largo = 'app/src/main/java/com/equipo/app/ui/PantallaDelAhorcado.kt';
@@ -224,7 +224,7 @@ test('una ruta larga conserva el nombre del archivo, no la carpeta', () => {
   assert.ok(!bloque.includes('app/src/main/java/com/equipo/app/ui/PantallaDelAhorcado.kt'), 'y la ruta entera no se paga');
 });
 
-test('el tope es duro incluso si se lo aprieta hasta lo absurdo', () => {
+test('the cap is hard even when squeezed to the absurd', () => {
   const { store, goal, equipo } = escenario();
   const yo = equipo[0];
   for (let i = 0; i < 12; i += 1) {
@@ -238,7 +238,7 @@ test('el tope es duro incluso si se lo aprieta hasta lo absurdo', () => {
   assert.ok(bloque.length <= 200, `mide ${bloque.length}`);
 });
 
-test('el motor lo inyecta en los DOS caminos del prompt de trabajo', () => {
+test('the engine injects it into BOTH paths of the work prompt', () => {
   const fuente = readFileSync(new URL('../server/lib/workforce.js', import.meta.url), 'utf-8');
   const trabajo = fuente.slice(fuente.indexOf('async executeWork('));
   const header = trabajo.slice(trabajo.indexOf('const header = ['), trabajo.indexOf('let lastObservation'));

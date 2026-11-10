@@ -286,7 +286,7 @@ export class MeetingSession {
   }
 
   promptContext(agentId = null) {
-    const enPrompt = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enPrompt = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
     const scenarioText = this.company
       ? [
           this.company.scenario,
@@ -1108,7 +1108,7 @@ export class MeetingSession {
       return null;
     }
     // La razón del ruteo se muestra en la UI: en inglés si la voz es inglesa.
-    const enRoute = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enRoute = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
 
     const recentContext = this.memory.recentContext(8);
     const agents = this.sessionAgents.map((agent) => ({
@@ -1814,7 +1814,7 @@ export class MeetingSession {
   async prepareMeetingClose() {
     this.reassignCeoDeliverables();
     // goalTitle/spokenSummary los lee el usuario: en inglés si la voz es inglesa.
-    const enClose = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+    const enClose = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
     const ceo = this.sessionAgents.find((agent) => agent.role === 'ceo' && agent.enabled !== false);
     const assignments = this.sessionAgents
       .filter((agent) => (agent.tasks || []).some((task) => !task.completed))

@@ -1,7 +1,7 @@
-// Mission Control — vista dashboard. Monta 6 tarjetas con auto-refresh 5s.
-// Uso (hook del main): import { mountMissionControl } from './mission/view.ts';
+// Mission Control — dashboard view. Mounts 6 cards with 5s auto-refresh.
+// Usage (main hook): import { mountMissionControl } from './mission/view.ts';
 //   const mc = mountMissionControl(el, { getLiveSpeakers: () => [...] });
-// Degradación: cada fetch falla aislado → tarjeta en "—", el resto vive.
+// Degradation: each fetch fails in isolation → card shows "—", the rest lives.
 
 import type { MissionLiveHooks } from './types.ts';
 import {
@@ -31,7 +31,7 @@ export interface MissionControlHandle {
 }
 
 export interface MissionControlOptions extends MissionLiveHooks {
-  /** Ms entre refreshes (default 5000). */
+  /** Ms between refreshes (default 5000). */
   intervalMs?: number;
 }
 
@@ -56,7 +56,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
     }
     refreshing = true;
     try {
-      // Cada tarjeta fetch aislado: Promise.all con getters que nunca tiran.
+      // Each card fetches in isolation: Promise.all with getters that never throw.
       const [live, work, sidecars, latency, audio, devices, audioRt, sala, conn] = await Promise.all([
         fetchLive(),
         fetchWork(),
@@ -86,7 +86,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
 
   void refresh();
   const timer = setInterval(() => {
-    // Pausa en background: ahorra 9 fetches/5s por pestaña oculta.
+    // Background pause: saves 9 fetches/5s per hidden tab.
     if (!document.hidden) {
       void refresh();
     }

@@ -930,17 +930,17 @@ export function emptyAgentResponse() {
 // usuario mezcla ES/EN) pero lo que escucha tiene un idioma fijo. Con
 // tts.language=en TODO el prompt (instrucción + turno + MODO VOZ) queda en
 // inglés para no contaminar la respuesta; si no, español rioplatense.
-// Sin store inicializado (tests) el default es 'es', comportamiento viejo.
+// Without an initialized store (tests) the default is 'en'.
 export function promptIsEnglish() {
-  return String(getTtsLanguage() || 'es').toLowerCase().startsWith('en');
+  return String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
 }
 
 // Reglas de idioma del prompt: inglés si tts.language empieza con 'en',
 // español rioplatense si no. Sigue a la VOZ, no al oído: el oído es auto
 // (el usuario mezcla ES/EN) pero lo que escucha tiene un idioma fijo.
-// Sin store inicializado (tests) el default es 'es', comportamiento viejo.
+// Without an initialized store (tests) the default is 'en'.
 function languageRules() {
-  if (String(getTtsLanguage() || 'es').toLowerCase().startsWith('en')) {
+  if (String(getTtsLanguage() || 'en').toLowerCase().startsWith('en')) {
     return [
       '- Always respond in English.',
       '- ONLY English characters: never mix words or characters from other languages/scripts (no CJK, no unnecessary Spanish).',

@@ -1,27 +1,27 @@
-// Matriz de capabilities por rol (track B — flujo de equipo).
+// Capability matrix by role (track B — team flow).
 //
-// Cada capability mapea a TOOLS/SKILLS/LIBS REALES de este repo: el test de
-// integridad (tests/flujo-spawner.test.mjs) resuelve cada entrada contra el
-// registry de manos.js y el dir de skills, y FALLA si alguien agrega una
-// capability fantasma. Lo que se pidió y NO existe va en GAPS, no en la
-// matriz: nunca se finge una conexión.
+// Each capability maps to REAL TOOLS/SKILLS/LIBS from this repo: the integrity
+// test (tests/flujo-spawner.test.mjs) resolves each entry against the
+// manos.js registry and the skills dir, and FAILS if anyone adds a
+// phantom capability. What was requested and does NOT exist goes in GAPS, not in
+// the matrix: a connection is never faked.
 
 import { listTools } from './manos.js';
 import { listSkillNames } from './skills.js';
 
 // ---------------------------------------------------------------------------
-// Capabilities: capability -> fuentes reales
+// Capabilities: capability -> real sources
 // ---------------------------------------------------------------------------
-// tools: nombres del registry de manos.js (verificado 09/11: read_file,
+// tools: manos.js registry names (verified 09/11: read_file,
 //   list_files, write_file, run_cmd, fetch_url, now, open_url, window_list,
 //   screenshot).
-// skills: nombres de server/skills/*.md (frontmatter name:).
-// libs: módulos de server/lib que el rol usa (memoria, voz, verificación).
-// needs: condiciones del entorno que pueden faltar (se reportan, no rompen):
-//   display (sesión gráfica), openpencil (binarios op), mcp:<server> (config).
+// skills: server/skills/*.md names (frontmatter name:).
+// libs: server/lib modules the role uses (memory, voice, verification).
+// needs: environment conditions that may be missing (reported, not fatal):
+//   display (graphical session), openpencil (op binaries), mcp:<server> (config).
 
 export const CAPABILITY_SOURCES = {
-  // Base: todos los roles.
+  // Base: all roles.
   'workspace-read': { tools: ['read_file', 'list_files'], skills: [], libs: [] },
   'workspace-write': { tools: ['write_file'], skills: [], libs: [] },
   web: { tools: ['fetch_url'], skills: ['investigacion-web'], libs: [] },
@@ -34,12 +34,12 @@ export const CAPABILITY_SOURCES = {
   // Frontend.
   navegador: { tools: ['open_url', 'fetch_url'], skills: [], libs: [], needs: ['display'] },
   preview: { tools: ['open_url'], skills: [], libs: [], needs: ['display'] },
-  // Diseño.
+  // Design.
   canvas: { tools: [], skills: ['diseno-web'], libs: ['openpencil.js'], needs: ['openpencil'] },
   assets: { tools: ['read_file', 'write_file'], skills: ['diseno-web'], libs: [] },
   // Copy.
   estilos: { tools: [], skills: ['copy-ventas'], libs: [] },
-  // Marketing / ventas.
+  // Marketing / sales.
   research: { tools: ['fetch_url'], skills: ['investigacion-web', 'marketing'], libs: [] },
   copy: { tools: [], skills: ['copy-ventas', 'marketing'], libs: [] },
   'outreach-lectura': { tools: ['fetch_url'], skills: ['ventas'], libs: [] },
@@ -47,17 +47,17 @@ export const CAPABILITY_SOURCES = {
   'navegador-destructivo': { tools: ['open_url', 'fetch_url', 'run_cmd'], skills: ['pruebas'], libs: [], needs: ['display'] },
   screenshots: { tools: ['screenshot'], skills: ['pruebas'], libs: [], needs: ['display'] },
   'verificacion': { tools: ['run_cmd'], skills: ['pruebas', 'revision-codigo'], libs: ['verify.js'] },
-  // Orquestador.
+  // Orchestrator.
   dispatch: { tools: [], skills: ['plan-dispatch'], libs: ['workforce.js'] },
   tracking: { tools: ['read_file', 'list_files'], skills: ['plan-dispatch'], libs: ['session-log.js'] },
   // Spawner.
   'crear-agentes': { tools: ['write_file'], skills: [], libs: ['agent-conventions.js'] },
-  // Data / devops (roles base del plan maestro).
+  // Data / devops (master plan base roles).
   datos: { tools: ['run_cmd', 'read_file'], skills: ['terminal'], libs: ['verify.js'] },
   deploy: { tools: ['run_cmd', 'open_url'], skills: ['terminal'], libs: ['native-build.js'] },
-  // Manos extendidas (integración 09/11). MCP: tools dinámicas (nombres
-  // mcp_<server>_<tool> solo conocidos con servers vivos) → tools: [] y
-  // needs mcp:X que toolsForRole expande contra el registry.
+  // Extended manos (09/11 integration). MCP: dynamic tools (mcp_<server>_<tool>
+  // names only known with live servers) → tools: [] and
+  // mcp:X needs that toolsForRole expands against the registry.
   'navegador-auto': { tools: ['browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_eval', 'browser_shot', 'browser_close'], skills: [], libs: [], needs: ['chrome'] },
   'canvas-real': { tools: ['canvas_abrir', 'canvas_tokens', 'canvas_codigo', 'canvas_cerrar'], skills: ['diseno-web'], libs: ['openpencil.js'], needs: ['openpencil'] },
   'outreach-borrador': { tools: ['outreach_draft'], skills: ['ventas', 'marketing', 'copy-ventas'], libs: [] },
@@ -66,8 +66,8 @@ export const CAPABILITY_SOURCES = {
   'mcp-pensar': { tools: [], skills: [], libs: ['manos-mcp.js'], needs: ['mcp:pensar'] }
 };
 
-// GAPS: pedido que NO existe en el repo/box. Documentado acá para que nadie
-// lo cablee como si anduviera. Cada gap dice qué lo desbloquearía.
+// GAPS: requests that do NOT exist in the repo/box. Documented here so nobody
+// wires them as if they worked. Each gap says what would unblock it.
 export const GAPS = [
   {
     pedido: 'outreach envío real (email/linkedin/dm)',
@@ -96,7 +96,7 @@ export const BASE_CAPABILITIES = [
   'mcp-memoria'
 ];
 
-// Matriz rol -> capabilities propias (la base se suma siempre).
+// Role -> own-capabilities matrix (base is always added).
 export const ROLE_MATRIX = {
   pablo: [],
   orquestador: ['research', 'dispatch', 'tracking', 'mcp-pensar'],
@@ -120,7 +120,7 @@ export function isKnownRole(rol) {
   return Object.hasOwn(ROLE_MATRIX, String(rol || '').trim().toLowerCase());
 }
 
-// Base + propias, deduplicadas, en orden estable.
+// Base + own, deduplicated, in stable order.
 export function capabilitiesForRole(rol) {
   const key = String(rol || '').trim().toLowerCase();
   const propias = ROLE_MATRIX[key];
@@ -130,9 +130,9 @@ export function capabilitiesForRole(rol) {
   return [...new Set([...BASE_CAPABILITIES, ...propias])];
 }
 
-// Tools/skills concretas que un rol puede usar (para el prompt manos y la
-// inyección de skills). needs se reporta aparte, no filtra: el rol sabe qué
-// le puede fallar por entorno.
+// Concrete tools/skills a role can use (for the manos prompt and
+// skill injection). needs are reported separately, not filtered: the role knows
+// what may fail on it due to environment.
 export function toolsForRole(rol, { mcpTools = null } = {}) {
   const out = [];
   const caps = capabilitiesForRole(rol);
@@ -143,8 +143,8 @@ export function toolsForRole(rol, { mcpTools = null } = {}) {
       }
     }
   }
-  // MCP dinámicas: cada need mcp:X suma las registradas con prefijo mcp_X_.
-  // Sin mcpTools (tests viejos, integrity) → solo estáticas, intacto.
+  // Dynamic MCP: each mcp:X need adds registered tools with the mcp_X_ prefix.
+  // Without mcpTools (old tests, integrity) → statics only, untouched.
   if (Array.isArray(mcpTools)) {
     const registered = mcpTools.map((t) => t?.name).filter((n) => typeof n === 'string');
     const needs = new Set();
@@ -183,9 +183,9 @@ export function skillsForRoleMatrix(rol) {
   return skillsForCapabilities(capabilitiesForRole(rol));
 }
 
-// ¿Un capability resuelve a fuentes reales? tools/skills se chequean contra
-// los inventarios pasados (default: los reales del repo). libs se chequean
-// contra la lista de módulos conocidos de server/lib.
+// Does a capability resolve to real sources? tools/skills are checked against
+// the passed inventories (default: the repo's real ones). libs are checked
+// against the known server/lib module list.
 const KNOWN_LIBS = new Set([
   'agent-conventions.js', 'agent-runtime.js', 'andamiaje.js', 'audio.js',
   'conciencia.js', 'config.js', 'db.js', 'groupchat.js', 'herramientas.js',
@@ -222,7 +222,7 @@ export function resolveCapability(name, { tools = null, skills = null } = {}) {
   return { ok: missing.length === 0, missing };
 }
 
-// Recorre TODA la matriz: devuelve las capabilities fantasma. Vacío = íntegra.
+// Walks the WHOLE matrix: returns phantom capabilities. Empty = sound.
 export function integrityCheck(inv = {}) {
   const fantasma = [];
   const todas = new Set([...BASE_CAPABILITIES]);
@@ -240,9 +240,9 @@ export function integrityCheck(inv = {}) {
   return fantasma;
 }
 
-// ¿Qué rol existente ya cubre estas capabilities? Para cero duplicados: si
-// las pedidas son subconjunto de (base + propias) de un rol, ese rol cubre.
-// Devuelve el nombre del rol o null.
+// Which existing role already covers these capabilities? For zero duplicates: if
+// the requested ones are a subset of a role's (base + own), that role covers.
+// Returns the role name or null.
 export function rolQueCubre(caps) {
   const pedidas = new Set((caps || []).map((c) => String(c).trim()).filter(Boolean));
   if (pedidas.size === 0) {
@@ -264,9 +264,9 @@ export function rolQueCubre(caps) {
   return null;
 }
 
-// Pura, sin IO: ¿este producto justifica revisión de marketing/ventas antes
-// de aprobar? Hook lógico para el track C (tester): si true, el Tester suma
-// la pasada de monetización. Señales: vende, cobra, se ofrece o compite.
+// Pure, no IO: does this product warrant a marketing/sales review before
+// approval? Logic hook for track C (tester): if true, the Tester adds
+// the monetization pass. Signals: sells, charges, is offered or competes.
 const MONETIZA_PATTERNS = [
   /precio/i, /pago/i, /pagar/i, /suscripci[oó]n/i, /plan\s+(free|pro|pago|premium)/i,
   /venta/i, /vende/i, /vender/i, /tienda/i, /e-?commerce/i, /checkout/i,

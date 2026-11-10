@@ -282,7 +282,7 @@ export async function postKeepalive(transcribeUrl, audioBase64, {
     const res = await fetchFn(transcribeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ audio_base64: audioBase64, language: 'es' }),
+      body: JSON.stringify({ audio_base64: audioBase64, language: 'en' }),
       signal: AbortSignal.timeout(timeoutMs)
     });
     return { ok: !!res?.ok, ms: Date.now() - started };

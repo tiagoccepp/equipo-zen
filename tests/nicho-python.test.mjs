@@ -24,14 +24,14 @@ import {
   safeWorkspacePath
 } from '../server/lib/workforce.js';
 
-// El quinto estudio: desarrollo en Python. Lo que se prueba acá es la promesa
-// del nicho — que el estudio exista con su equipo, que el proyecto reciba el
-// criterio de Python y no el de web, que cuatro personas puedan escribir cuatro
-// archivos .py distintos a la vez, y que un programa que no compila no pase por
-// entregado.
+// The fifth studio: Python development. What is tested here is the niche's
+// promise — that the studio exists with its team, that the project receives the
+// Python criteria and not web's, that four people can write four different
+// .py files at once, and that a program that does not compile never passes as
+// delivered.
 //
-// Nada de esto se apoya en los nombres de la plantilla: se filtra por stack y
-// por role, porque las plantillas cambian y los tests no.
+// None of this relies on template names: it filters by stack and by role,
+// because templates change and tests do not.
 
 const PLANTILLA = () => {
   const template = companyTemplates.templates.find((t) => t.stack === 'python');
@@ -56,9 +56,9 @@ function escribir(dir, relativo, contenido) {
   return destino;
 }
 
-// ── El estudio ──────────────────────────────────────────────────────────────
+// ── The studio ──────────────────────────────────────────────────────────────
 
-test('el estudio de Python existe con seis personas: quien coordina, quien afina perfiles y cuatro que producen', () => {
+test('the Python studio exists with six people: one coordinating, one tuning profiles, and four producing', () => {
   const template = PLANTILLA();
 
   assert.equal(template.employees.length, 6);
@@ -66,8 +66,8 @@ test('el estudio de Python existe con seis personas: quien coordina, quien afina
   assert.equal(template.employees.filter((e) => e.role === 'contratista').length, 1);
   assert.equal(template.employees.filter((e) => e.role === 'worker').length, 4);
 
-  // La forma tiene que ser la misma que la de los otros cuatro estudios: el
-  // cliente y el store leen estos campos sin preguntar de qué nicho vienen.
+  // The shape must match the other four studios: the client and the store
+  // read these fields without asking which niche they come from.
   const campos = ['name', 'title', 'role', 'voice', 'color', 'aliases', 'skills', 'knowledge', 'boundaries', 'style', 'craft'];
   for (const empleado of template.employees) {
     for (const campo of campos) {
@@ -80,15 +80,15 @@ test('el estudio de Python existe con seis personas: quien coordina, quien afina
     assert.ok(Array.isArray(empleado.boundaries) && empleado.boundaries.length >= 2);
   }
 
-  // Los craft son criterio de oficio, no adjetivos: hablan de decisiones
-  // concretas de Python. Si esto vuelve a ser "prolijo y detallista", el agente
-  // no gana nada al leerlo.
+  // Craft fields are trade judgment, not adjectives: they talk about concrete
+  // Python decisions. If this ever goes back to "prolijo y detallista", the agent
+  // gains nothing from reading it.
   const craft = template.employees.filter((e) => e.role === 'worker').map((e) => e.craft).join(' ').toLowerCase();
   assert.match(craft, /biblioteca est[aá]ndar|requirements\.txt|entorno virtual/);
   assert.match(craft, /excepci[oó]n|tests\/test_|tmp_path|c[oó]digo de salida/);
 });
 
-test('una empresa creada con la plantilla de Python hereda el nicho en sus proyectos', (t) => {
+test('a company created from the Python template inherits the niche in its projects', (t) => {
   const store = new Store(':memory:');
   const company = store.createCompanyFromTemplate(PLANTILLA(), 'test');
   const project = store.createProject({ companyId: company.id, title: 'Ordenar los CSV del club' });
@@ -96,7 +96,7 @@ test('una empresa creada con la plantilla de Python hereda el nicho en sus proye
   assert.equal(company.stack, 'python');
   assert.equal(project.stack, 'python', 'el proyecto hereda el nicho de su empresa');
 
-  // El equipo llegó completo y por oficio, no por nombre.
+  // The team arrived complete and by trade, not by name.
   const equipo = store.listAgents(company.id);
   assert.equal(equipo.filter((a) => a.role === 'worker').length, 4);
   assert.ok(equipo.some((a) => /\bqa\b|calidad|prueba/i.test(a.title)), 'hay alguien que prueba');
@@ -105,12 +105,12 @@ test('una empresa creada con la plantilla de Python hereda el nicho en sus proye
   t.after(() => store.close?.());
 });
 
-// ── El stack y su criterio ──────────────────────────────────────────────────
+// ── The stack and its criteria ──────────────────────────────────────────────────
 
-test('el stack python se normaliza y trae SU criterio, no el de web', () => {
+test("the python stack normalizes and brings ITS criteria, not web's", () => {
   assert.ok(STACKS.includes('python'));
   assert.equal(normalizeStack('python'), 'python');
-  // Un valor inventado sigue cayendo a web: nadie queda sin playbook.
+  // A made-up value still falls back to web: nobody is left without a playbook.
   assert.equal(normalizeStack('phyton'), 'web');
   assert.equal(normalizeStack(undefined), 'web');
 
@@ -120,17 +120,17 @@ test('el stack python se normaliza y trae SU criterio, no el de web', () => {
   assert.match(criterio, /venv/);
   assert.match(criterio, /pytest/);
   assert.match(criterio, /SIN RED/);
-  // El criterio de web (un index.html con el CSS embebido) no tiene que estar:
-  // si se filtra, el equipo entrega una página en vez de un programa.
+  // The web criteria (an index.html with embedded CSS) must not be there:
+  // if it leaks, the team ships a page instead of a program.
   assert.ok(!/index\.html con el CSS embebido/.test(criterio), 'no se cuela el criterio de web');
 
-  // Presupuesto del prompt: el criterio técnico de python no puede pesar más
-  // que el del nicho más caro que ya existe.
+  // Prompt budget: the python technical criteria cannot weigh more than the
+  // most expensive existing niche.
   const tecnico = criterio.split('━━━')[0];
   assert.ok(tecnico.length < 2000, `el criterio de python pesa ${tecnico.length} caracteres`);
 });
 
-test('la terminal del nicho ofrece los comandos de Python y el proyecto entra en los que tienen que compilar', () => {
+test('the niche terminal offers the Python commands and the project counts as one that must compile', () => {
   const bloque = renderHerramientas('python');
   assert.match(bloque, /python3 main\.py/);
   assert.match(bloque, /python3 -m pytest/);
@@ -138,15 +138,15 @@ test('la terminal del nicho ofrece los comandos de Python y el proyecto entra en
   assert.match(bloque, /pip install -r requirements\.txt/);
   assert.match(bloque, /python3 -m ruff check/);
 
-  // Python compila, pero NO es un proyecto móvil: no se le pide un emulador.
+  // Python compiles, but it is NOT a mobile project: no emulator is asked of it.
   assert.equal(esProyectoCompilado('python'), true);
   assert.equal(esProyectoMovil('python'), false);
   assert.equal(esProyectoCompilado('web'), false);
 });
 
-// ── El reparto de archivos ──────────────────────────────────────────────────
+// ── File assignment ──────────────────────────────────────────────────
 
-test('cuatro tareas de un proyecto Python reciben cuatro archivos distintos', () => {
+test('four tasks in a Python project receive four different files', () => {
   const tareas = [
     'Escribir la lógica que procesa las inscripciones',
     'Leer y validar los datos del CSV de socios',
@@ -162,7 +162,7 @@ test('cuatro tareas de un proyecto Python reciben cuatro archivos distintos', ()
     return archivo;
   });
 
-  // El cerrojo es por ARCHIVO: si dos caen en el mismo, el paralelismo se apaga.
+  // The lock is per FILE: if two land on the same one, parallelism switches off.
   assert.equal(new Set(asignados).size, 4, `se repitió un archivo: ${asignados.join(', ')}`);
   assert.ok(asignados.filter((a) => a.endsWith('.py')).length >= 3, 'la mayoría son módulos de Python');
   assert.ok(asignados.includes('README.md'));
@@ -170,23 +170,23 @@ test('cuatro tareas de un proyecto Python reciben cuatro archivos distintos', ()
   assert.ok(asignados.some((a) => a.startsWith('src/') && a.endsWith('.py')), 'lo que crece va a src/<modulo>.py');
 });
 
-test('las pistas de Python mandan cada cosa a su archivo', () => {
+test('Python hints send each thing to its file', () => {
   assert.equal(inferirArchivo('Escribir el punto de entrada con argparse', 'python'), 'main.py');
   assert.equal(inferirArchivo('Fijar las dependencias en requirements', 'python'), 'requirements.txt');
   assert.equal(inferirArchivo('Instructivo de uso', 'python'), 'README.md');
   assert.match(inferirArchivo('Pruebas del cálculo de cuotas', 'python'), /^tests\/test_/);
   assert.equal(inferirArchivo('Validación de los datos de entrada', 'python'), 'src/datos.py');
   assert.equal(inferirArchivo('El algoritmo que calcula el total', 'python'), 'src/nucleo.py');
-  // Sin ninguna pista igual sale un archivo: una tarea sin archivo toma el
-  // proyecto entero en exclusiva y apaga el trabajo en paralelo.
+  // With no hints at all a file still comes out: a task without a file takes
+  // the whole project exclusively and switches off parallel work.
   assert.equal(inferirArchivo('Che, avanzá con lo tuyo', 'python'), 'main.py');
-  // Y si el proyecto ya tiene ese módulo, se continúa en vez de crear al lado.
+  // And if the project already has that module, it continues there instead of creating alongside.
   assert.equal(inferirArchivo('Ajustar el cobrador', 'python', ['src/cobrador.py']), 'src/cobrador.py');
 });
 
-// ── El sandbox ──────────────────────────────────────────────────────────────
+// ── The sandbox ──────────────────────────────────────────────────────────────
 
-test('el sandbox deja escribir los archivos de un proyecto Python y sigue rechazando lo peligroso', (t) => {
+test('the sandbox lets Python project files be written and still rejects dangerous paths', (t) => {
   const store = new Store(':memory:');
   const company = store.createCompanyFromTemplate(PLANTILLA(), 'test');
   const project = store.createProject({ companyId: company.id, title: 'Conciliador de pagos' });
@@ -200,7 +200,7 @@ test('el sandbox deja escribir los archivos de un proyecto Python y sigue rechaz
     assert.ok(destino.startsWith(projectDir(company.id, project.slug)), `${relativo} cae dentro del proyecto`);
   }
 
-  // La guardia no se relaja por sumar un nicho: sigue rechazando lo mismo.
+  // The guard does not relax for adding a niche: it keeps rejecting the same paths.
   const prohibidos = [
     '../fuera.py',
     '../../otro/proyecto/main.py',
@@ -222,9 +222,9 @@ test('el sandbox deja escribir los archivos de un proyecto Python y sigue rechaz
   }
 });
 
-// ── Que compile de verdad ───────────────────────────────────────────────────
+// ── That it really compiles ───────────────────────────────────────────────────
 
-test('un .py con error de sintaxis se detecta con su archivo y su línea', async (t) => {
+test('a .py with a syntax error is detected with its file and line', async (t) => {
   const dir = carpetaTemporal(t, 'roto');
   escribir(dir, 'main.py', [
     'import sys',
@@ -250,14 +250,14 @@ test('un .py con error de sintaxis se detecta con su archivo y su línea', async
   assert.equal(error.linea, 3, 'la línea es la del def sin los dos puntos');
   assert.match(error.que, /SyntaxError/);
 
-  // El .pyc no se deja adentro del entregable del usuario.
+  // The .pyc is not left inside the user's deliverable.
   assert.ok(!existsSync(path.join(dir, '__pycache__')), 'no queda __pycache__ en el proyecto');
 });
 
-test('la falla más común de un modelo —la indentación— también sale con archivo y línea', () => {
-  // Python emite este caso en un formato distinto del de SyntaxError: viene
-  // todo en un renglón que empieza con "Sorry:". Parsear solo el otro dejaba la
-  // falla más frecuente sin ubicación.
+test('the most common model failure —indentation— also comes out with file and line', () => {
+  // Python emits this case in a different format than SyntaxError: it all
+  // comes on one line starting with "Sorry:". Parsing only the other one left the
+  // most frequent failure without a location.
   const errores = parsearErroresPython(
     "Sorry: IndentationError: expected an indented block after 'if' statement on line 2 (main.py, line 3)"
   );
@@ -272,7 +272,7 @@ test('la falla más común de un modelo —la indentación— también sale con 
   assert.equal(tabs[0].archivo, 'src/nucleo.py');
   assert.equal(tabs[0].linea, 7);
 
-  // Y el formato clásico, con el mensaje unos renglones más abajo.
+  // And the classic format, with the message a few lines below.
   const clasico = parsearErroresPython([
     '  File "src/datos.py", line 12',
     '    with open(ruta) as f',
@@ -283,13 +283,13 @@ test('la falla más común de un modelo —la indentación— también sale con 
   assert.equal(clasico[0].linea, 12);
   assert.match(clasico[0].que, /SyntaxError: expected/);
 
-  // Sin nada reconocible se devuelve algo útil igual, nunca una lista vacía.
+  // With nothing recognizable something useful is still returned, never an empty list.
   const raro = parsearErroresPython('todo explotó de una manera nueva', 'main.py');
   assert.equal(raro.length, 1);
   assert.equal(raro[0].archivo, 'main.py');
 });
 
-test('un proyecto Python que compila pasa, y el informe solo aparece cuando no', async (t) => {
+test('a Python project that compiles passes, and the report only appears when it does not', async (t) => {
   const dir = carpetaTemporal(t, 'sano');
   escribir(dir, 'main.py', [
     'import argparse',
@@ -333,8 +333,8 @@ test('un proyecto Python que compila pasa, y el informe solo aparece cuando no',
   assert.equal(build.ok, true, `no compiló: ${JSON.stringify(build.errores)}`);
   assert.equal(renderBuildReport(build), '', 'si compiló no hay informe que leer');
 
-  // El informe de una falla le dice qué archivo, qué línea y que arregle antes
-  // de cerrar, igual que el de Kotlin.
+  // A failure report tells which file, which line, and to fix before closing,
+  // just like the Kotlin one.
   const informe = renderBuildReport({
     tipo: 'python',
     ok: false,
@@ -345,7 +345,7 @@ test('un proyecto Python que compila pasa, y el informe solo aparece cuando no',
   assert.match(informe, /finish/);
 });
 
-test('en un proyecto Python, entregar una web o no entregar nada no cuenta como entregado', async (t) => {
+test('in a Python project, shipping a web page or shipping nothing does not count as delivered', async (t) => {
   const vacio = carpetaTemporal(t, 'vacio');
   escribir(vacio, 'README.md', '# Conciliador\n');
 
@@ -362,14 +362,14 @@ test('en un proyecto Python, entregar una web o no entregar nada no cuenta como 
   assert.match(disfrazada.errores.map((e) => e.que).join(' '), /web page/);
 });
 
-test('detectar el nicho no confunde un .py suelto con un proyecto móvil ni al revés', async (t) => {
-  // Un proyecto Android con un script .py adentro sigue siendo Android.
+test('niche detection does not confuse a stray .py with a mobile project nor vice versa', async (t) => {
+  // An Android project with a .py script inside is still Android.
   const android = carpetaTemporal(t, 'android');
   escribir(android, 'settings.gradle.kts', 'rootProject.name = "app"');
   escribir(android, 'tools/generar.py', 'print("hola")\n');
   assert.equal(detectarProyecto(android), 'android');
 
-  // Y un proyecto de nicho móvil que entregó solo un .py no pasa por app.
+  // And a mobile-niche project that shipped only a .py does not pass as an app.
   const soloPy = carpetaTemporal(t, 'solo-py');
   escribir(soloPy, 'main.py', 'print("hola")\n');
   assert.equal(detectarProyecto(soloPy), 'python');
@@ -378,13 +378,13 @@ test('detectar el nicho no confunde un .py suelto con un proyecto móvil ni al r
   assert.equal(comoApp.ok, false);
   assert.match(comoApp.errores.map((e) => e.que).join(' '), /not an Android app/);
 
-  // Una carpeta sin nada tampoco es un proyecto Python.
+  // A folder with nothing is not a Python project either.
   const nada = carpetaTemporal(t, 'nada');
   escribir(nada, 'notas.md', 'nada todavía');
   assert.equal(detectarProyecto(nada), null);
 });
 
-test('los intermedios y el entorno virtual no se compilan ni se listan', (t) => {
+test('intermediates and the virtualenv are neither compiled nor listed', (t) => {
   const dir = carpetaTemporal(t, 'intermedios');
   escribir(dir, 'main.py', 'print(1)\n');
   escribir(dir, 'src/datos.py', 'DATOS = []\n');
@@ -394,6 +394,6 @@ test('los intermedios y el entorno virtual no se compilan ni se listan', (t) => 
 
   const encontrados = archivosPython(dir);
   assert.deepEqual(encontrados, ['main.py', 'src/datos.py']);
-  // Y la carpeta existe: no se filtró porque no estuviera.
+  // And the folder exists: it was not filtered out for being missing.
   assert.ok(readdirSync(dir).includes('__pycache__'));
 });

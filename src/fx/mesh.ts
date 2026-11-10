@@ -1,22 +1,22 @@
 // ═══════════════════════════════════════════════════════════════════════
-// fx/mesh.ts — fondo mesh oscuro que RESPIRA con la energía del audio.
+// fx/mesh.ts — dark mesh background that BREATHES with audio energy.
 //
-// Paleta consola: grises pizarra fríos a alfa baja. Textura que respira con
-// la energía del audio (funcional), no blobs decorativos de marca.
-// Con prefers-reduced-motion se pinta un frame estático y no hay loop.
+// Console palette: cold slate grays at low alpha. A texture that breathes
+// with audio energy (functional), not decorative brand blobs.
+// With prefers-reduced-motion a static frame is painted and there is no loop.
 //
-// Hook del main (detrás del canvas de orbes, mismo tamaño):
+// Main hook (behind the orb canvas, same size):
 //
 //   <canvas id="mesh"></canvas>  <!-- position:fixed/absolute, z-index:0 -->
-//   <canvas id="orbs"></canvas>  <!-- encima, transparente -->
+//   <canvas id="orbs"></canvas>  <!-- on top, transparent -->
 //
 //   import { mountMesh } from './fx/mesh.ts';
 //   const mesh = mountMesh(document.getElementById('mesh'), { energy: () => level });
-//   // en resize: mesh.resize(w, h) — … mesh.dispose()
+//   // on resize: mesh.resize(w, h) — … mesh.dispose()
 // ═══════════════════════════════════════════════════════════════════════
 
 export type MeshOptions = {
-  // Energía del audio (0..1). La provee el main (misma que OrbField).
+  // Audio energy (0..1). Provided by main (same as OrbField).
   energy: () => number;
 };
 
@@ -25,7 +25,7 @@ export type MeshHandle = {
   dispose: () => void;
 };
 
-// [x, y, radioBase, color, velocidad, fase] — posiciones relativas.
+// [x, y, baseRadius, color, speed, phase] — relative positions.
 const BLOBS: Array<[number, number, number, string, number, number]> = [
   [0.22, 0.3, 0.55, '#2b3542', 0.5, 0.0],
   [0.8, 0.62, 0.6, '#1e3330', 0.34, 2.1],
@@ -53,12 +53,12 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
       const breathe = 1 + 0.1 * Math.sin(clock * speed + phase) + level * 0.22;
       const r = br * dim * breathe;
       const grad = ctx.createRadialGradient(bx * w, by * h, 0, bx * w, by * h, r);
-      grad.addColorStop(0, color + '3d'); // ~24% alfa, tenue
+      grad.addColorStop(0, color + '3d'); // ~24% alpha, faint
       grad.addColorStop(1, color + '00');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
     }
-    // Viñeta para que el centro (prompt/orbes) mande.
+    // Vignette so the center (prompt/orbs) dominates.
     const vg = ctx.createRadialGradient(w / 2, h / 2, dim * 0.2, w / 2, h / 2, dim * 0.95);
     vg.addColorStop(0, 'rgba(0,0,0,0)');
     vg.addColorStop(1, 'rgba(0,0,0,0.5)');
@@ -94,7 +94,7 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
     }
   }
 
-  // Primer frame apenas se monta (el main llama resize con el tamaño real).
+  // First frame as soon as it mounts (main calls resize with the real size).
   if (reduced) paint();
   else {
     lastAt = typeof performance !== 'undefined' ? performance.now() : 0;

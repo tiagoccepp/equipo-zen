@@ -22,7 +22,7 @@ export const DEEPGRAM_TTS_VOICES = {
 // configurado (tts.language: 'en*' usa las inglesas).
 export function mapVoiceToDeepgram(supertonicVoice) {
   const v = String(supertonicVoice || '').trim().toUpperCase();
-  const lang = String(getTtsLanguage() || 'es').toLowerCase().startsWith('en') ? 'en' : 'es';
+  const lang = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en') ? 'en' : 'es';
   const table = DEEPGRAM_TTS_VOICES[lang];
   return v.startsWith('F') ? table.F : table.M;
 }

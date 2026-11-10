@@ -17,8 +17,8 @@ import {
 import { getSttMinConfidence } from '../server/lib/settings.js';
 import { telemetry } from '../server/lib/telemetry.js';
 
-// Stubs STT: cada test levanta sus sidecars falsos en 127.0.0.1 con puerto
-// efímero. Nada toca red real ni necesita keys ni sidecars de verdad.
+// STT stubs: each test spins up its fake sidecars on 127.0.0.1 with an
+// ephemeral port. Nothing touches the real network nor needs real keys or sidecars.
 function stubSidecar({ healthStatus = 200, onTranscribe = null, transcribeDelayMs = 0 } = {}) {
   const hits = { health: 0, transcribe: 0 };
   const server = http.createServer((req, res) => {
@@ -51,12 +51,12 @@ function stubSidecar({ healthStatus = 200, onTranscribe = null, transcribeDelayM
   });
 }
 
-// WAV corto (~0.1s de silencio): elegible para reintento por confianza.
+// Short WAV (~0.1s of silence): eligible for confidence retry.
 function shortWav() {
   return buildWavBase64FromPcmChunks([Buffer.alloc(3200).toString('base64')]);
 }
 
-// WAV largo (~11s): NO elegible para reintento por confianza.
+// Long WAV (~11s): NOT eligible for confidence retry.
 function longWav() {
   return Buffer.alloc(44 + 32000 * 11).toString('base64');
 }
@@ -71,19 +71,19 @@ afterEach(() => {
   __resetParakeetHealth();
 });
 
-// ── Constantes y settings ──────────────────────────────────────────────
+// ── Constants and settings ──────────────────────────────────────────────
 
-test('stt: PARAKEET_TIMEOUT_MS=8s y retry solo bajo 0.4 + turno <10s', () => {
+test('stt: PARAKEET_TIMEOUT_MS=8s and retry only under 0.4 + turn <10s', () => {
   assert.equal(PARAKEET_TIMEOUT_MS, 8000);
   assert.equal(LOW_CONFIDENCE_RETRY_MAX, 0.4);
   assert.equal(CONFIDENCE_RETRY_MAX_SECS, 10);
 });
 
-test('stt: stt.minConfidence default 0.55 sin store', () => {
+test('stt: stt.minConfidence default 0.55 without store', () => {
   assert.equal(getSttMinConfidence(), 0.55);
 });
 
-test('stt: wavSecondsEstimate mide corto vs largo', () => {
+test('stt: wavSecondsEstimate measures short vs long', () => {
   assert.ok(wavSecondsEstimate(shortWav()) < 10);
   assert.ok(wavSecondsEstimate(longWav()) >= 10);
   assert.equal(wavSecondsEstimate(''), 0);
@@ -91,7 +91,7 @@ test('stt: wavSecondsEstimate mide corto vs largo', () => {
 
 // ── Healthcheck ────────────────────────────────────────────────────────
 
-test('stt: health OK → true y NO se cachea (cada llamada pega)', async () => {
+test('stt: health OK → true and NOT cached (every call hits)', async () => {
   const pk = await stubSidecar();
   try {
     assert.equal(await isParakeetAvailable(pk.url), true);
@@ -102,7 +102,7 @@ test('stt: health OK → true y NO se cachea (cada llamada pega)', async () => {
   }
 });
 
-test('stt: health DOWN → false y SE cachea 15s (2ª llamada no pega)', async () => {
+test('stt: health DOWN → false and IS cached 15s (2nd call does not hit)', async () => {
   const pk = await stubSidecar({ healthStatus: 500 });
   try {
     assert.equal(await isParakeetAvailable(pk.url), false);
@@ -113,13 +113,13 @@ test('stt: health DOWN → false y SE cachea 15s (2ª llamada no pega)', async (
   }
 });
 
-test('stt: puerto cerrado → false (caído, no cuelga)', async () => {
+test('stt: closed port → false (down, does not hang)', async () => {
   assert.equal(await isParakeetAvailable('http://127.0.0.1:1'), false);
 });
 
 // ── postTranscribe ─────────────────────────────────────────────────────
 
-test('stt: postTranscribe devuelve { text, confidence }', async () => {
+test('stt: postTranscribe returns { text, confidence }', async () => {
   const ws = await stubSidecar({ onTranscribe: () => ({ text: '  hola  ', confidence: 0.87 }) });
   try {
     const res = await postTranscribe(ws.url, 'AAA', { withModel: true });
@@ -129,7 +129,7 @@ test('stt: postTranscribe devuelve { text, confidence }', async () => {
   }
 });
 
-test('stt: postTranscribe sin confidence → null (ej. Parakeet greedy)', async () => {
+test('stt: postTranscribe without confidence → null (e.g. Parakeet greedy)', async () => {
   const pk = await stubSidecar({ onTranscribe: () => ({ text: 'hola' }) });
   try {
     const res = await postTranscribe(pk.url, 'AAA');
@@ -139,7 +139,7 @@ test('stt: postTranscribe sin confidence → null (ej. Parakeet greedy)', async 
   }
 });
 
-test('stt: postTranscribe respeta timeoutMs (stub lento aborta)', async () => {
+test('stt: postTranscribe respects timeoutMs (slow stub aborts)', async () => {
   const slow = await stubSidecar({ onTranscribe: () => ({ text: 'tarde' }), transcribeDelayMs: 1500 });
   try {
     await assert.rejects(() => postTranscribe(slow.url, 'AAA', { timeoutMs: 150 }));
@@ -150,7 +150,7 @@ test('stt: postTranscribe respeta timeoutMs (stub lento aborta)', async () => {
 
 // ── transcribeLocal: parakeet → whisper ────────────────────────────────
 
-test('stt: local parakeet ok → no toca whisper', async () => {
+test('stt: local parakeet ok → does not touch whisper', async () => {
   const pk = await stubSidecar({ onTranscribe: () => ({ text: 'de parakeet' }) });
   const ws = await stubSidecar({ onTranscribe: () => ({ text: 'de whisper' }) });
   try {
@@ -163,7 +163,7 @@ test('stt: local parakeet ok → no toca whisper', async () => {
   }
 });
 
-test('stt: local parakeet caído (health down) → salta directo a whisper', async () => {
+test('stt: local parakeet down (health down) → jumps straight to whisper', async () => {
   const pk = await stubSidecar({ healthStatus: 500, onTranscribe: () => ({ text: 'de parakeet' }) });
   const ws = await stubSidecar({ onTranscribe: () => ({ text: 'de whisper', confidence: 0.9 }) });
   try {
@@ -176,7 +176,7 @@ test('stt: local parakeet caído (health down) → salta directo a whisper', asy
   }
 });
 
-test('stt: local parakeet lento → timeout inyectable degrada a whisper', async () => {
+test('stt: local parakeet slow → injectable timeout degrades to whisper', async () => {
   const pk = await stubSidecar({ onTranscribe: () => ({ text: 'de parakeet' }), transcribeDelayMs: 1500 });
   const ws = await stubSidecar({ onTranscribe: () => ({ text: 'de whisper' }) });
   try {
@@ -190,7 +190,7 @@ test('stt: local parakeet lento → timeout inyectable degrada a whisper', async
   }
 });
 
-test('stt: local parakeet vacío → cae a whisper', async () => {
+test('stt: local parakeet empty → falls to whisper', async () => {
   const pk = await stubSidecar({ onTranscribe: () => ({ text: '   ' }) });
   const ws = await stubSidecar({ onTranscribe: () => ({ text: 'de whisper' }) });
   try {
@@ -202,12 +202,11 @@ test('stt: local parakeet vacío → cae a whisper', async () => {
   }
 });
 
-test('stt: local con ambos caídos (puertos cerrados) falla rápido <500ms, sin reintentos', async () => {
-  // Decisión 09/11: Whisper es respaldo oportunista. Con los puertos
-  // cerrados (el caso real: sin faster-whisper instalado) el
-  // connection-refused tiene que rechazar casi al instante, sin quemar
-  // los 8s/20s de timeout. Margen generoso (500ms vs ~1ms real) para
-  // que no flakee bajo carga.
+test('stt: local with both down (closed ports) fails fast <500ms, no retries', async () => {
+  // Decision 09/11: Whisper is an opportunistic backup. With closed ports
+  // (the real case: no faster-whisper installed) the connection-refused
+  // must reject almost instantly, without burning the 8s/20s timeout.
+  // Generous margin (500ms vs ~1ms real) so it does not flake under load.
   process.env.no_proxy = '*';
   process.env.NO_PROXY = '*';
   const started = Date.now();
@@ -219,9 +218,9 @@ test('stt: local con ambos caídos (puertos cerrados) falla rápido <500ms, sin 
   assert.ok(elapsed < 500, `rechazó en ${elapsed}ms, tendría que ser <500ms`);
 });
 
-// ── Orden completo: local → groq → deepgram → hint ─────────────────────
+// ── Full order: local → groq → deepgram → hint ─────────────────────
 
-test('stt: orden local ok (alta confianza) → groq/deepgram ni se llaman', async () => {
+test('stt: order local ok (high confidence) → groq/deepgram are not even called', async () => {
   let groq = 0;
   let dg = 0;
   const r = await transcribeWithFallback({
@@ -236,7 +235,7 @@ test('stt: orden local ok (alta confianza) → groq/deepgram ni se llaman', asyn
   assert.equal(dg, 0);
 });
 
-test('stt: orden local falla → groq → deepgram → hint → lanza', async () => {
+test('stt: order local fails → groq → deepgram → hint → throws', async () => {
   const calls = [];
   const localFn = async () => { calls.push('local'); throw new Error('local down'); };
   const groqFn = async () => { calls.push('groq'); throw new Error('groq down'); };
@@ -257,7 +256,7 @@ test('stt: orden local falla → groq → deepgram → hint → lanza', async ()
   assert.deepEqual(calls, ['local', 'groq', 'dg']);
 });
 
-test('stt: orden sin keys → local → hint (salta nubes)', async () => {
+test('stt: order without keys → local → hint (skips clouds)', async () => {
   let groq = 0;
   let dg = 0;
   const r = await transcribeWithFallback({
@@ -272,9 +271,9 @@ test('stt: orden sin keys → local → hint (salta nubes)', async () => {
   assert.equal(dg, 0);
 });
 
-// ── Reintento por baja confianza (§2e) ──────────────────────────────────
+// ── Low-confidence retry (§2e) ──────────────────────────────────
 
-test('stt: retry confianza 0.2 + turno corto + key → deepgram, source deepgram', async () => {
+test('stt: retry confidence 0.2 + short turn + key → deepgram, source deepgram', async () => {
   telemetry.reset();
   let dg = 0;
   const r = await transcribeWithFallback({
@@ -291,7 +290,7 @@ test('stt: retry confianza 0.2 + turno corto + key → deepgram, source deepgram
   assert.equal(retries[0].payload.retried, true);
 });
 
-test('stt: retry NO dispara sin key de deepgram', async () => {
+test('stt: retry does NOT fire without deepgram key', async () => {
   let dg = 0;
   const r = await transcribeWithFallback({
     wavBase64: shortWav(), hint: '', provider: 'local',
@@ -304,7 +303,7 @@ test('stt: retry NO dispara sin key de deepgram', async () => {
   assert.equal(dg, 0);
 });
 
-test('stt: retry NO dispara con turno largo (11s)', async () => {
+test('stt: retry does NOT fire with long turn (11s)', async () => {
   let dg = 0;
   const r = await transcribeWithFallback({
     wavBase64: longWav(), hint: '', provider: 'local',
@@ -317,7 +316,7 @@ test('stt: retry NO dispara con turno largo (11s)', async () => {
   assert.equal(dg, 0);
 });
 
-test('stt: retry NO dispara con confianza alta ni sin confianza', async () => {
+test('stt: retry does NOT fire with high confidence nor without confidence', async () => {
   let dg = 0;
   const dgFn = async () => { dg++; return { text: 'x', confidence: 1 }; };
   const base = { wavBase64: shortWav(), hint: '', provider: 'local', groqKey: '', deepgramKey: 'dg-x', groqFn: boom, deepgramFn: dgFn };
@@ -328,7 +327,7 @@ test('stt: retry NO dispara con confianza alta ni sin confianza', async () => {
   assert.equal(dg, 0);
 });
 
-test('stt: retry que falla → vale el texto local original', async () => {
+test('stt: retry that fails → the original local text stands', async () => {
   const r = await transcribeWithFallback({
     wavBase64: shortWav(), hint: '', provider: 'local',
     groqKey: '', deepgramKey: 'dg-x',
@@ -339,7 +338,7 @@ test('stt: retry que falla → vale el texto local original', async () => {
   assert.deepEqual(r, { text: 'dudoso', source: 'local' });
 });
 
-test('stt: retry respeta minConfidence bajo (0.3): 0.35 no reintenta', async () => {
+test('stt: retry respects low minConfidence (0.3): 0.35 does not retry', async () => {
   let dg = 0;
   const r = await transcribeWithFallback({
     wavBase64: shortWav(), hint: '', provider: 'local',

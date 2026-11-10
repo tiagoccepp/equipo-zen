@@ -16,8 +16,8 @@ import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable, synthesize } from './lib/supertonic.js';
 import { speechVerdict } from './lib/silero.js';
 
-// WAV 16k mono, 0.5s de silencio, en base64. Último recurso si no hay
-// fixture ni Piper: calentar con algo siempre gana.
+// 16k mono WAV, 0.5s of silence, in base64. Last resort if there's no
+// fixture nor Piper: warming up with something always wins.
 function silenceWavBase64() {
   const pcm = Buffer.alloc(16000);
   const header = Buffer.alloc(44);
@@ -51,26 +51,26 @@ async function warmStt(url, wav) {
   }
 }
 
-// Tasa del PCM que devuelve Piper (mimeType audio/pcm;rate=NN).
+// PCM rate returned by Piper (mimeType audio/pcm;rate=NN).
 function piperPcmRate(mimeType) {
   const m = /rate=(\d+)/.exec(String(mimeType || ''));
   return m ? Number(m[1]) : 22050;
 }
 
-// Calienta en paralelo lo que realmente se usa (plan §2d): Piper (TTS
-// primero: una frase ES + una EN), Parakeet (STT primero) y Whisper (STT
-// fallback), más Supertonic de yapa porque salía gratis (una línea).
-// El STT se calienta con HABLA REAL (09/11: el silencio emite ~0 tokens y
-// kswapd igual saca el encoder en idle): frase de Piper si responde, si
-// no el fixture bundledo, si no silencio. Todo con techo y
-// fire-and-forget: nada bloquea el boot, ni Piper caído.
+// Warms up in parallel what is actually used (plan §2d): Piper (TTS
+// first: one ES sentence + one EN), Parakeet (STT first) and Whisper (STT
+// fallback), plus Supertonic as a bonus because it cost one line.
+// STT warms up with REAL SPEECH (09/11: silence emits ~0 tokens and
+// kswapd still evicts the encoder when idle): a Piper sentence if it answers,
+// else the bundled fixture, else silence. All with a cap and
+// fire-and-forget: nothing blocks boot, not even a down Piper.
 async function prewarmLocalModels() {
   const fixture = loadWarmupWavBase64();
   const fallbackWav = firstNonEmpty(fixture, silenceWavBase64());
   const parakeetUrl = process.env.PARAKEET_URL || 'http://127.0.0.1:7790';
   const whisperUrl = process.env.WHISPER_URL || 'http://127.0.0.1:7789';
-  // Piper con techo propio: si tarda o está DOWN, el STT igual se
-  // calienta con el fixture (el boot nunca espera de más).
+  // Piper with its own cap: if it's slow or DOWN, the STT still warms
+  // up with the fixture (boot never waits extra).
   const ttsPiper = await withTimeoutMs((async () => {
     try {
       const [es, en, warm] = await Promise.all([
@@ -100,9 +100,9 @@ async function prewarmLocalModels() {
         return 'down';
       }
     })(),
-    // Silero VAD (opt 09/11 #8): estaba fuera del prewarm y el primer
-    // turno de voz pagaba import ONNX + modelo (1-3s). 512 samples de
-    // silencio alcanzan para cargar runtime + sesión.
+    // Silero VAD (opt 09/11 #8): it was outside the prewarm and the first
+    // voice turn paid the ONNX import + model (1-3s). 512 samples of
+    // silence are enough to load runtime + session.
     (async () => {
       try {
         const silence = Buffer.alloc(512 * 2).toString('base64');
@@ -136,8 +136,8 @@ const server = createServer(app);
 const keyRing = new ApiKeyRing(collectProviderKeys(DEFAULT_LLM_PROVIDER));
 keyRing.setTelemetry(telemetry);
 initSettings(store, keyRing);
-// Audio guardado: si Tito eligió salida/entrada fija, aplicarla al arrancar
-// (set-default + mover streams; con followDefault no se toca nada).
+// Saved audio: if Tito picked a fixed output/input, apply it at startup
+// (set-default + move streams; with followDefault nothing is touched).
 if (!getAudioFollowDefault()) {
   void applyAudioSettings({
     output: getAudioOutput(),
@@ -160,8 +160,8 @@ server.listen(PORT, HOST, () => {
   if (!keyRing.hasKeys()) {
     console.log(`Sin claves de ${LLM_PROVIDERS[DEFAULT_LLM_PROVIDER].label} (${LLM_PROVIDERS[DEFAULT_LLM_PROVIDER].envKey}): los agentes responden en modo simulación.`);
   }
-  // Watchdog de sidecars (§3b capa 2): vigila STT/TTS y relanza los
-  // caídos. Fuera de tests (ahí los sidecars son fakes inyectados).
+  // Sidecar watchdog (§3b layer 2): watches STT/TTS and relaunches the
+  // fallen ones. Outside tests (there the sidecars are injected fakes).
   if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
     startSidecarWatchdog();
     console.log('Watchdog de sidecars: activo (parakeet/piper/whisper/supertonic cada 20s).');
@@ -177,8 +177,8 @@ server.listen(PORT, HOST, () => {
         ? 'Whisper local: OK (tu voz se transcribe en la máquina).'
         : 'Whisper local caído: STT = Parakeet → Groq/Deepgram si hay keys → hint del navegador.');
     });
-    // Prewarm: calentar TTS/STT en fondo para que el primer turno no pague
-    // la carga del modelo (Parakeet frío 3.4s → tibio 0.4s).
+    // Prewarm: warm TTS/STT in the background so the first turn doesn't pay
+    // the model load (cold Parakeet 3.4s → warm 0.4s).
     void prewarmLocalModels().then((r) => {
       console.log(`Prewarm modelos: piper=${r.ttsPiper} parakeet=${r.sttParakeet} whisper=${r.sttWhisper} supertonic=${r.ttsSupertonic}`);
     });

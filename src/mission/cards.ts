@@ -1,5 +1,5 @@
-// Mission Control — render por tarjeta. Cada función recibe datos o null
-// y devuelve HTML; null → estado degradado "—", nunca throw.
+// Mission Control — per-card render. Each function takes data or null
+// and returns HTML; null → degraded "—" state, never throws.
 
 import type {
   AudioDevices,
@@ -44,7 +44,7 @@ export function renderEquipo(live: MissionLive | null, work: CompanyWork | null,
       speakers.add(id);
     }
   } catch {
-    /* hook roto = sin dato de voz, el resto vive */
+    /* broken hook = no voice data, the rest lives */
   }
   const voiceOn = (() => {
     try {
@@ -180,7 +180,7 @@ export function renderSala(sala: SalaSettings | null): string {
   );
 }
 
-/** Badge de conectividad (TC 09/11): pill + tooltip con los checks. */
+/** Connectivity badge (TC 09/11): pill + tooltip with the checks. */
 export function renderConnectivityBadge(conn: ConnectivityStatus | null): string {
   if (!conn) {
     return `<div class="mc-conn">${pill('CONN —', 'unknown')}</div>`;

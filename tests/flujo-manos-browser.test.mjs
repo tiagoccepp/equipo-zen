@@ -1,6 +1,6 @@
-// Track A: manos browser_* sobre ~/agentes/bin/ab.
-// CERO browser real: HOME temporal (sin agentes/bin/ab) + fake
-// `agent-browser` en un PATH temporal con salidas canned.
+// Track A: manos browser_* over ~/agentes/bin/ab.
+// ZERO real browser: temp HOME (without agentes/bin/ab) + fake
+// `agent-browser` on a temp PATH with canned outputs.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
-// Sin proxy (misma razón que manos.test.mjs: Undici + stubs locales).
+// No proxy (same reason as manos.test.mjs: Undici + local stubs).
 for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']) {
   delete process.env[k];
 }
@@ -19,8 +19,8 @@ for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']) {
 const TMPWS = mkdtempSync(path.join(os.tmpdir(), 'manos-browser-ws-'));
 process.env.WORKSPACE_ROOT = TMPWS;
 
-// HOME sin agentes/bin/ab → el lib cae al fallback `agent-browser` en
-// PATH, donde vive el fake. (El ab real existe en el HOME verdadero.)
+// HOME without agentes/bin/ab → the lib falls back to `agent-browser` on
+// PATH, where the fake lives. (The real ab exists in the true HOME.)
 const TMPHOME = mkdtempSync(path.join(os.tmpdir(), 'manos-browser-home-'));
 const FAKEBIN = mkdtempSync(path.join(os.tmpdir(), 'manos-browser-bin-'));
 const ORIG_HOME = process.env.HOME;
@@ -28,11 +28,11 @@ const ORIG_PATH = process.env.PATH || '';
 process.env.HOME = TMPHOME;
 process.env.PATH = `${FAKEBIN}:${ORIG_PATH}`;
 
-// Fake agent-browser: eco de sesión/env/argv + salidas canned.
-// Triggers por argv: __SLEEP__ (cuelga 30s), __FAIL__ (exit 3 con
-// "boom-fake" en stderr), __BIG__ (5000 chars por stdout).
-// Si FAKE_LOG está seteado, vuelca cada argv ahí (para browser_shot,
-// cuyo output no incluye el eco).
+// Fake agent-browser: session/env/argv echo + canned outputs.
+// Argv triggers: __SLEEP__ (hangs 30s), __FAIL__ (exit 3 with
+// "boom-fake" on stderr), __BIG__ (5000 chars on stdout).
+// If FAKE_LOG is set, dumps each argv there (for browser_shot,
+// whose output does not include the echo).
 const FAKE_AB = `#!/bin/sh
 echo "SESSION=\${AGENT_BROWSER_SESSION:-unset}"
 echo "EXEC=\${AGENT_BROWSER_EXECUTABLE_PATH:-unset}"
@@ -91,9 +91,9 @@ function tool(name) {
   return t;
 }
 
-// --- registro ---------------------------------------------------------------
+// --- registration -----------------------------------------------------------
 
-test('las 7 browser_* registradas, con schemas', () => {
+test('all 7 browser_* registered, with schemas', () => {
   const esperadas = {
     browser_open: ['url'],
     browser_snapshot: ['interactivas'],
@@ -110,12 +110,12 @@ test('las 7 browser_* registradas, con schemas', () => {
       assert.ok(t.parameters?.properties?.[p], `${name} tiene param ${p}`);
     }
   }
-  // Idempotente: re-registrar no duplica ni rompe.
+  // Idempotent: re-registering neither duplicates nor breaks.
   browser.registerBrowserTools();
   for (const name of Object.keys(esperadas)) tool(name);
 });
 
-test('binario: fallback agent-browser sin ~/agentes/bin/ab + override EQUIPO_AB_BIN', () => {
+test('binary: agent-browser fallback without ~/agentes/bin/ab + EQUIPO_AB_BIN override', () => {
   assert.equal(browser.resolveAbBin(), 'agent-browser');
   process.env.EQUIPO_AB_BIN = '/tmp/fake-ab-test';
   try {
@@ -125,7 +125,7 @@ test('binario: fallback agent-browser sin ~/agentes/bin/ab + override EQUIPO_AB_
   }
 });
 
-test('sesionPara: sanitiza agentId, default general', () => {
+test('sesionPara: sanitizes agentId, general default', () => {
   assert.equal(browser.sesionPara('Pablo! #1'), 'pablo-1');
   assert.equal(browser.sesionPara('  A__B-2 '), 'a__b-2');
   assert.equal(browser.sesionPara(''), 'general');
@@ -134,9 +134,9 @@ test('sesionPara: sanitiza agentId, default general', () => {
   assert.equal(browser.sesionPara('x'.repeat(100)).length, 40);
 });
 
-// --- sesión y env del hijo ---------------------------------------------------
+// --- child session and env ---------------------------------------------------
 
-test('sesión por agentId (sanitizado) y default general', async () => {
+test('session per agentId (sanitized) and general default', async () => {
   const r1 = await tool('browser_snapshot').execute({}, { ...ctx, agentId: 'Pablo! #1' });
   assert.equal(r1.ok, true);
   assert.match(r1.output, /SESSION=equipo-pablo-1/);
@@ -145,7 +145,7 @@ test('sesión por agentId (sanitizado) y default general', async () => {
   assert.match(r2.output, /SESSION=equipo-general/);
 });
 
-test('env del hijo: chrome fijo, --no-proxy-server, proxy strip', async () => {
+test('child env: pinned chrome, --no-proxy-server, proxy strip', async () => {
   process.env.http_proxy = 'http://fake:1';
   process.env.https_proxy = 'http://fake:1';
   process.env.HTTP_PROXY = 'http://fake:1';
@@ -164,9 +164,9 @@ test('env del hijo: chrome fijo, --no-proxy-server, proxy strip', async () => {
   }
 });
 
-// --- argv sin shell -----------------------------------------------------------
+// --- argv without shell -------------------------------------------------------
 
-test('argv sin shell: metacaracteres llegan como UN solo argumento', async () => {
+test('argv without shell: metacharacters arrive as ONE single argument', async () => {
   const nasty = 'a"; rm -rf /tmp/pwn; echo "x&y?q=1 2$d';
   const r = await tool('browser_type').execute({ ref: '@e1', texto: nasty }, ctx);
   assert.equal(r.ok, true);
@@ -179,7 +179,7 @@ test('argv sin shell: metacaracteres llegan como UN solo argumento', async () =>
   assert.ok(o.output.includes(`<${url}>`), 'url con ? & y espacio intacta');
 });
 
-test('snapshot: -i solo con interactivas=true', async () => {
+test('snapshot: -i only with interactivas=true', async () => {
   const a = await tool('browser_snapshot').execute({ interactivas: true }, ctx);
   assert.equal(a.ok, true);
   assert.ok(a.output.includes('ARG1=<-i>'));
@@ -189,7 +189,7 @@ test('snapshot: -i solo con interactivas=true', async () => {
   assert.match(b.output, /SNAP-OK/);
 });
 
-test('eval vía stdin: JS intacto + cap 2000ch', async () => {
+test('eval via stdin: intact JS + 2000ch cap', async () => {
   const js = 'document.title; "a\nb"; [1,2].length';
   const r = await tool('browser_eval').execute({ js }, ctx);
   assert.equal(r.ok, true);
@@ -201,9 +201,9 @@ test('eval vía stdin: JS intacto + cap 2000ch', async () => {
   assert.match(largo.error, /2000/);
 });
 
-// --- timeout / truncado / error -----------------------------------------------
+// --- timeout / truncation / error -----------------------------------------------
 
-test('timeout mata al hijo (default y open)', async () => {
+test('timeout kills the child (default and open)', async () => {
   browser._setBrowserTimeouts({ defaultMs: 150, openMs: 150 });
   try {
     const r = await tool('browser_click').execute({ ref: '__SLEEP__' }, ctx);
@@ -218,7 +218,7 @@ test('timeout mata al hijo (default y open)', async () => {
   }
 });
 
-test('truncado: salida gigante se recorta a 2000 (contrato output≤2000)', async () => {
+test('truncation: giant output is cut to 2000 (output≤2000 contract)', async () => {
   const r = await tool('browser_click').execute({ ref: '__BIG__' }, ctx);
   assert.equal(r.ok, true);
   assert.ok(r.output.length <= 2000, `largo ${r.output.length} <= 2000`);
@@ -226,7 +226,7 @@ test('truncado: salida gigante se recorta a 2000 (contrato output≤2000)', asyn
   assert.match(r.output, /SESSION=equipo-general/);
 });
 
-test('error del hijo → {ok:false} con motivo', async () => {
+test('child error → {ok:false} with reason', async () => {
   const r = await tool('browser_click').execute({ ref: '__FAIL__' }, ctx);
   assert.equal(r.ok, false);
   assert.match(r.error, /boom-fake/);
@@ -238,9 +238,9 @@ test('close ok', async () => {
   assert.match(r.output, /CLOSE-OK/);
 });
 
-// --- validaciones ---------------------------------------------------------------
+// --- validations ---------------------------------------------------------------
 
-test('validaciones: args vacíos o largos → {ok:false}', async () => {
+test('validations: empty or long args → {ok:false}', async () => {
   const casos = [
     ['browser_open', {}],
     ['browser_open', { url: '   ' }],
@@ -262,14 +262,14 @@ test('validaciones: args vacíos o largos → {ok:false}', async () => {
 
 // --- browser_shot (workspace) ---------------------------------------------------
 
-test('browser_shot: default shots/browser-<ts>.png, crea carpeta', async () => {
+test('browser_shot: default shots/browser-<ts>.png, creates folder', async () => {
   const r = await tool('browser_shot').execute({}, ctx);
   assert.equal(r.ok, true);
   assert.match(r.output, /captura shots\/browser-.*\.png/);
   assert.ok(existsSync(path.join(TMPWS, EMPRESA, SLUG, 'shots')), 'crea shots/');
 });
 
-test('browser_shot: nombre custom → ab recibe path absoluto dentro del workspace', async () => {
+test('browser_shot: custom nombre → ab receives absolute path inside the workspace', async () => {
   const logPath = path.join(TMPHOME, 'fake-args.log');
   process.env.FAKE_LOG = logPath;
   try {
@@ -284,7 +284,7 @@ test('browser_shot: nombre custom → ab recibe path absoluto dentro del workspa
   }
 });
 
-test('browser_shot: escapes, absolutos, ocultos y ext rara → denegados', async () => {
+test('browser_shot: escapes, absolutes, hidden and weird ext → denied', async () => {
   for (const nombre of ['../afuera.png', '/tmp/evil.png', '.oculto.png', 'shots/x.exe', 'a'.repeat(201)]) {
     const r = await tool('browser_shot').execute({ nombre }, ctx);
     assert.equal(r.ok, false, `${nombre.slice(0, 30)} denegado`);
@@ -294,7 +294,7 @@ test('browser_shot: escapes, absolutos, ocultos y ext rara → denegados', async
   assert.match(sinCtx.error, /companyId/);
 });
 
-test('nunca throw: ctx vacío en las 7 devuelve contrato', async () => {
+test('never throws: empty ctx on all 7 returns the contract', async () => {
   for (const name of REGISTRADAS) {
     const r = await tool(name).execute({}, {});
     assert.equal(typeof r.ok, 'boolean', `${name} devuelve {ok}`);

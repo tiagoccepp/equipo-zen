@@ -13,6 +13,19 @@ const { renderMemorySection, writeMemoryFile, appendDaily, __resetPabloMemoryCac
 const { renderManosPrompt, getTool, listTools } = await import('../server/lib/manos.js');
 const { renderLearningsSection } = await import('../server/lib/learning.js');
 const { renderSkillsSection, __resetSkillsCache } = await import('../server/lib/skills.js');
+const { initSettings } = await import('../server/lib/settings.js');
+
+// Store stub: los tests de dieta fijan idioma explícito (default global: inglés).
+const dietDb = new Map();
+initSettings(
+  {
+    getSetting: (k) => (dietDb.has(k) ? dietDb.get(k) : null),
+    setSetting: (k, v) => { dietDb.set(k, v); },
+    deleteSetting: (k) => { dietDb.delete(k); },
+    logChange: () => {}
+  },
+  { setKeys: () => {} }
+);
 
 let tmp;
 beforeEach(() => {
@@ -72,11 +85,12 @@ test('dieta D1: seeds nuevos son deltas chicos', async () => {
 // ---------------------------------------------------------------- D2/D3 esqueleto
 
 test('dieta D2+D3: bloques fusionados §VOICE y SCOPE&SPLIT, sin headers viejos', () => {
+  // Idioma ES fijado explícito (default global: inglés desde TI 09/11).
+  dietDb.set('tts.language', 'es');
   const sys = buildSystemInstruction(AGENTE, {});
   for (const h of ['§VOICE', 'SCOPE & SPLIT', 'ALCANCE Y REPARTO']) {
     void h;
   }
-  // Idioma default en tests: español (sin store).
   assert.equal(promptIsEnglish(), false);
   assert.ok(sys.includes('§VOICE'), 'bloque voz único');
   assert.ok(sys.includes('ALCANCE Y REPARTO'), 'bloque scope único');
@@ -86,6 +100,7 @@ test('dieta D2+D3: bloques fusionados §VOICE y SCOPE&SPLIT, sin headers viejos'
 });
 
 test('dieta no-tocar: canales, SILENCIO, TAREA, números y ejemplo sobreviven', () => {
+  dietDb.set('tts.language', 'es');
   const sys = buildSystemInstruction(AGENTE, {});
   assert.ok(sys.includes('[PIENSO]'), 'canal PIENSO');
   assert.ok(sys.includes('[AVANCE]'), 'canal AVANCE');

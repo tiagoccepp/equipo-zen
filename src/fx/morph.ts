@@ -1,14 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Generadores de figuras para partículas + interpolación.
+// Particle shape generators + interpolation.
 //
-// Lógica PURA: sin DOM, sin canvas, sin side effects (salvo text(), que
-// necesita rasterizar una fuente y tira si no hay document). Corre en node
-// para los tests y en la webview para los renderers (orb-morph.ts 2D,
+// PURE logic: no DOM, no canvas, no side effects (except text(), which
+// needs to rasterize a font and throws without document). Runs in node
+// for tests and in the webview for renderers (orb-morph.ts 2D,
 // orb3d.ts three.js).
 //
-// Los puntos son Float32Array plano [x,y,z, x,y,z, …], en un cubo ~unitario
-// ([-1,1] por eje). El renderer los escala por el radio de cada slot, igual
-// que OrbField escala sus direcciones unitarias.
+// Points are a flat Float32Array [x,y,z, x,y,z, …] in a ~unit cube
+// ([-1,1] per axis). The renderer scales them by each slot's radius, same
+// as OrbField scales its unit directions.
 // ═══════════════════════════════════════════════════════════════════════
 
 export type MorphShape = 'sphere' | 'torus' | 'cube' | 'wave' | 'ring';
@@ -18,13 +18,13 @@ export const MORPH_SHAPES: MorphShape[] = ['sphere', 'torus', 'cube', 'wave', 'r
 const TAU = Math.PI * 2;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
-// ── Aleatorio determinista ─────────────────────────────────────────────
-// Dos herramientas, mismo contrato (misma seed → mismos puntos):
-//   hashUnit(i, seed): sin estado, para repartos indexados (Fibonacci).
-//   mulberry32(seed): con estado, para rellenos secuenciales.
+// ── Deterministic random ────────────────────────────────────────────
+// Two tools, same contract (same seed → same points):
+//   hashUnit(i, seed): stateless, for indexed distributions (Fibonacci).
+//   mulberry32(seed): stateful, for sequential fills.
 
-// Misma idea que call-orbs.ts: hash con avalancha, no secuencias lineales
-// (lineal + ángulo dorado dibuja meridianos / muaré visible).
+// Same idea as call-orbs.ts: avalanche hash, not linear sequences
+// (linear + golden angle draws meridians / visible moiré).
 function hashUnit(index: number, seed: number) {
   let hash = Math.imul((index | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(Math.round(seed * 1e6) | 0, 0xc2b2ae35);
   hash ^= hash >>> 15;
@@ -51,11 +51,11 @@ function checkCount(count: number) {
   return total;
 }
 
-// ── Figuras ────────────────────────────────────────────────────────────
+// ── Shapes ──────────────────────────────────────────────────────────
 
-// Esfera unitaria: Fibonacci + temblor (idea de call-orbs.ts). Puntos SOBRE
-// la superficie (|p| = 1): es un target de morph, el volumen lo da el
-// renderer con rotación + buckets de profundidad.
+// Unit sphere: Fibonacci + jitter (call-orbs.ts idea). Points ON the
+// surface (|p| = 1): it's a morph target, the renderer provides volume
+// via rotation + depth buckets.
 export function sphere(count: number, seed = 0): Float32Array {
   const total = checkCount(count);
   const out = new Float32Array(total * 3);
@@ -65,7 +65,7 @@ export function sphere(count: number, seed = 0): Float32Array {
     const theta = i * GOLDEN_ANGLE + seed + (hashUnit(i * 11 + 7, seed + 0.53) - 0.5) * 0.85;
     const x = Math.cos(theta) * ring;
     const z = Math.sin(theta) * ring;
-    // Normalizar: el temblor en uy puede dejar |p| ≠ 1 por redondeo.
+    // Normalize: jitter in uy can leave |p| ≠ 1 from rounding.
     const inv = 1 / (Math.hypot(x, uy, z) || 1);
     out[i * 3] = x * inv;
     out[i * 3 + 1] = uy * inv;
@@ -74,8 +74,8 @@ export function sphere(count: number, seed = 0): Float32Array {
   return out;
 }
 
-// Toro de frente (anillo en el plano XY, tubo de radio fijo). R + r < 1
-// para que no se salga del slot del renderer.
+// Front-facing torus (ring in the XY plane, fixed-radius tube). R + r < 1
+// so it stays inside the renderer's slot.
 export const TORUS_R = 0.6;
 export const TORUS_TUBE = 0.32;
 
@@ -93,8 +93,8 @@ export function torus(count: number, seed = 0): Float32Array {
   return out;
 }
 
-// Cubo: puntos sobre las 6 caras, repartidos por índice (cara = i % 6).
-// Lado 0.58: la esquina queda en ~1.0, igual que la esfera unitaria.
+// Cube: points on the 6 faces, distributed by index (face = i % 6).
+// Side 0.58: the corner lands at ~1.0, same as the unit sphere.
 export const CUBE_HALF = 0.58;
 
 export function cube(count: number, seed = 0): Float32Array {
@@ -120,9 +120,9 @@ export function cube(count: number, seed = 0): Float32Array {
   return out;
 }
 
-// Onda: grilla sobre el plano XY de frente, z = interferencia de dos senos.
-// `phase` la anima (el renderer la avanza con el tiempo; hablando → además
-// escala la amplitud con la energy real).
+// Wave: grid on the front-facing XY plane, z = two-sine interference.
+// `phase` animates it (the renderer advances it over time; speaking → it also
+// scales amplitude with real energy).
 export const WAVE_EXTENT = 0.9;
 export const WAVE_AMP = 0.24;
 
@@ -142,8 +142,8 @@ export function wave(count: number, phase = 0): Float32Array {
   return out;
 }
 
-// Anillo de frente (círculo en XY): el estado "escuchando". El pulso lo pone
-// el renderer (escala), el target es un círculo quieto con temblor mínimo.
+// Front-facing ring (circle in XY): the "listening" state. The renderer
+// provides the pulse (scale); the target is a still circle with minimal jitter.
 export const RING_RADIUS = 0.8;
 
 export function ring(count: number, seed = 0): Float32Array {
@@ -159,8 +159,8 @@ export function ring(count: number, seed = 0): Float32Array {
   return out;
 }
 
-// Texto rasterizado: muestrea píxeles opacos de un canvas offscreen y los
-// reparte. NECESITA DOM (fuentes + canvas): en node tira error claro.
+// Rasterized text: samples opaque pixels from an offscreen canvas and
+// spreads them. NEEDS DOM (fonts + canvas): throws a clear error in node.
 export function text(count: number, value: string): Float32Array {
   if (typeof document === 'undefined') {
     throw new Error('fx/morph text(): necesita DOM (document undefined, ej. en node)');
@@ -193,7 +193,7 @@ export function text(count: number, value: string): Float32Array {
   }
   const out = new Float32Array(total * 3);
   if (hits.length === 0) {
-    return sphere(total, label.length); // fallback: la fuente no pintó nada
+    return sphere(total, label.length); // fallback: the font painted nothing
   }
   const rand = mulberry32(label.length * 7919 + total);
   for (let i = 0; i < total; i += 1) {
@@ -213,7 +213,7 @@ export type ShapeOptions = {
   text?: string;
 };
 
-// Dispatcher: el renderer pide "torus con N puntos" sin importar cada fn.
+// Dispatcher: the renderer asks for "torus with N points" without importing each fn.
 export function generateShape(shape: MorphShape, count: number, opts: ShapeOptions = {}): Float32Array {
   switch (shape) {
     case 'sphere': return sphere(count, opts.seed ?? 0);
@@ -224,13 +224,13 @@ export function generateShape(shape: MorphShape, count: number, opts: ShapeOptio
   }
 }
 
-// ── Interpolación ──────────────────────────────────────────────────────
+// ── Interpolation ───────────────────────────────────────────────────
 
 export function clamp01(value: number) {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 }
 
-// smoothstep: arranca y frena suave (derivada 0 en ambos extremos).
+// smoothstep: eases in and out (0 derivative at both ends).
 export function smoothstep(t: number) {
   const x = clamp01(t);
   return x * x * (3 - 2 * x);
@@ -241,8 +241,8 @@ export function easeInOutCubic(t: number) {
   return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
-// Interpola from → to con smoothstep y escribe en `buf` (que se devuelve).
-// Pura salvo por el buffer destino explícito: mismo input → mismo output.
+// Interpolates from → to with smoothstep, writing into `buf` (returned).
+// Pure except for the explicit destination buffer: same input → same output.
 export function morphStep(buf: Float32Array, from: Float32Array, to: Float32Array, t: number): Float32Array {
   if (from.length !== to.length || buf.length !== from.length) {
     throw new RangeError(

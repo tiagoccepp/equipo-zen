@@ -1,11 +1,11 @@
-// critic.js — peer review entre especialistas (track C, flujo de equipo).
+// critic.js — peer review between specialists (track C, team flow).
 //
-// Regla dura (protocolo 5 del plan maestro): SOLO emite review si hay mejora
-// concreta (qué + por qué + cómo). Sin mejora = silencio estructurado.
-// Todo puro y determinista: sin I/O, sin LLM. El LLM del especialista propone;
-// esto valida/estructura contra checklists por rol.
+// Hard rule (master plan protocol 5): ONLY emits a review when there is a concrete
+// improvement (what + why + how). No improvement = structured silence.
+// All pure and deterministic: no I/O, no LLM. The specialist's LLM proposes;
+// this validates/structures against per-role checklists.
 //
-// Revisar(test): tests/flujo-tester.test.mjs
+// Review(test): tests/flujo-tester.test.mjs
 
 import { normalize } from './text.js';
 
@@ -13,10 +13,10 @@ export const SEVERIDADES = ['bug', 'mejora', 'nit'];
 const ORDEN_SEV = { bug: 0, mejora: 1, nit: 2 };
 const DEDUP_JACCARD = 0.6;
 
-// Checklist = señales concretas que el rol revisor sabe detectar.
-// Cada señal: id, severidad, que/porque/como (plantillas; {ev} = evidencia),
-// test(texto, norm) -> string|null (devuelve evidencia citada o null).
-// `como` incluye pasos concretos de fix. Sin match = sin mejora = silencio.
+// Checklist = concrete signals the reviewer role can detect.
+// Each signal: id, severidad, que/porque/como (templates; {ev} = evidence),
+// test(texto, norm) -> string|null (returns quoted evidence or null).
+// `como` includes concrete fix steps. No match = no improvement = silence.
 export const CHECKLISTS_ROL = {
   backend: [
     {
@@ -223,8 +223,8 @@ function jaccard(a, b) {
   return inter / (a.size + b.size - inter);
 }
 
-// Misma mejora 2 veces = 1. Clave = similitud de que+cómo (Jaccard ≥ 0.6,
-// mismo umbral que learning.js). Conserva la de mayor severidad.
+// Same improvement twice = 1. Key = que+como similarity (Jaccard ≥ 0.6,
+// same threshold as learning.js). Keeps the most severe one.
 export function dedup(mejoras) {
   const out = [];
   for (const m of mejoras) {
@@ -243,9 +243,9 @@ function ordenarPorSeveridad(mejoras) {
   return [...mejoras].sort((a, b) => ORDEN_SEV[a.severidad] - ORDEN_SEV[b.severidad]);
 }
 
-// Revisión pura: entrega vs checklist del rol revisor.
+// Pure review: entrega vs the reviewer role's checklist.
 // entrega: { texto, autor?, rolAutor?, artefacto? }
-// criterioRol: { rol, checklist? } — checklist custom opcional, si no usa CHECKLISTS_ROL[rol].
+// criterioRol: { rol, checklist? } — optional custom checklist, else CHECKLISTS_ROL[rol].
 // -> { silencio: true, motivo } | { silencio: false, mejoras: [...] }
 export function revisar(entrega, criterioRol = {}) {
   const texto = String(entrega?.texto || '');

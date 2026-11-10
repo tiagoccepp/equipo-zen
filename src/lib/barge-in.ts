@@ -1,92 +1,91 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Barge-in: la decisión de "callá al agente, está hablando la persona".
+// Barge-in: the "shut the agent up, the person is talking" decision.
 //
-// Vive acá afuera del pipeline de micrófono para poder probarla sin
-// navegador: es una función pura que recibe el estado acumulado y un frame
-// de audio, y devuelve qué hacer con el audio del agente.
+// It lives here outside the mic pipeline so it can be tested without a
+// browser: a pure function taking the accumulated state plus one audio
+// frame, returning what to do with the agent's audio.
 //
-// El razonamiento, en criollo:
+// The reasoning, in plain words:
 //
-//  1. Apenas entra algo CLARAMENTE por encima del umbral (1.1×) bajamos
-//     el volumen del agente (duck). Es instantáneo y reversible: si era un
-//     carraspeo, no pasó nada; si era la persona arrancando a hablar, ya
-//     la escuchamos por encima del agente. El margen existe porque el ruido
-//     que vive justo en el umbral hacía parpadear el volumen (se escuchaba
-//     como si el agente se alejara y acercara). Una vez atenuado, hold
-//     mínimo de 400 ms antes de restaurar, por la misma razón.
-//  2. Recién cortamos al agente cuando la voz se SOSTIENE por encima de
-//     1.5× el umbral durante `confirmMs` (300 ms). El factor existe por el
-//     eco:
-//     el parlante devuelve al micrófono la voz del propio agente con un RMS
-//     moderado y sostenido, apenas arriba del umbral de arranque. Ese eco
-//     hace duck (inofensivo, y encima baja el eco) pero nunca llega a
-//     confirmar, así que el agente no se interrumpe solo.
-//  3. Un golpe seco (portazo, el mouse contra la mesa) es un frame muy alto
-//     y nada más: no llega a `confirmMs` y se descarta.
-//  4. Las pausas entre sílabas no borran lo acumulado: recién soltamos el
-//     duck y limpiamos el contador después de `releaseMs` de silencio. Sin
-//     esa histéresis el volumen del agente bombearía en cada respiración.
+//  1. As soon as something comes in CLEARLY above threshold (1.1×) we duck
+//     the agent's volume. It's instant and reversible: if it was a throat
+//     clear, nothing happened; if it was the person starting to speak, we
+//     already hear them over the agent. The margin exists because noise
+//     sitting right at the threshold made the volume flicker (it sounded
+//     like the agent moving away and closer). Once ducked, a minimum 400 ms
+//     hold before restoring, for the same reason.
+//  2. We only cut the agent when the voice SUSTAINS above 1.5× threshold
+//     for `confirmMs` (300 ms). The factor exists because of echo: the
+//     speaker feeds the agent's own voice back into the mic at a moderate,
+//     sustained RMS, just above the start threshold. That echo ducks
+//     (harmless, and it even lowers the echo) but never confirms, so the
+//     agent never interrupts itself.
+//  3. A sharp thump (slamming door, mouse on the desk) is one very loud
+//     frame and nothing else: it never reaches `confirmMs` and gets dropped.
+//  4. Pauses between syllables don't erase the accumulation: we only release
+//     the duck and clear the counter after `releaseMs` of silence. Without
+//     that hysteresis the agent's volume would pump on every breath.
 // ═══════════════════════════════════════════════════════════════════════
 
 export type BargeInState = {
-  // ms de voz "fuerte" (≥ confirmRatio × umbral) acumulados en la ráfaga actual.
+  // ms of "loud" voice (≥ confirmRatio × threshold) accumulated in the current burst.
   loudMs: number;
-  // ms seguidos por debajo del umbral desde el último frame con voz.
+  // consecutive ms below threshold since the last frame with voice.
   quietMs: number;
-  // Si el audio del agente está atenuado y le debemos una restauración.
+  // Whether the agent's audio is ducked and owed a restore.
   ducked: boolean;
-  // Ms desde que se atenuó (para el hold mínimo anti-parpadeo).
+  // Ms since ducking started (for the anti-flicker minimum hold).
   duckMs: number;
 };
 
 export type BargeInInput = {
-  // RMS del frame (0..1), tal como lo calcula el AudioWorklet de captura.
+  // Frame RMS (0..1), as computed by the capture AudioWorklet.
   rms: number;
-  // Duración del frame en ms (60 ms con la captura actual).
+  // Frame duration in ms (60 ms with the current capture).
   durationMs: number;
-  // Umbral de arranque de voz del VAD (depende de la sensibilidad elegida).
+  // VAD voice-start threshold (depends on the chosen sensitivity).
   startThreshold: number;
-  // ¿Hay un agente sonando o con audio en vuelo? Si no, no hay a quién cortar.
+  // Is an agent sounding or with audio in flight? If not, nobody to cut.
   agentSpeaking: boolean;
-  // ¿La persona ya está en su turno? Entonces el barge-in ya cumplió.
+  // Is the person already on their turn? Then barge-in already did its job.
   userSpeaking?: boolean;
 };
 
 export type BargeInDecision = {
-  // Atenuá el audio del agente ahora (latencia cero, sin avisar al servidor).
+  // Duck the agent's audio now (zero latency, without telling the server).
   duck: boolean;
-  // Confirmado: mandá `interrupt` al servidor, cortá el audio y restaurá el volumen.
+  // Confirmed: send `interrupt` to the server, cut the audio, restore volume.
   interrupt: boolean;
-  // Falso positivo o el agente ya terminó: devolvé el volumen y limpiá.
+  // False positive or the agent already finished: restore volume and clear.
   reset: boolean;
-  // Estado a guardar para el próximo frame (la función no muta nada).
+  // State to keep for the next frame (the function mutates nothing).
   state: BargeInState;
 };
 
-// Umbrales del barge-in en un solo lugar (los tests importan estos valores
-// en vez de repetir números sueltos).
+// Barge-in thresholds in one place (tests import these values
+// instead of repeating loose numbers).
 export const BARGE_IN = {
-  // Cuánto más fuerte que el umbral de voz tiene que ser un frame para
-  // contar como "la persona está hablando" y no como eco del agente.
-  // 1.5× (antes 1.4×): con el mic sensible cualquier ruido cortaba.
+  // How much louder than the voice threshold a frame must be to
+  // count as "the person is talking" rather than agent echo.
+  // 1.5× (was 1.4×): with the sensitive mic any noise would cut.
   confirmRatio: 1.5,
-  // Voz fuerte sostenida necesaria para cortar al agente. 300 ms (5 frames
-  // de 60 ms): un transitorio (portazo <100 ms, tos corta) no llega, y la
-  // voz real igual corta en ~360 ms desde que la persona abre la boca.
+  // Sustained loud voice needed to cut the agent. 300 ms (5 frames
+  // of 60 ms): a transient (door slam <100 ms, short cough) never makes it,
+  // and real voice still cuts in ~360 ms after the person opens their mouth.
   confirmMs: 300,
-  // Margen para EMPEZAR a atenuar: evita que el ruido que vive justo en
-  // el umbral haga parpadear el volumen del agente (se escuchaba como si
-  // se alejara y acercara al micrófono).
+  // Margin to START ducking: keeps noise sitting right at the threshold
+  // from flickering the agent's volume (it sounded like the agent moving
+  // away and closer to the mic).
   duckMargin: 1.1,
-  // Hold mínimo del duck: una vez atenuado, no se restaura antes de esto
-  // aunque haya silencio (anti-parpadeo; el restore igual espera releaseMs
-  // de silencio, lo que llegue último manda).
+  // Minimum duck hold: once ducked, no restore before this elapses even
+  // in silence (anti-flicker; restore still waits for releaseMs of silence,
+  // whichever comes last wins).
   minDuckHoldMs: 400,
-  // Silencio necesario para soltar el duck (histéresis entre sílabas).
+  // Silence needed to release the duck (inter-syllable hysteresis).
   releaseMs: 160,
-  // Cuánto audio previo guardamos para que la frase que dispara el
-  // barge-in llegue entera al servidor: la ventana de confirmación más
-  // margen para el ataque de la primera palabra.
+  // How much prior audio we keep so the phrase triggering the
+  // barge-in reaches the server whole: the confirmation window plus
+  // margin for the first word's attack.
   preBufferMs: 640
 } as const;
 
@@ -103,24 +102,24 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
     ? Math.max(0.0001, input.startThreshold)
     : 0.0001;
 
-  // Sin agente hablando (o con la persona ya en su turno) no hay barge-in:
-  // el estado vuelve a cero y solo queda devolver el volumen si lo bajamos.
-  // Sin esto, un contador a medio llenar sobrevive al turno y el próximo
-  // portazo interrumpe al agente siguiente de una.
+  // Without an agent speaking (or with the person already on turn) there's no barge-in:
+  // state returns to zero and only volume restore remains if we ducked.
+  // Without this, a half-filled counter survives the turn and the next
+  // door slam interrupts the next agent right away.
   if (!input.agentSpeaking || input.userSpeaking) {
     return { duck: false, interrupt: false, reset: state.ducked, state: { ...IDLE } };
   }
 
-  // Entrada al duck con margen: el ruido que vive justo en el umbral no
-  // atenúa (parpadeo), recién 1.1× para arriba.
+  // Duck entry with margin: noise sitting right at the threshold doesn't
+  // duck (flicker), only 1.1× and up.
   if (rms >= startThreshold * BARGE_IN.duckMargin) {
     const loudMs = rms >= startThreshold * BARGE_IN.confirmRatio
       ? state.loudMs + durationMs
       : state.loudMs;
 
     if (loudMs >= BARGE_IN.confirmMs) {
-      // Confirmado: el que llama corta el audio, avisa al servidor y
-      // restaura el volumen, así que el estado arranca limpio.
+      // Confirmed: the caller cuts the audio, tells the server and
+      // restores the volume, so state starts clean.
       return { duck: false, interrupt: true, reset: false, state: { ...IDLE } };
     }
 
@@ -132,15 +131,15 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
     };
   }
 
-  // Silencio con nada pendiente: el estado ya está limpio, no lo ensuciamos
-  // contando ms de calma que no le importan a nadie.
+  // Silence with nothing pending: state is already clean, we don't dirty it
+  // counting calm ms nobody cares about.
   if (!state.ducked && state.loudMs === 0) {
     return { duck: false, interrupt: false, reset: false, state: { ...IDLE } };
   }
 
   const quietMs = state.quietMs + durationMs;
   const duckMs = state.duckMs + durationMs;
-  // Restore solo con silencio suficiente Y hold cumplido (lo último manda).
+  // Restore only with enough silence AND hold fulfilled (last one wins).
   if (quietMs >= BARGE_IN.releaseMs && duckMs >= BARGE_IN.minDuckHoldMs) {
     return {
       duck: false,
@@ -150,8 +149,7 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
     };
   }
 
-  // Pausa corta (o hold sin cumplir): seguimos atenuados y no perdemos
-  // lo acumulado.
+  // Short pause (or unfulfilled hold): stay ducked, keep the accumulation.
   return {
     duck: false,
     interrupt: false,
@@ -160,10 +158,10 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
   };
 }
 
-// Pre-buffer de la captura: los frames previos al arranque del habla que se
-// mandan al servidor cuando el VAD confirma voz. Tiene que cubrir toda la
-// ventana de confirmación del barge-in; si no, la frase que interrumpe llega
-// cortada ("…dón, pará" en vez de "perdón, pará").
+// Capture pre-buffer: the frames before speech onset that get
+// sent to the server when VAD confirms voice. It must cover the whole
+// barge-in confirmation window; otherwise the interrupting phrase arrives
+// cut off ("…dón, pará" instead of "perdón, pará").
 export function trimPreBuffer<T extends { durationMs: number }>(
   chunks: T[],
   budgetMs: number = BARGE_IN.preBufferMs

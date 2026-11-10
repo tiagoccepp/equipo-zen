@@ -1,5 +1,5 @@
-// Tests llamada grupal (groupchat.js): lógica PURA de réplicas R2 + cierre CEO.
-// Sin LLM, sin I/O: decidir quién replica tras la ronda 1.
+// Group-call tests (groupchat.js): PURE R2-reply + CEO-close logic.
+// No LLM, no I/O: decide who replies after round 1.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -23,36 +23,36 @@ const ROSTER = [
   { id: 'nahuel', name: 'Nahuel', role: 'worker', aliases: ['nahuel'] }
 ];
 
-// ── Menciones ─────────────────────────────────────────────────────────
+// ── Mentions ─────────────────────────────────────────────────────────
 
-test('mención por nombre encuentra al agente', () => {
+test('mention by name finds the agent', () => {
   const found = findMentionedAgents('Camila, el CMS nos retrasa', ROSTER);
   assert.deepEqual(found.map((f) => f.agent.id), ['camila']);
 });
 
-test('mención por alias encuentra al agente', () => {
+test('mention by alias finds the agent', () => {
   const found = findMentionedAgents('que lo mire front antes de publicar', ROSTER);
   assert.deepEqual(found.map((f) => f.agent.id), ['bruno']);
 });
 
-test('orden por primera mención', () => {
+test('ordered by first mention', () => {
   const found = findMentionedAgents('Nahuel lo despliega, pero Camila lo prueba antes', ROSTER);
   assert.deepEqual(found.map((f) => f.agent.id), ['nahuel', 'camila']);
 });
 
-test('los que ya hablaron no se replican', () => {
+test('those who already spoke do not reply', () => {
   const found = findMentionedAgents('Bruno y Camila, ¿qué dicen?', ROSTER, { excludeIds: new Set(['bruno']) });
   assert.deepEqual(found.map((f) => f.agent.id), ['camila']);
 });
 
-test('sin mención no hay réplica', () => {
+test('no mention, no reply', () => {
   assert.deepEqual(findMentionedAgents('salgo con estática y listo', ROSTER), []);
   assert.deepEqual(findMentionedAgents('', ROSTER), []);
 });
 
-// ── Grupo convocado / tope de voces ───────────────────────────────────
+// ── Summoned group / voice cap ───────────────────────────────────
 
-test('grupo convocado: groupAddressed, greeting o groupGreeting', () => {
+test('summoned group: groupAddressed, greeting or groupGreeting', () => {
   assert.equal(groupRequested({ groupAddressed: true }), true);
   assert.equal(groupRequested({ greeting: true }), true);
   assert.equal(groupRequested({ groupGreeting: true }), true);
@@ -60,14 +60,14 @@ test('grupo convocado: groupAddressed, greeting o groupGreeting', () => {
   assert.equal(groupRequested(null), false);
 });
 
-test('capTargets: hasta 3 intacto', () => {
+test('capTargets: up to 3 untouched', () => {
   const targets = [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }];
   const { targets: out, capped } = capTargets(targets, {});
   assert.equal(capped, 0);
   assert.deepEqual(out, targets);
 });
 
-test('capTargets: más de 3 sin grupo se recorta a 3 sin mutar', () => {
+test('capTargets: more than 3 without group is trimmed to 3 without mutating', () => {
   const targets = [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }, { agentId: 'd' }, { agentId: 'e' }];
   const { targets: out, capped } = capTargets(targets, {});
   assert.equal(capped, 2);
@@ -75,20 +75,20 @@ test('capTargets: más de 3 sin grupo se recorta a 3 sin mutar', () => {
   assert.equal(targets.length, 5, 'no muta el array original');
 });
 
-test('capTargets: grupo convocado no se recorta', () => {
+test('capTargets: summoned group is not trimmed', () => {
   const targets = [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }, { agentId: 'd' }];
   const { targets: out, capped } = capTargets(targets, { groupAddressed: true });
   assert.equal(capped, 0);
   assert.equal(out.length, 4);
 });
 
-// ── Selección R2 ──────────────────────────────────────────────────────
+// ── R2 selection ──────────────────────────────────────────────────────
 
 function r1(agentId, name, text) {
   return { agentId, name, text };
 }
 
-test('R2: aludidos que aún no hablaron, con citante', () => {
+test('R2: mentioned ones who have not spoken yet, with citer', () => {
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Camila, el CMS nos retrasa una semana')],
     agents: ROSTER,
@@ -102,7 +102,7 @@ test('R2: aludidos que aún no hablaron, con citante', () => {
   assert.equal(out[0].directMention, true);
 });
 
-test('R2: el que habló no se replica a sí mismo', () => {
+test('R2: one who spoke does not reply to themselves', () => {
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Bruno cree que sale hoy')],
     agents: ROSTER,
@@ -113,7 +113,7 @@ test('R2: el que habló no se replica a sí mismo', () => {
   assert.deepEqual(out, []);
 });
 
-test('R2: respeta el tope de 3 voces', () => {
+test('R2: respects the 3-voice cap', () => {
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Camila y Nahuel, ¿lo ven?')],
     agents: ROSTER,
@@ -121,11 +121,11 @@ test('R2: respeta el tope de 3 voces', () => {
     totalSpoken: 2,
     route: {}
   });
-  // Solo queda 1 lugar (3 - 2): entra la primera mención.
+  // Only 1 slot left (3 - 2): the first mention gets in.
   assert.deepEqual(out.map((t) => t.agentId), ['camila']);
 });
 
-test('R2: sin cupo no hay réplicas', () => {
+test('R2: no slots, no replies', () => {
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Camila, ¿lo ves?')],
     agents: ROSTER,
@@ -136,7 +136,7 @@ test('R2: sin cupo no hay réplicas', () => {
   assert.deepEqual(out, []);
 });
 
-test('R2: grupo convocado no tiene tope', () => {
+test('R2: summoned group has no cap', () => {
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Camila y Nahuel, ¿lo ven?')],
     agents: ROSTER,
@@ -147,7 +147,7 @@ test('R2: grupo convocado no tiene tope', () => {
   assert.deepEqual(out.map((t) => t.agentId), ['camila', 'nahuel']);
 });
 
-test('R2: agentes deshabilitados no replican', () => {
+test('R2: disabled agents do not reply', () => {
   const roster = ROSTER.map((a) => (a.id === 'camila' ? { ...a, enabled: false } : a));
   const out = selectReplicaTargets({
     responsesR1: [r1('bruno', 'Bruno', 'Camila, ¿lo ves?')],
@@ -159,9 +159,9 @@ test('R2: agentes deshabilitados no replican', () => {
   assert.deepEqual(out, []);
 });
 
-// ── Cierre CEO ────────────────────────────────────────────────────────
+// ── CEO close ────────────────────────────────────────────────────────
 
-test('cierre CEO: solo si R2 tuvo voz y la CEO no habló', () => {
+test('CEO close: only if R2 had a voice and the CEO did not speak', () => {
   const ceo = shouldCeoClose({ replicaSpoke: true, agents: ROSTER, spokenIds: ['bruno', 'camila'] });
   assert.equal(ceo?.id, 'renata');
   assert.equal(shouldCeoClose({ replicaSpoke: false, agents: ROSTER, spokenIds: [] }), null);
@@ -177,9 +177,9 @@ test('cierre CEO: solo si R2 tuvo voz y la CEO no habló', () => {
   );
 });
 
-// ── Disenso y textos ──────────────────────────────────────────────────
+// ── Dissent and texts ──────────────────────────────────────────────────
 
-test('disenso explícito se clasifica, acuerdo no', () => {
+test('explicit dissent is classified, agreement is not', () => {
   assert.equal(looksLikeDisenso('No estoy de acuerdo, eso retrasa'), true);
   assert.equal(looksLikeDisenso('Discrepo: el CMS complica'), true);
   assert.equal(looksLikeDisenso('Ojo con el plazo, me preocupa'), true);
@@ -187,7 +187,7 @@ test('disenso explícito se clasifica, acuerdo no', () => {
   assert.equal(looksLikeDisenso(''), false);
 });
 
-test('texto de réplica: le habla AL compañero, SILENCIO válido', () => {
+test('reply text: talks TO the peer, SILENCIO valid', () => {
   const out = replicaTurnText({ citedBy: 'Bruno', citedText: 'el CMS retrasa', originalText: '¿estática o CMS?' });
   assert.ok(out.includes('Bruno te habló'), 'nombra al citante');
   assert.ok(out.includes('el CMS retrasa'), 'lleva la cita');
@@ -195,14 +195,14 @@ test('texto de réplica: le habla AL compañero, SILENCIO válido', () => {
   assert.ok(out.includes('SILENCIO'), 'silencio válido');
 });
 
-test('texto de cierre CEO: una línea, sin reabrir', () => {
+test('CEO close text: one line, no reopening', () => {
   const out = ceoCloseTurnText({ originalText: '¿estática o CMS?' });
   assert.ok(out.includes('¿estática o CMS?'), 'lleva el pedido');
   assert.ok(out.includes('UNA línea'), 'pide una línea');
   assert.ok(out.includes('No reabras'), 'no reabre');
 });
 
-test('constantes: 2 rondas, 3 voces', () => {
+test('constants: 2 rounds, 3 voices', () => {
   assert.equal(MAX_ROUNDS, 2);
   assert.equal(MAX_VOICES, 3);
 });

@@ -1,5 +1,5 @@
-"""Servidor STT local: Parakeet-TDT-0.6B-v3 vía sherpa-onnx (más rápido y
-mejor ES que Whisper small en CPU). Misma API que whisper_server.py:
+"""Local STT server: Parakeet-TDT-0.6B-v3 via sherpa-onnx (faster and
+better ES than Whisper small on CPU). Same API as whisper_server.py:
   GET  /health                → {"ok": true, "model": "parakeet-v3"}
   POST /v1/transcribe         → {"text": "...", "language": "es", "durationMs": 1234}
        body JSON: {"audio_base64": "<wav>", "language": "es"|null}
@@ -51,9 +51,9 @@ class TranscribeRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    # VmSwap propio: hace visible la causa raíz del STT lento (09/11:
-    # kswapd saca ~680MB del encoder tras 4min idle y el primer decode
-    # paga ~5s de page-in). Barato: una lectura de /proc/self/status.
+    # Own VmSwap: makes the root cause of slow STT visible (09/11:
+    # kswapd evicts ~680MB of the encoder after 4min idle and the first decode
+    # pays ~5s of page-in). Cheap: one read of /proc/self/status.
     out = {"ok": True, "model": "parakeet-v3"}
     try:
         with open("/proc/self/status") as fh:
@@ -92,9 +92,9 @@ def transcribe(request: TranscribeRequest):
 
 
 def _find_warmup_wav():
-    # Audio REAL para el warmup (el silencio emite ~0 tokens y no ejercita
-    # el loop TDT; el chirp sí). Orden: fixture del repo, test_wavs del
-    # modelo, test_wavs junto al server.
+    # REAL audio for the warmup (silence emits ~0 tokens and doesn't exercise
+    # the TDT loop; the chirp does). Order: repo fixture, model test_wavs,
+    # test_wavs next to the server.
     import glob
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -108,8 +108,8 @@ def _find_warmup_wav():
 
 
 def _synth_chirp(seconds=0.7):
-    # Fallback si no hay ningún wav: chirp 300->1400Hz con armónicos
-    # (nunca silencio: tiene que emitir tokens de verdad).
+    # Fallback if there's no wav at all: 300->1400Hz chirp with harmonics
+    # (never silence: it must emit real tokens).
     import numpy as np
 
     n = int(16000 * seconds)
@@ -123,10 +123,10 @@ def _synth_chirp(seconds=0.7):
 if __name__ == "__main__":
     import uvicorn
 
-    # Warmup tolerante: carga encoder/decoder/joiner + decode COMPLETO con
-    # habla real para que el primer turno no pague ni el load ni el page-in
-    # (~5s bajo swap). Si el modelo falta, se avisa y se arranca igual (el
-    # STT cae a Whisper como antes, la cadena no muere).
+    # Tolerant warmup: loads encoder/decoder/joiner + FULL decode with
+    # real speech so the first turn pays neither the load nor the page-in
+    # (~5s under swap). If the model is missing, warn and start anyway (the
+    # STT falls back to Whisper as before, the chain doesn't die).
     try:
         _rec = get_recognizer()
         _wav_path = _find_warmup_wav()

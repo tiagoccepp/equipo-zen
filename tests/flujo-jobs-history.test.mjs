@@ -1,6 +1,6 @@
-// Tests T4 (jobs historial + replay): record/list/load roundtrip en workspace
-// temporal + replay re-encola con session fake. Cero modelo, cero disco real:
-// todo escribe bajo mkdtemp, nunca en workspace/ del repo.
+// T4 tests (jobs history + replay): record/list/load roundtrip in a temp
+// workspace + replay re-enqueues with a fake session. Zero model, zero real disk:
+// everything writes under mkdtemp, never into the repo workspace/.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -68,8 +68,8 @@ function fakeSession() {
 
 const fetchUrlFake = async (q) => `hallazgo: ${String(q).slice(0, 40)}`;
 
-// ── 1. Paths sanitizados ───────────────────────────────────────────────
-test('jobRecordPath: slug/id con ../ quedan dentro del base', () => {
+// ── 1. Sanitized paths ───────────────────────────────────────────────
+test('jobRecordPath: slug/id with ../ stay inside the base', () => {
   const base = freshBase();
   const p = jobRecordPath('../../etc', '../../../x', base);
   assert.ok(p.startsWith(base + '/'), `escapó del base: ${p}`);
@@ -78,8 +78,8 @@ test('jobRecordPath: slug/id con ../ quedan dentro del base', () => {
   assert.equal(normal, join(base, 'mi-slug', 'jobs', 'job-abc.json'));
 });
 
-// ── 2. Roundtrip append/list/load ──────────────────────────────────────
-test('append/list/load roundtrip en workspace temporal', async () => {
+// ── 2. append/list/load roundtrip ──────────────────────────────────────
+test('append/list/load roundtrip in temp workspace', async () => {
   const base = freshBase();
   const brief = briefBase();
   await appendJobHistory('proj-a', 'job-1', { tipo: 'brief', texto: brief.objetivo }, { baseDir: base, brief });
@@ -110,8 +110,8 @@ test('append/list/load roundtrip en workspace temporal', async () => {
   assert.equal(await loadJobRecord('nope', 'job-1', { baseDir: base }), null);
 });
 
-// ── 3. Lista: orden, límite y filtro por slug ───────────────────────────
-test('listJobHistory: orden desc, limit y filtro slug', async () => {
+// ── 3. List: order, limit and slug filter ──────────────────────────────
+test('listJobHistory: desc order, limit and slug filter', async () => {
   const base = freshBase();
   await appendJobHistory('s1', 'job-old', { tipo: 'brief' }, { baseDir: base, brief: briefBase() });
   await new Promise((r) => setTimeout(r, 15));
@@ -132,8 +132,8 @@ test('listJobHistory: orden desc, limit y filtro slug', async () => {
   assert.equal(await findJobRecord('job-zzz', { baseDir: base }), null);
 });
 
-// ── 4. runJob deja historial completo ──────────────────────────────────
-test('runJob con jobsBaseDir: brief+fases+history+estado en disco', async () => {
+// ── 4. runJob leaves full history ──────────────────────────────────────
+test('runJob with jobsBaseDir: brief+phases+history+status on disk', async () => {
   __resetRegistry();
   const base = freshBase();
   const { session } = fakeSession();
@@ -155,7 +155,7 @@ test('runJob con jobsBaseDir: brief+fases+history+estado en disco', async () => 
   for (const t of ['brief', 'plan_listo', 'dispatch', 'entrega', 'aprobado']) {
     assert.ok(tipos.includes(t), `falta evento ${t}: ${tipos.join(',')}`);
   }
-  // Orden preservado por la cola por-archivo (brief primero, aprobado último).
+  // Order preserved by the per-file queue (brief first, aprobado last).
   assert.equal(tipos[0], 'brief');
   assert.equal(tipos[tipos.length - 1], 'aprobado');
 
@@ -163,8 +163,8 @@ test('runJob con jobsBaseDir: brief+fases+history+estado en disco', async () => 
   assert.ok(lista.some((j) => j.id === final.id && j.estado === 'aprobado'));
 });
 
-// ── 5. Replay: brief guardado se re-encola como job nuevo ───────────────
-test('replay: loadJobBrief + enqueueJob corre un job nuevo hasta aprobado', async () => {
+// ── 5. Replay: saved brief re-enqueues as a new job ───────────────────
+test('replay: loadJobBrief + enqueueJob runs a new job until approved', async () => {
   __resetRegistry();
   const base = freshBase();
   const { session } = fakeSession();
@@ -199,14 +199,14 @@ test('replay: loadJobBrief + enqueueJob corre un job nuevo hasta aprobado', asyn
   assert.equal(lista.length, 2);
 });
 
-// ── 6. Sin recording: cero writes fuera del loop ────────────────────────
-test('sin recordHistory ni jobsBaseDir: no escribe en el workspace real', async () => {
+// ── 6. Without recording: zero writes outside the loop ─────────────────
+test('without recordHistory or jobsBaseDir: does not write to the real workspace', async () => {
   __resetRegistry();
   const { session } = fakeSession();
   const final = await runJob(session, briefBase({ fases: FASES_1 }), { fetchUrl: fetchUrlFake });
   assert.equal(final.estado, 'aprobado');
   await flushJobHistory();
-  // Si el driver hubiera grabado por default, este brief existiría en disco.
+  // If the driver recorded by default, this brief would exist on disk.
   assert.equal(await loadJobBrief('general', final.id), null);
   assert.equal(await findJobRecord(final.id), null);
 });

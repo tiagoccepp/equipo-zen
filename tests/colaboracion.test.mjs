@@ -21,18 +21,18 @@ function escenario() {
   return { store, company, workforce, eventos, goal, equipo, task: store.getTask(taskId) };
 }
 
-// Contestador falso: no se llama a ningún modelo real en los tests.
+// Fake responder: no real model is called in the tests.
 function responder(workforce, texto) {
   workforce.consultarCompanero = Workforce.prototype.consultarCompanero;
   return texto;
 }
 
-test('la consulta llega a la persona nombrada', async (t) => {
+test('the question reaches the named person', async (t) => {
   const { store, company, workforce, eventos, goal, equipo, task } = escenario();
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
 
   const destino = equipo[1];
-  // Se intercepta la llamada al modelo, no el método: interesa el ruteo real.
+  // The model call is intercepted, not the method: the real routing is what matters.
   const original = workforce.consultarCompanero.bind(workforce);
   let vistoPrompt = null;
   workforce.consultarCompanero = async (cid, args) => {
@@ -51,7 +51,7 @@ test('la consulta llega a la persona nombrada', async (t) => {
   assert.equal(pedida.dePersona, equipo[0].name);
 });
 
-test('sin pregunta no se molesta a nadie', async (t) => {
+test('without a question nobody gets bothered', async (t) => {
   const { company, workforce, goal, equipo, task } = escenario();
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
 
@@ -62,7 +62,7 @@ test('sin pregunta no se molesta a nadie', async (t) => {
   assert.match(r.observacion, /pregunta/i);
 });
 
-test('un nombre que no existe devuelve la lista del equipo, no un error crudo', async (t) => {
+test('an unknown name returns the team list, not a raw error', async (t) => {
   const { company, workforce, goal, equipo, task } = escenario();
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
 
@@ -74,18 +74,18 @@ test('un nombre que no existe devuelve la lista del equipo, no un error crudo', 
   assert.match(r.observacion, new RegExp(equipo[1].name), 'le dice a quién SÍ puede preguntarle');
 });
 
-test('nadie se consulta a sí mismo', async (t) => {
+test('nobody consults themselves', async (t) => {
   const { company, workforce, goal, equipo, task } = escenario();
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
 
   const r = await workforce.consultarCompanero(company.id, {
     quienPregunta: equipo[0], aQuien: equipo[0].name, pregunta: '¿qué hago?', goal, slug: goal.slug, task
   }).catch(() => ({ ok: false, observacion: '' }));
-  // O no lo encuentra (no está en la lista de compañeros) o rutea a otro.
+  // Either it does not find them (not on the teammates list) or it routes to someone else.
   assert.ok(!r.ok || true);
 });
 
-test('sin destinatario contesta quien tiene el oficio', () => {
+test('without a recipient, whoever has the craft answers', () => {
   const { workforce, equipo } = escenario();
   const front = equipo.find((a) => a.domains.includes('css'));
   assert.ok(front, 'la plantilla tiene a alguien de css');
@@ -93,15 +93,15 @@ test('sin destinatario contesta quien tiene el oficio', () => {
   assert.equal(elegido?.id, front.id);
 });
 
-test('una pregunta sin relación con nadie no elige a cualquiera', () => {
+test('a question unrelated to anyone does not pick just anybody', () => {
   const { workforce, equipo } = escenario();
   assert.equal(workforce.mejorParaLaPregunta(equipo, 'zzzz qqqq wwww'), null);
 });
 
-// La cadena que se rompía en FASA: el par pide cambios, la corrección nace sin
-// archivo, toma el proyecto entero y muere con un mensaje que dice "quizá no
-// sea un entregable" — cuando era justamente eso.
-test('una corrección hereda el archivo y la ola del trabajo que corrige', () => {
+// The chain that used to break in FASA: the pair asks for changes, the fix
+// is born without a file, grabs the whole project and dies with a message
+// saying "quizá no sea un entregable" — when that was exactly what it was.
+test('a fix inherits the file and the wave of the work it fixes', () => {
   const { store, company, workforce, goal, equipo } = escenario();
   const autor = equipo[0];
   const revisor = equipo[1];

@@ -6,13 +6,13 @@ import path from 'node:path';
 import { Store } from '../server/lib/store.js';
 import { anotarEnBitacora, projectDir, Workforce } from '../server/lib/workforce.js';
 
-// Los agentes trabajando JUNTOS: la consulta de pasillo, la revisión entre
-// pares y la bitácora que se pasan de una corrida a la otra.
+// Agents working TOGETHER: the hallway consult, peer review, and the logbook
+// passed from one run to the next.
 //
-// Nada de red ni de modelos: todo lo que se prueba acá pasa ANTES o DESPUÉS de
-// la llamada al modelo (a quién le llega la consulta, quién revisa, qué queda
-// escrito). Los nombres de la plantilla no se usan nunca: se filtra por rol y
-// se leen los nombres reales que devuelve el store.
+// No network nor models: everything tested here happens BEFORE or AFTER the
+// model call (who the consult reaches, who reviews, what stays written).
+// Template names are never used: filter by role and read the real names the
+// store returns.
 
 const plantillas = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
@@ -25,7 +25,7 @@ function escenario(t, { titulo = 'Sitio nuevo' } = {}) {
   const equipo = store.listAgents({ companyId: company.id });
   const dir = projectDir(company.id, goal.slug);
   t.after(() => {
-    // La carpeta del proyecto y la de su empresa: el test no deja nada en workspace/.
+    // The project folder and its company's: the test leaves nothing in workspace/.
     rmSync(dir, { recursive: true, force: true });
     rmSync(path.dirname(dir), { recursive: true, force: true });
     store.close();
@@ -33,21 +33,21 @@ function escenario(t, { titulo = 'Sitio nuevo' } = {}) {
   return { store, company, workforce, eventos, goal, equipo, dir };
 }
 
-// Una tarea encolada en el proyecto, como la que deja una reunión al cerrarse.
+// A task queued in the project, like the one a meeting leaves when closing.
 function encargar(store, goal, agente, { texto, archivo = 'index.html', kind = 'entregable', padre = null }) {
   const id = store.insertTask(null, agente.id, { text: texto, kind, parentTaskId: padre });
   store.assignTaskToGoal(id, goal.id, { kind, targetFile: archivo });
   return store.getTask(id);
 }
 
-// Cómo lo escribiría el modelo cuando no copia el nombre pelado.
+// How the model would write it when it does not copy the bare name.
 const aMedias = (agente) => `${agente.name.toUpperCase()} (el que sabe del tema)`;
 
-test('cuando nombran al compañero a medias, la consulta le llega igual a esa persona y a nadie más', async (t) => {
+test('when the teammate is named halfway, the consult still reaches that person and nobody else', async (t) => {
   const { store, company, workforce, eventos, goal, equipo } = escenario(t);
   const quienPregunta = equipo.find((a) => a.role === 'worker');
   const companeros = equipo.filter((a) => a.id !== quienPregunta.id);
-  // Alguien cuyo nombre no se confunda con el de otro dentro de la misma frase.
+  // Someone whose name cannot be confused with another's inside the same sentence.
   const destino = companeros.find((c) => companeros.every(
     (otro) => otro.id === c.id || !aMedias(c).toLowerCase().includes(otro.name.toLowerCase())
   ));
@@ -71,7 +71,7 @@ test('cuando nombran al compañero a medias, la consulta le llega igual a esa pe
   assert.notEqual(respuesta.nota, 'person not found');
 });
 
-test('si preguntan por alguien que no trabaja en la empresa, no se molesta a nadie y les dicen quiénes están', async (t) => {
+test('if they ask about someone who does not work at the company, nobody is bothered and they are told who is there', async (t) => {
   const { store, company, workforce, eventos, goal, equipo } = escenario(t);
   const quienPregunta = equipo.find((a) => a.role === 'worker');
   const companeros = equipo.filter((a) => a.id !== quienPregunta.id);
@@ -98,7 +98,7 @@ test('si preguntan por alguien que no trabaja en la empresa, no se molesta a nad
   assert.equal(store.taskComments(tarea.id).length, 0, 'no queda registrada una charla que nunca pasó');
 });
 
-test('una consulta sin pregunta no le llega a nadie ni ensucia la actividad del proyecto', async (t) => {
+test('a consult without a question reaches nobody and does not dirty the project activity', async (t) => {
   const { store, company, workforce, eventos, goal, equipo } = escenario(t);
   const quienPregunta = equipo.find((a) => a.role === 'worker');
   const destino = equipo.find((a) => a.role === 'worker' && a.id !== quienPregunta.id);
@@ -115,13 +115,13 @@ test('una consulta sin pregunta no le llega a nadie ni ensucia la actividad del 
   assert.match(respuesta.observacion, /pregunta/i, 'le explican cómo se pregunta en vez de dejarlo colgado');
 });
 
-test('cuando no nombran a nadie, contesta quien sabe del tema y no el primero de la lista', async (t) => {
+test('when nobody is named, whoever knows the topic answers, not the first on the list', async (t) => {
   const { store, company, workforce, eventos, goal, equipo } = escenario(t);
   const quienPregunta = equipo.find((a) => a.role === 'worker');
   const companeros = equipo.filter((a) => a.id !== quienPregunta.id);
 
-  // Una palabra de oficio que tenga UNA sola persona del equipo, y que no sea
-  // justo la primera de la lista: si no, el test no distinguiría nada.
+  // A trade word held by ONE single person on the team, and not exactly
+  // the first on the list: otherwise the test would distinguish nothing.
   const cuantos = new Map();
   for (const companero of companeros) {
     for (const skill of companero.domains.filter((d) => /^[a-záéíóúñ]{5,}$/.test(d))) {
@@ -141,8 +141,8 @@ test('cuando no nombran a nadie, contesta quien sabe del tema y no el primero de
   );
 
   const tarea = encargar(store, goal, quienPregunta, { texto: 'armar la home' });
-  // El modelo mandó la consulta sin el campo "a" (pasa: en workforce.js llega
-  // como String(action.a || '') = ''). La pregunta tiene que caer en quien sabe.
+  // The model sent the consult without the "to" field (it happens: in workforce.js
+  // it arrives as String(action.a || '') = ''). The question must land on whoever knows.
   await workforce.consultarCompanero(company.id, {
     quienPregunta, aQuien: '', pregunta, goal, slug: goal.slug, task: tarea
   });
@@ -156,7 +156,7 @@ test('cuando no nombran a nadie, contesta quien sabe del tema y no el primero de
   );
 });
 
-test('el trabajo de cada uno lo revisa un compañero: nunca esa misma persona, ni el contratista, ni la CEO', (t) => {
+test("everyone's work is reviewed by a teammate: never that same person, nor the contractor, nor the CEO", (t) => {
   const { store, company, workforce, goal, equipo } = escenario(t);
 
   for (const autor of equipo) {
@@ -171,8 +171,8 @@ test('el trabajo de cada uno lo revisa un compañero: nunca esa misma persona, n
     }
   }
 
-  // Y si esa persona ya no está en la empresa, la revisión no queda en manos
-  // de un fantasma: le toca a otro que sí esté.
+  // And if that person is no longer at the company, the review does not stay
+  // in a ghost's hands: it goes to someone who is.
   const autor = equipo.find((a) => a.role === 'worker');
   const tarea = encargar(store, goal, autor, { texto: 'terminar lo que quedó del jueves' });
   const natural = workforce.pickReviewer(company.id, autor, tarea);
@@ -182,19 +182,19 @@ test('el trabajo de cada uno lo revisa un compañero: nunca esa misma persona, n
   assert.equal(store.getAgent(reemplazo.id).status, 'active');
 });
 
-test('no se le pide a nadie revisar lo que no dejó archivos, ni revisar dos veces lo mismo', (t) => {
+test('nobody is asked to review what left no files, nor to review the same thing twice', (t) => {
   const { store, company, workforce, goal, equipo } = escenario(t);
   const autor = equipo.find((a) => a.role === 'worker');
   const revisiones = () => store.tasksForGoal(goal.id).filter((x) => x.kind === 'revision');
 
-  // Una tarea que no produjo nada no tiene qué mirar: pedir esa revisión le
-  // quema una corrida a un compañero para nada.
+  // A task that produced nothing has nothing to look at: requesting that review
+  // burns a run from a teammate for nothing.
   const sinArchivos = encargar(store, goal, autor, { texto: 'pensar el enfoque de la home', archivo: null });
   workforce.requestReview(company.id, autor, sinArchivos, []);
   assert.equal(revisiones().length, 0, 'sin archivos no hay nada que revisar');
 
-  // Con archivos sí, y lo que la máquina ya midió le llega anotado al revisor
-  // para que no vuelva a buscar lo mismo.
+  // With files yes, and what the machine already measured reaches the reviewer
+  // annotated so they do not search for the same thing again.
   const entregable = encargar(store, goal, autor, { texto: 'armar la home' });
   workforce.requestReview(company.id, autor, entregable, ['index.html'], [
     { archivo: 'index.html', que: 'el enlace a contacto.html apunta a un archivo que no existe' }
@@ -211,12 +211,12 @@ test('no se le pide a nadie revisar lo que no dejó archivos, ni revisar dos vec
   assert.match(medido.text, /contacto\.html/);
   assert.ok(store.commentsForProject(goal.id).some((c) => c.id === medido.id), 'y se ve en la actividad del proyecto');
 
-  // La misma tarea reintentada no le vuelve a caer al revisor.
+  // The same retried task does not fall on the reviewer again.
   workforce.requestReview(company.id, autor, store.getTask(entregable.id), ['index.html']);
   assert.equal(revisiones().length, 1, 'a nadie le llega dos veces la misma revisión');
 
-  // La corrección que sale de una revisión tampoco se revisa: ahí termina el
-  // ida y vuelta, en vez de seguir para siempre.
+  // The fix coming out of a review is not reviewed either: the back-and-forth
+  // ends there instead of going on forever.
   const correccion = encargar(store, goal, autor, {
     texto: 'aplicar lo que pidió la revisión', padre: entregable.id
   });
@@ -224,7 +224,7 @@ test('no se le pide a nadie revisar lo que no dejó archivos, ni revisar dos vec
   assert.equal(revisiones().length, 1, 'la corrección de una revisión no dispara otra revisión');
 });
 
-test('el que agarra el proyecto después se entera de lo que dejó pendiente el anterior', async (t) => {
+test('whoever picks up the project later learns what the previous one left pending', async (t) => {
   const { goal, equipo, dir } = escenario(t);
   const [primero, segundo] = equipo.filter((a) => a.role === 'worker');
   mkdirSync(dir, { recursive: true });
@@ -242,7 +242,7 @@ test('el que agarra el proyecto después se entera de lo que dejó pendiente el 
     resumen: 'Unifiqué la paleta en tokens.css.'
   });
 
-  // Vive en la carpeta del proyecto, que es donde la busca la próxima corrida.
+  // It lives in the project folder, which is where the next run looks for it.
   const texto = bitacora();
   assert.ok(texto.includes(primero.name), 'está quién trabajó antes');
   assert.ok(texto.includes(segundo.name), 'y quién trabajó después');
@@ -253,8 +253,8 @@ test('el que agarra el proyecto después se entera de lo que dejó pendiente el 
   );
   assert.equal(texto.match(/# Project log/g).length, 1, 'una sola cabecera');
 
-  // Con los meses la bitácora crece. Se recorta, pero lo que sobrevive tiene
-  // que ser lo reciente: es lo que le sirve al que entra ahora.
+  // Over the months the logbook grows. It gets trimmed, but what survives must
+  // be the recent stuff: that is what serves whoever comes in now.
   for (let i = 0; i < 60; i += 1) {
     await anotarEnBitacora(dir, {
       agente: segundo.name,

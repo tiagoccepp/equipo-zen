@@ -3,26 +3,26 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-// OpenPencil como entorno de diseño real del equipo.
+// OpenPencil as the team's real design environment.
 // https://github.com/ZSeven-W/openpencil — MIT, Rust, self-contained.
 //
-// Qué resuelve: la diseñadora dejaba de "diseñar" escribiendo un theme.js a
-// mano y el dev tenía que adivinar la intención. Ahora hay un archivo de diseño
-// de verdad (.op, JSON versionable) con sus tokens, que el dev CONSUME en vez de
-// reinterpretar. Es el handoff diseño→código que en FASA no existía.
+// What it solves: the designer used to "design" by hand-writing a theme.js and
+// the dev had to guess the intent. Now there is a real design file
+// (.op, versionable JSON) with its tokens, which the dev CONSUMES instead of
+// reinterpreting. It is the design→code handoff that did not exist in FASA.
 //
-// Cómo se maneja: `op` es un cliente HTTP/MCP contra un servidor headless por
-// proyecto. Un servidor por proyecto, en su propio puerto, arrancado bajo
-// demanda y apagado cuando el proyecto queda quieto.
+// How it is driven: `op` is an HTTP/MCP client against one headless server per
+// project. One server per project, on its own port, started on
+// demand and stopped when the project goes idle.
 //
-// Verificado en esta máquina: v0.8.2, 160 herramientas MCP, tokens que se
-// escriben y se leen, y exportación a PNG del nodo.
+// Verified on this machine: v0.8.2, 160 MCP tools, tokens that
+// round-trip, and PNG export of the node.
 
 const OP_BIN = process.env.OP_BIN || path.join(process.env.HOME || '', '.local', 'bin', 'op');
 const DESKTOP_BIN = process.env.OPENPENCIL_DESKTOP_BIN
   || path.join(process.env.HOME || '', '.local', 'bin', 'openpencil-desktop');
 
-// Un puerto por proyecto, estable para el mismo proyecto entre corridas.
+// One port per project, stable for the same project across runs.
 const PUERTO_BASE = Number(process.env.OPENPENCIL_PORT_BASE || 3300);
 const ARCHIVO_DISENO = 'diseno.op';
 
@@ -43,8 +43,8 @@ export function motivoNoDisponible() {
   return '';
 }
 
-// Puerto determinístico a partir de la clave del proyecto: el mismo proyecto
-// siempre cae en el mismo puerto, así reabrirlo reusa el servidor.
+// Deterministic port from the project key: the same project
+// always lands on the same port, so reopening it reuses the server.
 function puertoPara(clave) {
   let hash = 0;
   for (const c of String(clave)) {
@@ -80,8 +80,8 @@ export async function abrirDiseno(dir, clave) {
     return { ok: true, puerto, yaEstaba: true };
   }
 
-  // El editor headless vive lo que dure la sesión: se lo desprende para que no
-  // se caiga con el comando que lo arrancó.
+  // The headless editor lives as long as the session: it is detached so it
+  // does not die with the command that started it.
   const proceso = spawn(OP_BIN, ['start', '--headless', '--file', ARCHIVO_DISENO, '--port', String(puerto)], {
     cwd: dir,
     detached: true,
@@ -90,7 +90,7 @@ export async function abrirDiseno(dir, clave) {
   });
   proceso.unref();
 
-  // Esperar a que acepte conexiones. Sin esto, el primer comando falla.
+  // Wait until it accepts connections. Without this, the first command fails.
   for (let intento = 0; intento < 20; intento += 1) {
     await new Promise((r) => setTimeout(r, 700));
     const estado = await correrOp(['status'], { cwd: dir, puerto, timeout: 6000 });
@@ -108,7 +108,7 @@ export async function cerrarDiseno(dir, clave) {
   servidores.delete(clave);
 }
 
-// Un comando de OpenPencil, con el servidor levantado si hace falta.
+// One OpenPencil command, bringing the server up when needed.
 export async function diseno(dir, clave, args, { timeout = 120000 } = {}) {
   const abierto = await abrirDiseno(dir, clave);
   if (!abierto.ok) {
@@ -117,10 +117,10 @@ export async function diseno(dir, clave, args, { timeout = 120000 } = {}) {
   return correrOp(args, { cwd: dir, puerto: abierto.puerto, timeout });
 }
 
-// ── Lo que el dev consume ───────────────────────────────────────────────
+// ── What the dev consumes ───────────────────────────────────────────────
 //
-// Los tokens del diseño, traducidos al formato del nicho. Esto es el handoff:
-// el dev no reinterpreta el diseño, importa exactamente sus valores.
+// The design tokens, translated to the niche format. This is the handoff:
+// the dev does not reinterpret the design, it imports its exact values.
 
 export async function leerTokensDelDiseno(dir) {
   const ruta = path.join(dir, ARCHIVO_DISENO);
@@ -136,9 +136,9 @@ export async function leerTokensDelDiseno(dir) {
   }
 }
 
-// Los tokens como el código del nicho los espera. Se genera, no se pide al
-// modelo: traducir un JSON es determinista y gastar una llamada en eso es
-// tirar la clave de API a la basura.
+// The tokens as the niche code expects them. Generated, never asked from the
+// model: translating a JSON is deterministic and spending a call on that is
+// throwing the API key away.
 export function tokensComoCodigo(variables, stack) {
   if (!variables) {
     return null;
@@ -184,7 +184,7 @@ export function tokensComoCodigo(variables, stack) {
       ].join('\n')
     };
   }
-  // web y automatización: variables CSS.
+  // web and automatizacion: CSS variables.
   return {
     archivo: 'tokens.css',
     contenido: [
@@ -198,8 +198,8 @@ export function tokensComoCodigo(variables, stack) {
   };
 }
 
-// El bloque del prompt. Distinto según el oficio: la diseñadora DISEÑA en
-// OpenPencil; el dev LEE ese diseño y lo implementa.
+// The prompt block. Different per craft: the designer DESIGNS in
+// OpenPencil; the dev READS that design and implements it.
 export function renderDiseno({ esDisenador, hayDiseno, tokens, stack }) {
   if (!disponible()) {
     return '';
@@ -243,7 +243,7 @@ export function renderDiseno({ esDisenador, hayDiseno, tokens, stack }) {
   ].join('\n');
 }
 
-// ¿Este agente es el que diseña? Por oficio, no por nombre.
+// Is this agent the designer? By craft, not by name.
 export function esAgenteDeDiseno(agent) {
   const texto = `${agent.title} ${(agent.domains || []).join(' ')}`.toLowerCase();
   return /dise[ñn]|arte|ux|ui|material|producto m[oó]vil/.test(texto);

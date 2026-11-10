@@ -1,31 +1,31 @@
-// Conciencia de equipo: qué está haciendo cada uno EN ESTE MOMENTO.
+// Team awareness: what everyone is doing RIGHT NOW.
 //
-// El esquema de archivos (fileOwnersForGoal) ya dice quién es dueño de qué,
-// pero es la foto del reparto, no del presente: el agente que trabaja no sabía
-// si el archivo que necesita lo está escribiendo un compañero AHORA, si ya
-// quedó entregado o si no lo tomó nadie. Sin eso duplicaba trabajo — pasó de
-// verdad: dos pantallas de juego distintas y ninguna montada en la app.
+// The file map (fileOwnersForGoal) already says who owns what,
+// but it's the snapshot of the split, not of the present: the working agent didn't know
+// whether the file it needs is being written by a teammate RIGHT NOW, whether it
+// was already delivered or whether nobody picked it up. Without that it duplicated
+// work — it really happened: two different game screens and neither mounted in the app.
 //
-// Lo que este bloque agrega sobre el esquema son las TRES respuestas que el
-// esquema no puede dar: entro, espero, o edito lo que ya está.
+// What this block adds on top of the map are the THREE answers the
+// map can't give: go in, wait, or edit what's already there.
 //
-// TOPE DURO de caracteres, y no es cosmético: es la regla medida del proyecto.
-// Con 15.000 caracteres de contexto contra 2.000 de protocolo el modelo deja de
-// emitir acciones y contesta en prosa. Esta conciencia se gana el lugar solo si
-// es corta, así que primero se recorta lo menos urgente (la cola) y último lo
-// que evita el choque (quién escribe ahora).
+// HARD character cap, and it's not cosmetic: it's the project's measured rule.
+// With 15,000 chars of context against 2,000 of protocol the model stops
+// emitting actions and answers in prose. This awareness earns its place only if
+// it's short, so the least urgent (the queue) is trimmed first and last what
+// avoids collisions (who is writing now).
 
 export const TOPE_CONCIENCIA = 900;
 
-// Entradas por lista. Cuatro alcanza para saber si hay que esperar; la quinta
-// ya es ruido que le come lugar al protocolo. Lo que se cae se cuenta con "+N",
-// que informa la escala en 3 caracteres.
+// Entries per list. Four is enough to know whether to wait; the fifth
+// is already noise eating the protocol's space. What falls off is counted with "+N",
+// which reports the scale in 3 characters.
 const MAX_ENTRADAS = 4;
 const LARGO_LINEA = 150;
 const LARGO_ETIQUETA = 44;
 
-// Solo el trabajo real. Las 'decision' y los 'seguimiento' quedan en estado
-// 'noted': nadie los trabaja, así que en el presente del equipo no existen.
+// Real work only. 'decision' and 'seguimiento' kinds stay in 'noted'
+// state: nobody works them, so in the team's present they don't exist.
 const KINDS_DE_TRABAJO = new Set(['entregable', 'revision', 'refinamiento']);
 
 function recortar(texto, largo) {
@@ -33,10 +33,10 @@ function recortar(texto, largo) {
   return limpio.length > largo ? `${limpio.slice(0, largo - 1)}…` : limpio;
 }
 
-// Una ruta larga se corta por la IZQUIERDA, no por la derecha. Cortada al final
-// queda "app/src/main/java/com/equipo/app/ui/Pantall…", que son 44 caracteres
-// que no distinguen una pantalla de otra — justo lo que este bloque existe para
-// evitar. El nombre del archivo es lo único irremplazable; la carpeta se deduce.
+// A long path is cut on the LEFT, not on the right. Cut at the end it
+// becomes "app/src/main/java/com/equipo/app/ui/Pantall…", 44 characters
+// that don't tell one screen from another — exactly what this block exists to
+// avoid. The file name is the only irreplaceable part; the folder is inferred.
 function recortarRuta(ruta, largo) {
   const limpio = String(ruta || '').trim();
   if (limpio.length <= largo) {
@@ -47,14 +47,14 @@ function recortarRuta(ruta, largo) {
   while (partes.length > 0 && `…/${partes[partes.length - 1]}/${cola}`.length <= largo) {
     cola = `${partes.pop()}/${cola}`;
   }
-  // Un solo nombre de archivo más largo que el tope: ahí sí se corta a lo bruto,
-  // pero conservando el final (la extensión dice de qué se trata).
+  // A single file name longer than the cap: then it is cut brutally,
+  // but keeping the end (the extension says what it's about).
   return `…/${cola}`.length <= largo ? `…/${cola}` : `…${cola.slice(-(largo - 1))}`;
 }
 
-// Con qué se nombra una tarea. El ARCHIVO primero siempre: es la unidad del
-// cerrojo y lo único que le sirve al que lee para saber si choca con él. Una
-// tarea sin archivo (una revisión, por ejemplo) cae a su texto, bien corto.
+// What a task is named with. The FILE first always: it's the lock unit
+// and the only thing the reader needs to know whether it collides. A
+// task without a file (a review, e.g.) falls back to its text, very short.
 function etiquetaDe(tarea) {
   if (tarea.target_file) {
     return recortarRuta(tarea.target_file, LARGO_ETIQUETA);
@@ -65,8 +65,8 @@ function etiquetaDe(tarea) {
   return recortar(tarea.text, 28);
 }
 
-// El estado vivo del proyecto, ya visto desde los ojos de quien va a leerlo:
-// sus propias cosas dicen "vos" y lo que toca SU archivo va primero.
+// The project's live state, already seen through the reader's eyes:
+// their own stuff says "vos" and what touches THEIR file goes first.
 export function estadoVivo(store, goalId, { agentId = null, taskId = null, miArchivo = null } = {}) {
   const vacio = { ahora: [], listos: [], cola: [] };
   if (!store || !goalId) {
@@ -84,15 +84,15 @@ export function estadoVivo(store, goalId, { agentId = null, taskId = null, miArc
     return store.getAgent?.(id)?.name || 'un compañero';
   };
 
-  // La ola viva: la fase más baja con trabajo sin cerrar. Una tarea de una ola
-  // posterior no está esperando a nadie en particular, está esperando el turno.
+  // The live wave: the lowest phase with unclosed work. A task from a later wave
+  // isn't waiting on anyone in particular, it's waiting its turn.
   const faseViva = tareas
     .filter((t) => (t.status === 'pending' || t.status === 'in_progress') && Number.isFinite(t.phase))
     .reduce((min, t) => (min === null || t.phase < min ? t.phase : min), null);
 
   const enCurso = tareas.filter((t) => t.status === 'in_progress' && t.id !== taskId);
-  // Quién tiene tomado cada archivo AHORA: es lo que convierte "está en la cola"
-  // en "está esperando a Renata".
+  // Who holds each file RIGHT NOW: it's what turns "it's in the queue"
+  // into "it's waiting on Renata".
   const duenoAhora = new Map();
   for (const t of enCurso) {
     if (t.target_file && !duenoAhora.has(t.target_file)) {
@@ -101,14 +101,14 @@ export function estadoVivo(store, goalId, { agentId = null, taskId = null, miArc
   }
 
   const tocaMiArchivo = (t) => Boolean(miArchivo && t.target_file === miArchivo);
-  // Lo que pisa MI archivo va primero: es la única entrada que puede cambiar lo
-  // que hago en este paso.
+  // What steps on MY file goes first: it's the only entry that can change what
+  // I do in this step.
   const ordenar = (lista) => [...lista].sort((a, b) => Number(tocaMiArchivo(b.tarea)) - Number(tocaMiArchivo(a.tarea)));
 
   const ahora = ordenar(
     enCurso
-      // Uno mismo no es "el equipo": verse en la lista de quién trabaja ahora
-      // es ruido, y peor, se lee como que otro le está tocando el archivo.
+      // Oneself is not "the team": seeing yourself in the who's-working-now list
+      // is noise, and worse, it reads as if someone else is touching your file.
       .filter((t) => !(agentId && t.agent_id === agentId))
       .map((t) => ({ tarea: t, texto: `${nombreDe(t.agent_id)}→${etiquetaDe(t)}` }))
   );
@@ -123,9 +123,9 @@ export function estadoVivo(store, goalId, { agentId = null, taskId = null, miArc
     tareas
       .filter((t) => t.status === 'pending' && t.id !== taskId)
       .map((t) => {
-        // De quién depende, en orden de qué le sirve más al que lee: el autor
-        // del entregable que su revisión espera, quien tiene el archivo tomado
-        // ahora, o la ola que todavía no abrió.
+        // What it depends on, ordered by usefulness to the reader: the author
+        // of the deliverable its review waits on, whoever holds the file
+        // now, or the wave that hasn't opened yet.
         const padre = t.parent_task_id && store.getTask ? store.getTask(t.parent_task_id) : null;
         const espera = padre
           ? `tras ${nombreDe(padre.agent_id)}`
@@ -139,9 +139,9 @@ export function estadoVivo(store, goalId, { agentId = null, taskId = null, miArc
   return { ahora, listos, cola };
 }
 
-// El bloque para el prompt de trabajo. Devuelve '' cuando no hay nada que
-// contar: un agente solo en su proyecto no tiene que leer un cartel vacío que
-// le saque lugar al protocolo.
+// The block for the work prompt. Returns '' when there's nothing to
+// tell: a lone agent on its project shouldn't read an empty sign that
+// steals the protocol's space.
 export function renderConciencia(store, {
   goalId = null,
   agentId = null,
@@ -154,10 +154,10 @@ export function renderConciencia(store, {
     return '';
   }
 
-  // Se cae la entrada ENTERA, nunca media: una línea cortada al medio deja un
-  // nombre de archivo mentiroso ("src/pantallas/Pantalla…") que el agente puede
-  // intentar abrir. Y lo que no entró se cuenta con "+N", que en 3 caracteres
-  // dice que hay más equipo del que se ve.
+  // The WHOLE entry falls off, never half: a line cut in the middle leaves a
+  // lying file name ("src/pantallas/Pantalla…") that the agent might
+  // try to open. And what didn't fit is counted with "+N", which in 3 characters
+  // says there's more team than meets the eye.
   const linea = (rotulo, lista, cuantas) => {
     if (cuantas <= 0 || lista.length === 0) {
       return '';
@@ -181,9 +181,9 @@ export function renderConciencia(store, {
   let nListos = Math.min(listos.length, MAX_ENTRADAS);
   let nCola = Math.min(cola.length, MAX_ENTRADAS);
 
-  // Las reglas son el motivo del bloque: sin ellas el agente sabe el estado y
-  // sigue sin saber qué hacer con él. Cada una entra solo si hay algo a lo que
-  // aplicarle; la última va siempre, porque es la que lo desbloquea.
+  // The rules are the point of the block: without them the agent knows the state
+  // and still doesn't know what to do with it. Each one goes in only if there's
+  // something to apply it to; the last one always goes, because it unblocks.
   const armar = () => [
     '━━ TU EQUIPO, AHORA MISMO ━━',
     linea('AHORA', ahora, nAhora),
@@ -212,7 +212,7 @@ export function renderConciencia(store, {
     }
     bloque = armar();
   }
-  // Red de seguridad: el tope es DURO. Con las listas ya vacías el bloque son
-  // las reglas, que miden menos de 300 caracteres.
+  // Safety net: the cap is HARD. With the lists already empty the block is
+  // the rules, which measure under 300 characters.
   return bloque.length > tope ? `${bloque.slice(0, tope - 1)}…` : bloque;
 }

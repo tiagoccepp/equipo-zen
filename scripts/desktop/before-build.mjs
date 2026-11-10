@@ -1,5 +1,5 @@
-// Idempotente: build.sh ya compiló el frontend antes de podar devDeps.
-// Si el marcador existe, tauri reutiliza dist/ sin tsc+vite.
+// Idempotent: build.sh already compiled the frontend before pruning devDeps.
+// If the marker exists, tauri reuses dist/ without tsc+vite.
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 

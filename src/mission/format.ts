@@ -1,4 +1,4 @@
-// Mission Control — lógica pura (formateo, parse, resumen). Sin DOM ni fetch.
+// Mission Control — pure logic (formatting, parsing, summary). No DOM or fetch.
 
 export interface TaskSummary {
   total: number;
@@ -34,7 +34,7 @@ export function fmtMs(value: unknown): string {
   return `${s >= 10 ? Math.round(s) : s.toFixed(1)} s`;
 }
 
-/** ISO → "hace 3 min" / "hace 2 h" / "—" si inválido. `now` inyectable para tests. */
+/** ISO → "hace 3 min" / "hace 2 h" / "—" if invalid. `now` injectable for tests. */
 export function timeAgo(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) {
     return '—';
@@ -59,7 +59,7 @@ export function timeAgo(iso: string | null | undefined, now = Date.now()): strin
   return `hace ${d} d`;
 }
 
-/** Clase CSS de pill según estado genérico. */
+/** Pill CSS class by generic state. */
 export function pillClass(status: string | null | undefined): 'ok' | 'warn' | 'bad' | 'mute' {
   const s = String(status || '').toLowerCase();
   if (['up', 'healthy', 'done', 'active', 'live', 'on', 'true', 'speaking'].includes(s)) {
@@ -74,7 +74,7 @@ export function pillClass(status: string | null | undefined): 'ok' | 'warn' | 'b
   return 'warn';
 }
 
-/** Punto "up hace X" para sidecars: edad desde lastSpawnAt. */
+/** "up X ago" point for sidecars: age since lastSpawnAt. */
 export function uptimeSince(lastSpawnAt: string | null | undefined, now = Date.now()): string {
   if (!lastSpawnAt) {
     return '—';
@@ -115,7 +115,7 @@ export function summarizeTasks(tasks: Array<{ status: string }>): TaskSummary {
   return out;
 }
 
-/** Elige empresa: 'Pablo'/'Sofia' legacy primero, si no la primera. */
+/** Picks company: legacy 'Pablo'/'Sofia' first, else the first one. */
 export function pickCompany(companies: Array<{ id: string; name: string }>): { id: string; name: string } | null {
   if (!companies.length) {
     return null;
@@ -123,7 +123,7 @@ export function pickCompany(companies: Array<{ id: string; name: string }>): { i
   return companies.find((c) => c.name === 'Pablo' || c.name === 'Sofia') || companies[0];
 }
 
-/** Resume el SOP: cuenta reglas S# + knobs (order/max_rounds/agent_timeout_ms/r2). */
+/** Summarizes the SOP: counts S# rules + knobs (order/max_rounds/agent_timeout_ms/r2). */
 export function parseSopSummary(sopText: string | null | undefined): SopSummary {
   const out: SopSummary = {
     rules: 0,
@@ -182,7 +182,7 @@ export function fmtVol(value: unknown): string {
   return `${Math.round(n * 100)}%`;
 }
 
-/** Nodo default (isDefault) o el primero; null si vacío. */
+/** Default node (isDefault) or the first one; null if empty. */
 export function defaultNode<T extends { isDefault?: boolean }>(nodes: T[]): T | null {
   if (!nodes.length) {
     return null;
@@ -190,7 +190,7 @@ export function defaultNode<T extends { isDefault?: boolean }>(nodes: T[]): T | 
   return nodes.find((n) => n.isDefault === true) || nodes[0];
 }
 
-/** Escape mínimo para interpolar texto del server en HTML. */
+/** Minimal escape for interpolating server text into HTML. */
 export function esc(text: string | null | undefined): string {
   return String(text ?? '')
     .replace(/&/g, '&amp;')

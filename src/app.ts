@@ -833,7 +833,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   let locale = 'en-US';
   try {
     const settings = await getSettings();
-    locale = settings.stt.language.startsWith('en') ? 'en-US' : 'es-ES';
+    locale = settings.stt.language.startsWith('es') ? 'es-ES' : 'en-US';
   } catch {
     // Sin backend: inglés por defecto.
   }

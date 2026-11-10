@@ -1,5 +1,5 @@
-// Track B: MCP config por archivo + env merge + proxy strip.
-// Sigue el patrón fake-server de tests/mcp.test.mjs (JSON-RPC stdio, fixture temporal).
+// Track B: MCP config from file + env merge + proxy strip.
+// Follows the fake-server pattern from tests/mcp.test.mjs (JSON-RPC stdio, temp fixture).
 
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,8 +15,8 @@ const ENV_TIMEOUT = 'PABLO_MCP_TIMEOUT_MS';
 const NODE = process.execPath;
 const PROXY_VARS = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY'];
 
-// Fake server: initialize + list (echo, sumar) + call con eco de args Y de env.
-// El call devuelve dos líneas: "eco:{args}" y "ENV:{json con vars selectas}".
+// Fake server: initialize + list (echo, sumar) + call echoing args AND env.
+// The call returns two lines: "eco:{args}" and "ENV:{json with selected vars}".
 const FAKE_SERVER = `
 import { createInterface } from 'node:readline';
 const rl = createInterface({ input: process.stdin, terminal: false });
@@ -116,8 +116,8 @@ afterEach(async () => {
   await shutdown();
 });
 
-test('fallback archivo: HOME temporal con config válido -> readMcpConfig + getMcpTools', async () => {
-  // Sin env, con archivo válido.
+test('file fallback: temp HOME with valid config -> readMcpConfig + getMcpTools', async () => {
+  // No env, with valid file.
   writeHomeConfig([fakeEntry('file')]);
   const cfg = readMcpConfig();
   assert.equal(cfg.length, 1);
@@ -127,7 +127,7 @@ test('fallback archivo: HOME temporal con config válido -> readMcpConfig + getM
   assert.deepEqual(names, ['mcp_file_echo', 'mcp_file_sumar']);
 });
 
-test('env tiene prioridad sobre archivo', async () => {
+test('env takes priority over file', async () => {
   writeHomeConfig([fakeEntry('file')]);
   setServers([fakeEntry('env')]);
   const cfg = readMcpConfig();
@@ -138,19 +138,19 @@ test('env tiene prioridad sobre archivo', async () => {
   assert.deepEqual(names, ['mcp_env_echo', 'mcp_env_sumar']);
 });
 
-test('archivo ausente o inválido -> [] sin throw', async () => {
-  // Ausente.
+test('missing or invalid file -> [] without throwing', async () => {
+  // Missing.
   assert.deepEqual(readMcpConfig(), []);
   assert.deepEqual(await getMcpTools(), []);
-  // JSON inválido.
+  // Invalid JSON.
   writeHomeConfig('esto no es json {{{');
   assert.deepEqual(readMcpConfig(), []);
-  // No-array.
+  // Not an array.
   writeHomeConfig({ no: 'array' });
   assert.deepEqual(readMcpConfig(), []);
 });
 
-test('merge env: entry.env llega al hijo (vía env)', async () => {
+test('env merge: entry.env reaches the child (via env)', async () => {
   setServers([fakeEntry('wenv', { env: { TEST_MCP_FOO: 'hola-env' } })]);
   const cfg = readMcpConfig();
   assert.equal(cfg.length, 1);
@@ -161,7 +161,7 @@ test('merge env: entry.env llega al hijo (vía env)', async () => {
   assert.equal(seen.TEST_MCP_FOO, 'hola-env');
 });
 
-test('merge env: entry.env llega al hijo (vía archivo)', async () => {
+test('env merge: entry.env reaches the child (via file)', async () => {
   writeHomeConfig([fakeEntry('fenv', { env: { TEST_MCP_FOO: 'desde-archivo' } })]);
   const cfg = readMcpConfig();
   assert.equal(cfg.length, 1);
@@ -172,12 +172,12 @@ test('merge env: entry.env llega al hijo (vía archivo)', async () => {
   assert.equal(seen.TEST_MCP_FOO, 'desde-archivo');
 });
 
-test('proxy strip: hijo no ve proxies del padre + NODE_USE_ENV_PROXY=0', async () => {
+test('proxy strip: child does not see parent proxies + NODE_USE_ENV_PROXY=0', async () => {
   process.env.http_proxy = 'http://padre:8080';
   process.env.https_proxy = 'http://padre:8080';
   process.env.HTTP_PROXY = 'http://padre:8080';
   process.env.HTTPS_PROXY = 'http://padre:8080';
-  // Padre NO define NODE_USE_ENV_PROXY; el hijo debe ver '0'.
+  // Parent does NOT define NODE_USE_ENV_PROXY; the child must see '0'.
   setServers([fakeEntry('px', { env: { TEST_MCP_FOO: 'con-proxy-padre' } })]);
   const res = await callMcpTool('mcp_px_echo', { text: 'x' });
   assert.equal(res.ok, true);
@@ -187,11 +187,11 @@ test('proxy strip: hijo no ve proxies del padre + NODE_USE_ENV_PROXY=0', async (
   assert.equal(seen.HTTP_PROXY, null);
   assert.equal(seen.HTTPS_PROXY, null);
   assert.equal(seen.NODE_USE_ENV_PROXY, '0');
-  // Y el merge de entry.env sigue funcionando con strip activo.
+  // And entry.env merge still works with strip active.
   assert.equal(seen.TEST_MCP_FOO, 'con-proxy-padre');
 });
 
-test('buildMcpEnv unitario: strip + merge + entry gana', async () => {
+test('buildMcpEnv unit: strip + merge + entry wins', async () => {
   process.env.http_proxy = 'http://padre:8080';
   process.env.HTTP_PROXY = 'http://padre:8080';
   const base = buildMcpEnv(undefined);
@@ -200,15 +200,15 @@ test('buildMcpEnv unitario: strip + merge + entry gana', async () => {
   assert.equal(base.NODE_USE_ENV_PROXY, '0');
   const merged = buildMcpEnv({ TEST_MCP_FOO: 'v', NODE_USE_ENV_PROXY: '1' });
   assert.equal(merged.TEST_MCP_FOO, 'v');
-  // entry.env gana si colisiona.
+  // entry.env wins on collision.
   assert.equal(merged.NODE_USE_ENV_PROXY, '1');
-  // Valores no-string se ignoran.
+  // Non-string values are ignored.
   const mixed = buildMcpEnv({ OK: 'si', NO: 123 });
   assert.equal(mixed.OK, 'si');
   assert.equal(mixed.NO, undefined);
 });
 
-test('McpClient directo acepta {env} y lo mergea con strip', async () => {
+test('direct McpClient accepts {env} and merges it with strip', async () => {
   process.env.http_proxy = 'http://padre:8080';
   const c = new McpClient({ cmd: NODE, args: [fixture], timeoutMs: 5000, env: { TEST_MCP_FOO: 'directo' } });
   await c.start();
@@ -221,17 +221,17 @@ test('McpClient directo acepta {env} y lo mergea con strip', async () => {
   await c.close();
 });
 
-test('entradas inválidas se saltean (vía env)', async () => {
+test('invalid entries are skipped (via env)', async () => {
   setServers([
     null,
     'string',
-    { name: '', cmd: NODE, args: [fixture] },           // name vacío
-    { name: 'noname' },                                  // sin cmd
-    { name: 'nocmd', cmd: '   ' },                       // cmd vacío
-    { name: 'badargs', cmd: NODE, args: 'no-array' },    // args no array
-    { name: 'badargs2', cmd: NODE, args: [123] },        // args no strings
-    { name: 'badenv', cmd: NODE, args: [fixture], env: 'no-obj' },       // env no objeto
-    { name: 'badenv2', cmd: NODE, args: [fixture], env: { K: 123 } },     // env valor no string
+    { name: '', cmd: NODE, args: [fixture] },           // empty name
+    { name: 'noname' },                                  // no cmd
+    { name: 'nocmd', cmd: '   ' },                       // empty cmd
+    { name: 'badargs', cmd: NODE, args: 'no-array' },    // args not array
+    { name: 'badargs2', cmd: NODE, args: [123] },        // args not strings
+    { name: 'badenv', cmd: NODE, args: [fixture], env: 'no-obj' },       // env not object
+    { name: 'badenv2', cmd: NODE, args: [fixture], env: { K: 123 } },     // env value not string
     { name: 'badenv3', cmd: NODE, args: [fixture], env: ['array'] },      // env array
     fakeEntry('buena'),
   ]);
@@ -242,9 +242,9 @@ test('entradas inválidas se saltean (vía env)', async () => {
   assert.deepEqual(tools.map((t) => t.name).sort(), ['mcp_buena_echo', 'mcp_buena_sumar']);
 });
 
-test('entradas inválidas se saltean (vía archivo)', async () => {
+test('invalid entries are skipped (via file)', async () => {
   writeHomeConfig([
-    { name: 'rota' }, // sin cmd
+    { name: 'rota' }, // no cmd
     { name: 'mala-env', cmd: NODE, args: [fixture], env: { K: 42 } },
     fakeEntry('buena-file'),
   ]);
@@ -255,16 +255,16 @@ test('entradas inválidas se saltean (vía archivo)', async () => {
   assert.deepEqual(tools.map((t) => t.name).sort(), ['mcp_buena-file_echo', 'mcp_buena-file_sumar']);
 });
 
-// ---- TM2 (09/11): repertorio MCP. Aditivo, fakes livianos, sin spawns reales. ----
+// ---- TM2 (09/11): MCP repertoire. Additive, lightweight fakes, no real spawns. ----
 
-test('TM2 repertorio: N servers agregan tools con prefijo mcp_<server>_<tool>', async () => {
-  // Imita forma del repertorio (nombres reales, cmd fake): 5 keyless.
+test('TM2 repertoire: N servers add tools with mcp_<server>_<tool> prefix', async () => {
+  // Mimics the repertoire shape (real names, fake cmd): 5 keyless.
   writeHomeConfig(['fs', 'fetch', 'git', 'hora', 'sqlite'].map((n) => fakeEntry(n)));
   const cfg = readMcpConfig();
   assert.equal(cfg.length, 5);
   assert.deepEqual(cfg.map((e) => e.name).sort(), ['fetch', 'fs', 'git', 'hora', 'sqlite']);
   const tools = await getMcpTools();
-  assert.equal(tools.length, 10); // 2 por fake server
+  assert.equal(tools.length, 10); // 2 per fake server
   const names = tools.map((t) => t.name).sort();
   for (const n of ['fs', 'fetch', 'git', 'hora', 'sqlite']) {
     assert.ok(names.includes(`mcp_${n}_echo`), `falta mcp_${n}_echo`);
@@ -272,8 +272,8 @@ test('TM2 repertorio: N servers agregan tools con prefijo mcp_<server>_<tool>', 
   }
 });
 
-test('TM2 con-key: placeholder PENDIENTE en env llega intacto al hijo', async () => {
-  // Los 6 con-key van configurados con placeholder obvio (decisión main).
+test('TM2 with-key: PENDIENTE placeholder in env reaches the child intact', async () => {
+  // The 6 with-key ones are configured with an obvious placeholder (main decision).
   writeHomeConfig([
     fakeEntry('brave', { env: { BRAVE_API_KEY: 'PENDIENTE' } }),
     fakeEntry('github', { env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'PENDIENTE' } }),
@@ -282,7 +282,7 @@ test('TM2 con-key: placeholder PENDIENTE en env llega intacto al hijo', async ()
   assert.equal(cfg.length, 2);
   assert.deepEqual(cfg[0].env, { BRAVE_API_KEY: 'PENDIENTE' });
   assert.deepEqual(cfg[1].env, { GITHUB_PERSONAL_ACCESS_TOKEN: 'PENDIENTE' });
-  // Y el placeholder fluye al proceso hijo sin redacción (valor fake, no secret).
+  // And the placeholder flows to the child process unredacted (fake value, not a secret).
   const c = new McpClient({ cmd: NODE, args: [fixture], timeoutMs: 5000, env: { TEST_MCP_FOO: 'PENDIENTE' } });
   await c.start();
   try {
@@ -294,14 +294,14 @@ test('TM2 con-key: placeholder PENDIENTE en env llega intacto al hijo', async ()
   }
 });
 
-test('TM2 gap: server caído se saltea sin romper el resto', async () => {
-  // 'false' existe en PATH y sale con code=1 inmediato (sin handshake).
+test('TM2 gap: fallen server is skipped without breaking the rest', async () => {
+  // 'false' exists on PATH and exits with code=1 immediately (no handshake).
   writeHomeConfig([
     { name: 'caido', cmd: 'false', args: [] },
     fakeEntry('vivo'),
   ]);
   const cfg = readMcpConfig();
-  assert.equal(cfg.length, 2); // configurado igual (gap visible vía manager)
+  assert.equal(cfg.length, 2); // configured the same (gap visible via manager)
   const tools = await getMcpTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), ['mcp_vivo_echo', 'mcp_vivo_sumar']);
   const res = await callMcpTool('mcp_vivo_echo', { text: 'ok' });

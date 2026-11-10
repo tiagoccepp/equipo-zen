@@ -1,5 +1,5 @@
-// Tests Team v2: rondas ordenadas + síntesis + SOP + flag.
-// Modelo 100% fake: ningún test toca red ni keys reales.
+// Team v2 tests: ordered rounds + synthesis + SOP + flag.
+// 100% fake model: no test touches network or real keys.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -28,8 +28,8 @@ function nombreDeSystem(sys) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-// Fake completeChat(keyRing, { scope, messages }): registra orden de voces,
-// responde por speaker, distingue síntesis por scope.
+// Fake completeChat(keyRing, { scope, messages }): records voice order,
+// answers per speaker, distinguishes synthesis by scope.
 function fakeSala({ synth = 'DECISIÓN: vamos con A. Dueños: bruno. Riesgo: ninguno.', bySpeaker = {}, order = [], calls = [] } = {}) {
   return async (_keyRing, { scope, messages }) => {
     calls.push(scope);
@@ -65,7 +65,7 @@ const ROUTE_3 = {
 
 // ── parseSop ────────────────────────────────────────────────────────────
 
-test('parseSop: defaults sensatos con texto vacío', () => {
+test('parseSop: sensible defaults with empty text', () => {
   assert.deepEqual(parseSop(''), {
     order: 'score-desc',
     maxRounds: 2,
@@ -75,42 +75,42 @@ test('parseSop: defaults sensatos con texto vacío', () => {
   assert.deepEqual(parseSop(null), parseSop(''));
 });
 
-test('parseSop: lee knobs del SOP', () => {
+test('parseSop: reads knobs from the SOP', () => {
   const sop = parseSop('order: score-asc\nmax_rounds: 1\nagent_timeout_ms: 5000\nr2: never');
   assert.deepEqual(sop, { order: 'score-asc', maxRounds: 1, agentTimeoutMs: 5000, r2: 'never' });
 });
 
-test('parseSop: max_rounds se clampa al tope duro 1..2', () => {
+test('parseSop: max_rounds clamps to the hard cap 1..2', () => {
   assert.equal(V2_MAX_ROUNDS_HARD, 2);
   assert.equal(parseSop('max_rounds: 9').maxRounds, 2);
   assert.equal(parseSop('max_rounds: 0').maxRounds, 1);
   assert.equal(parseSop('max_rounds: -3').maxRounds, 1);
 });
 
-test('parseSop: valores desconocidos → defaults', () => {
+test('parseSop: unknown values → defaults', () => {
   const sop = parseSop('order: gritar\nr2: siempre\nagent_timeout_ms: poco');
   assert.equal(sop.order, 'score-desc');
   assert.equal(sop.r2, 'on-disagreement');
   assert.equal(sop.agentTimeoutMs, 20000);
 });
 
-test('parseSop: DEFAULT_SOP parsea a defaults', () => {
+test('parseSop: DEFAULT_SOP parses to defaults', () => {
   assert.deepEqual(parseSop(DEFAULT_SOP), parseSop(''));
 });
 
 // ── orderSpeakers ───────────────────────────────────────────────────────
 
-test('orderSpeakers: ordena por score desc', () => {
+test('orderSpeakers: sorts by score desc', () => {
   const ids = orderSpeakers(ROUTE_3, {}).map((s) => s.agentId);
   assert.deepEqual(ids, ['camila', 'bruno', 'ivan']);
 });
 
-test('orderSpeakers: score-asc invierte', () => {
+test('orderSpeakers: score-asc reverses', () => {
   const ids = orderSpeakers(ROUTE_3, { order: 'score-asc' }).map((s) => s.agentId);
   assert.deepEqual(ids, ['ivan', 'bruno', 'camila']);
 });
 
-test('orderSpeakers: filtra CEO/greeting/closing, tope 4', () => {
+test('orderSpeakers: filters CEO/greeting/closing, cap 4', () => {
   const route = {
     targets: [
       { agentId: 'pablo', score: 99, matchedDomains: ['general coordination'] },
@@ -125,14 +125,14 @@ test('orderSpeakers: filtra CEO/greeting/closing, tope 4', () => {
   assert.deepEqual(ids, ['a', 'b', 'c', 'd']);
 });
 
-test('orderSpeakers: sin route → roster default ivan/bruno/camila', () => {
+test('orderSpeakers: no route → default roster ivan/bruno/camila', () => {
   assert.deepEqual(orderSpeakers(null, {}).map((s) => s.agentId), ['ivan', 'bruno', 'camila']);
   assert.deepEqual(orderSpeakers({ targets: [] }, {}).map((s) => s.agentId), ['ivan', 'bruno', 'camila']);
 });
 
 // ── hasDisagreement ─────────────────────────────────────────────────────
 
-test('hasDisagreement: ≥2 vivos → true; 1 o silencios → false', () => {
+test('hasDisagreement: ≥2 alive → true; 1 or silences → false', () => {
   assert.equal(hasDisagreement([
     { kind: 'aporte' }, { kind: 'aporte' }
   ]), true);
@@ -145,7 +145,7 @@ test('hasDisagreement: ≥2 vivos → true; 1 o silencios → false', () => {
 
 // ── runSalaV2 ───────────────────────────────────────────────────────────
 
-test('runSalaV2: flag off → null sin llamar al modelo', async () => {
+test('runSalaV2: flag off → null without calling the model', async () => {
   let llamadas = 0;
   const telemetria = [];
   const out = await runSalaV2({
@@ -163,7 +163,7 @@ test('runSalaV2: flag off → null sin llamar al modelo', async () => {
   assert.equal(telemetria[0][1].reason, 'flag_off');
 });
 
-test('runSalaV2: R1 en orden por score + R2 inverso + síntesis', async () => {
+test('runSalaV2: R1 in score order + reversed R2 + synthesis', async () => {
   const order = [];
   const telemetria = [];
   const out = await runSalaV2({
@@ -179,7 +179,7 @@ test('runSalaV2: R1 en orden por score + R2 inverso + síntesis', async () => {
   });
   assert.ok(out);
   assert.equal(out.roundsRun, 2);
-  // R1: camila, bruno, ivan (score desc). R2: inverso.
+  // R1: camila, bruno, ivan (score desc). R2: reversed.
   assert.deepEqual(order, ['camila', 'bruno', 'ivan', 'ivan', 'bruno', 'camila']);
   assert.ok(out.note.startsWith(TEAM_NOTE_PREFIX));
   assert.ok(out.note.includes('DECISIÓN: vamos con A'));
@@ -190,7 +190,7 @@ test('runSalaV2: R1 en orden por score + R2 inverso + síntesis', async () => {
   assert.ok(eventos.includes('sala_close'));
 });
 
-test('runSalaV2: tope duro — max_rounds: 9 no pasa de 2 rondas', async () => {
+test('runSalaV2: hard cap — max_rounds: 9 never exceeds 2 rounds', async () => {
   const out = await runSalaV2({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -206,7 +206,7 @@ test('runSalaV2: tope duro — max_rounds: 9 no pasa de 2 rondas', async () => {
   assert.ok(out.roundsRun <= 2);
 });
 
-test('runSalaV2: 1 solo aporte → sin R2 (1 ronda)', async () => {
+test('runSalaV2: single contribution → no R2 (1 round)', async () => {
   const order = [];
   const out = await runSalaV2({
     text: PREGUNTA,
@@ -223,7 +223,7 @@ test('runSalaV2: 1 solo aporte → sin R2 (1 ronda)', async () => {
   assert.deepEqual(order, ['ivan']);
 });
 
-test('runSalaV2: r2: never → 1 ronda aunque haya desacuerdo', async () => {
+test('runSalaV2: r2: never → 1 round even with disagreement', async () => {
   const out = await runSalaV2({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -239,7 +239,7 @@ test('runSalaV2: r2: never → 1 ronda aunque haya desacuerdo', async () => {
   assert.equal(out.roundsRun, 1);
 });
 
-test('runSalaV2: todos SILENCIO → null (sin síntesis)', async () => {
+test('runSalaV2: all SILENCIO → null (no synthesis)', async () => {
   const telemetria = [];
   const out = await runSalaV2({
     text: PREGUNTA,
@@ -264,7 +264,7 @@ test('runSalaV2: todos SILENCIO → null (sin síntesis)', async () => {
   assert.equal(last[1].reason, 'all_silence');
 });
 
-test('runSalaV2: timeout por agente → ausente, la sala sigue y sintetiza', async () => {
+test('runSalaV2: per-agent timeout → absent, the room goes on and synthesizes', async () => {
   const out = await runSalaV2({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -283,7 +283,7 @@ test('runSalaV2: timeout por agente → ausente, la sala sigue y sintetiza', asy
   assert.ok(out.note.includes('DECISIÓN'));
 });
 
-test('runSalaV2: fallo de una voz → ausente, no tumba la sala', async () => {
+test('runSalaV2: one voice fails → absent, does not bring the room down', async () => {
   const out = await runSalaV2({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -301,7 +301,7 @@ test('runSalaV2: fallo de una voz → ausente, no tumba la sala', async () => {
   assert.ok(out.note.includes('DECISIÓN'));
 });
 
-test('runSalaV2: barge-in previo → null sin llamar al modelo', async () => {
+test('runSalaV2: prior barge-in → null without calling the model', async () => {
   let llamadas = 0;
   const controller = new AbortController();
   controller.abort();
@@ -318,7 +318,7 @@ test('runSalaV2: barge-in previo → null sin llamar al modelo', async () => {
   assert.equal(llamadas, 0);
 });
 
-test('runSalaV2: barge-in a mitad → corta rondas, sintetiza parcial', async () => {
+test('runSalaV2: mid-way barge-in → cuts rounds, partial synthesis', async () => {
   const controller = new AbortController();
   const order = [];
   const out = await runSalaV2({
@@ -336,13 +336,13 @@ test('runSalaV2: barge-in a mitad → corta rondas, sintetiza parcial', async ()
     }
   });
   assert.ok(out);
-  // Solo habló camila (R1 cortado), igual hay síntesis parcial.
+  // Only camila spoke (R1 cut short), still a partial synthesis.
   assert.deepEqual(order, ['camila']);
   assert.equal(out.roundsRun, 1);
   assert.ok(out.note.startsWith(TEAM_NOTE_PREFIX));
 });
 
-test('runSalaV2: síntesis vacía/fallida → NOTE fallback con aportes', async () => {
+test('runSalaV2: empty/failed synthesis → fallback NOTE with contributions', async () => {
   const out = await runSalaV2({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -360,7 +360,7 @@ test('runSalaV2: síntesis vacía/fallida → NOTE fallback con aportes', async 
   assert.ok(out.note.includes('camila'));
 });
 
-test('runSalaV2: gate negativo → null sin llamar al modelo', async () => {
+test('runSalaV2: negative gate → null without calling the model', async () => {
   let llamadas = 0;
   const out = await runSalaV2({
     text: 'abrí el archivo readme',
@@ -373,9 +373,9 @@ test('runSalaV2: gate negativo → null sin llamar al modelo', async () => {
   assert.equal(llamadas, 0);
 });
 
-// ── maybeConsultSala: ramificación v1/v2 ────────────────────────────────
+// ── maybeConsultSala: v1/v2 branching ────────────────────────────────
 
-test('maybeConsultSala: v2 on → NOTE de rondas + síntesis', async () => {
+test('maybeConsultSala: v2 on → rounds NOTE + synthesis', async () => {
   const out = await maybeConsultSala({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -391,7 +391,7 @@ test('maybeConsultSala: v2 on → NOTE de rondas + síntesis', async () => {
   assert.ok(out.includes('DECISIÓN'));
 });
 
-test('maybeConsultSala: v2 off + v1 on → comportamiento v1 intacto', async () => {
+test('maybeConsultSala: v2 off + v1 on → v1 behavior intact', async () => {
   const out = await maybeConsultSala({
     text: PREGUNTA,
     deps: {
@@ -405,7 +405,7 @@ test('maybeConsultSala: v2 off + v1 on → comportamiento v1 intacto', async () 
   assert.ok(out.includes('nota v1 clásica'));
 });
 
-test('maybeConsultSala: v2 on pero sala vacía → null (no cae a v1)', async () => {
+test('maybeConsultSala: v2 on but empty room → null (does not fall back to v1)', async () => {
   const out = await maybeConsultSala({
     text: PREGUNTA,
     route: ROUTE_3,
@@ -426,9 +426,9 @@ test('maybeConsultSala: v2 on pero sala vacía → null (no cae a v1)', async ()
   assert.equal(out, null);
 });
 
-// ── v1 intacto ──────────────────────────────────────────────────────────
+// ── v1 intact ──────────────────────────────────────────────────────────
 
-test('consult v1: sin cambios (NOTE + skip flag off)', async () => {
+test('consult v1: unchanged (NOTE + skip flag off)', async () => {
   const ok = await consult({
     text: PREGUNTA,
     deps: {

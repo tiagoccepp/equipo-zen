@@ -1,11 +1,11 @@
-// Convenciones por agente: cada agente de la reunión tiene su propio
-// `workspace/<empresa>/agentes/<agentId>/AGENTS.md` con sus convenciones de
-// trabajo. Se crea (seed por rol) si falta; un fragmento corto (~15 líneas,
-// ≤900ch) se inyecta en SU system prompt y en el de nadie más.
+// Per-agent conventions: each meeting agent has its own
+// `workspace/<empresa>/agentes/<agentId>/AGENTS.md` with its working
+// conventions. Created (seeded by role) if missing; a short fragment (~15 lines,
+// ≤900ch) is injected into ITS system prompt and nobody else's.
 //
-// Patrón pablo-memory.js: misma raíz de workspace, caché 30s, faltantes
-// devuelven null/vacío, nunca throw. Presupuesto dieta: el fragmento no
-// puede pasar de CONVENTIONS_MAX_CHARS.
+// pablo-memory.js pattern: same workspace root, 30s cache, missing entries
+// return null/empty, never throw. Diet budget: the fragment must not
+// exceed CONVENTIONS_MAX_CHARS.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -15,7 +15,7 @@ import { rootDir } from './config.js';
 export const CONVENTIONS_MAX_LINES = 15;
 export const CONVENTIONS_MAX_CHARS = 900;
 const CACHE_TTL_MS = 30000;
-const cache = new Map(); // ruta absoluta -> { content, at }
+const cache = new Map(); // absolute path -> { content, at }
 
 function baseRoot() {
   return resolve(process.env.PABLO_MEMORY_DIR || process.env.WORKSPACE_ROOT || join(rootDir, 'workspace'));
@@ -29,7 +29,7 @@ function cleanSegment(value, label) {
   return clean;
 }
 
-// Dir del agente: <base>/<empresa>/agentes/<agentId>
+// Agent dir: <base>/<empresa>/agentes/<agentId>
 export function agentDirFor(companySlug, agentId) {
   return join(baseRoot(), cleanSegment(companySlug, 'Empresa'), 'agentes', cleanSegment(agentId, 'Agente'));
 }
@@ -38,9 +38,9 @@ export function conventionsPathFor(companySlug, agentId) {
   return join(agentDirFor(companySlug, agentId), 'AGENTS.md');
 }
 
-// Templates por rol: convenciones de TRABAJO propias, no personalidad (eso
-// ya vive en style/knowledge/craft del perfil) ni reglas de sala (viven en
-// §VOICE del system). Cortos a propósito: el sistema los inyecta enteros.
+// Templates by role: their own WORK conventions, not personality (that
+// already lives in the profile's style/knowledge/craft) nor room rules (they live
+// in the system's §VOICE). Short on purpose: the system injects them whole.
 const ROLE_TEMPLATES = {
   ceo: (name) => [
     `# AGENTS.md — ${name} (coordina)`,
@@ -76,8 +76,8 @@ const ROLE_TEMPLATES = {
     '- Nunca enviás nada afuera sin el OK explícito de Tito.',
     '- Nunca guardás secretos en archivos: rutas y últimos 4, nada más.'
   ].join('\n'),
-  // Track B (flujo de equipo): seeds por rol de especialista. Mismo
-  // presupuesto (≤15 líneas, ≤900ch) y mismas reglas de workspace.
+  // Track B (team flow): specialist-role seeds. Same
+  // budget (≤15 lines, ≤900ch) and same workspace rules.
   pablo: (name) => [
     `# AGENTS.md — ${name} (interfaz)`,
     '',
@@ -213,8 +213,8 @@ export function seedForRole(role, name) {
   return build(name || 'agente');
 }
 
-// Crea el AGENTS.md del agente si falta (seed por rol + nombre).
-// Devuelve { created: bool, path }. Nunca lanza.
+// Creates the agent's AGENTS.md if missing (seed by role + name).
+// Returns { created: bool, path }. Never throws.
 export function ensureAgentConventions(companySlug, agent) {
   try {
     const agentId = agent?.id;
@@ -226,7 +226,7 @@ export function ensureAgentConventions(companySlug, agent) {
       readFileSync(abs, 'utf-8');
       return { created: false, path: abs };
     } catch {
-      // Falta: se crea desde el seed.
+      // Missing: created from the seed.
     }
     mkdirSync(agentDirFor(companySlug, agentId), { recursive: true });
     writeFileSync(abs, `${seedForRole(agent?.role, agent?.name)}\n`, 'utf-8');
@@ -252,8 +252,8 @@ function readCached(abs) {
   return content;
 }
 
-// Fragmento para el system prompt de ESE agente: top ~15 líneas, ≤900ch.
-// Sin archivo o ilegible → '' (el turno sigue igual).
+// Fragment for THAT agent's system prompt: top ~15 lines, ≤900ch.
+// No file or unreadable → '' (the turn continues unchanged).
 export function renderAgentConventions(companySlug, agent, { maxLines = CONVENTIONS_MAX_LINES, maxChars = CONVENTIONS_MAX_CHARS } = {}) {
   try {
     if (!agent?.id) {
@@ -274,7 +274,7 @@ export function renderAgentConventions(companySlug, agent, { maxLines = CONVENTI
   }
 }
 
-// Solo tests.
+// Tests only.
 export function __resetConventionsCache() {
   cache.clear();
 }

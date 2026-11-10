@@ -17,12 +17,12 @@ function sesion() {
   return { session, enviados, store };
 }
 
-test('una reunión arranca SIN voz: por texto no se sintetiza nada', () => {
+test('a meeting starts WITHOUT voice: over text nothing is synthesized', () => {
   const { session } = sesion();
   assert.equal(session.voiceEnabled, false, 'el default tiene que ser sin voz');
 });
 
-test('entrar al modo llamada prende la voz y salir la apaga', async () => {
+test('entering call mode turns voice on and leaving turns it off', async () => {
   const { session } = sesion();
 
   await session.handleClientMessage({ type: 'set_voice', enabled: true });
@@ -32,7 +32,7 @@ test('entrar al modo llamada prende la voz y salir la apaga', async () => {
   assert.equal(session.voiceEnabled, false);
 });
 
-test('salir de la llamada corta lo que estuviera sonando', async () => {
+test('leaving the call cuts whatever was playing', async () => {
   const { session } = sesion();
   let vaciado = 0;
   session.gate.flush = () => { vaciado += 1; };
@@ -44,7 +44,7 @@ test('salir de la llamada corta lo que estuviera sonando', async () => {
   assert.equal(vaciado, 1, 'salir sí corta el audio en curso');
 });
 
-test('el protocolo acepta set_voice y lo normaliza a booleano', () => {
+test('the protocol accepts set_voice and normalizes it to boolean', () => {
   for (const [entrada, esperado] of [[true, true], [false, false], ['si', true], [undefined, false], [0, false]]) {
     const r = parseClientMessage(JSON.stringify({ type: 'set_voice', enabled: entrada }));
     assert.equal(r.ok, true, `set_voice con ${JSON.stringify(entrada)} tiene que parsear`);
@@ -52,9 +52,9 @@ test('el protocolo acepta set_voice y lo normaliza a booleano', () => {
   }
 });
 
-// La razón de fondo del arreglo: sin voz el SpeakerGate no se toma, y sin
-// gate los agentes dejan de serializarse de a uno.
-test('sin voz el agente no pide el altavoz', async () => {
+// The root reason for the fix: without voice the SpeakerGate is never taken,
+// and without the gate agents stop serializing one by one.
+test('without voice the agent does not ask for the speaker', async () => {
   const { session } = sesion();
   const agente = session.sessionAgents[0];
   const runtime = session.agents.get(agente.id);

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Revisión de la instalación: qué falta y el comando exacto para arreglarlo.
+// Install check: what's missing and the exact command to fix it.
 //
-// La app degrada sola (sin voz, sin transcripción local) y eso solo se ve como
-// una línea perdida en el log. Acá se dice de frente qué está bien, qué no y
-// cómo se soluciona, sin tener que leer el README entero.
+// The app degrades on its own (no voice, no local transcription) and that only shows
+// as a lost line in the log. Here it says upfront what's fine, what's not and
+// how to fix it, without reading the whole README.
 
 import { execFile } from 'node:child_process';
 import { access, readFile, stat } from 'node:fs/promises';
@@ -67,7 +67,7 @@ if (mayor >= 22) {
   anotar('falla', `Node ${process.versions.node} es viejo`, 'hacen falta 22 o más', 'Instalá Node 22+ (nvm install 22 && nvm use 22)');
 }
 
-// ── Dependencias de node ────────────────────────────────────────────────
+// ── Node dependencies ───────────────────────────────────────────────────
 anotar(
   (await existe('node_modules')) ? 'ok' : 'falla',
   'Dependencias de node',
@@ -75,7 +75,7 @@ anotar(
   'npm install'
 );
 
-// ── Claves de los proveedores de razonamiento ───────────────────────────
+// ── Reasoning provider keys ─────────────────────────────────────────────
 const env = (await existe('.env')) ? await readFile(path.join(raiz, '.env'), 'utf-8') : '';
 function claveDe(nombre) {
   return (process.env[nombre] || (env.match(new RegExp(`^${nombre}=(.+)$`, 'm')) || [])[1] || '').trim();
@@ -105,7 +105,7 @@ if (configurados.length > 0) {
   );
 }
 
-// ── Voz (Supertonic) ────────────────────────────────────────────────────
+// ── Voice (Supertonic) ──────────────────────────────────────────────────
 const tieneVenv = await existe('.venv-tts');
 const tieneSupertonic = await existe('.venv-tts/bin/supertonic');
 if (tieneSupertonic) {
@@ -124,7 +124,7 @@ if (tieneSupertonic) {
   );
 }
 
-// ── Transcripción (Whisper) ─────────────────────────────────────────────
+// ── Transcription (Whisper) ─────────────────────────────────────────────
 if (tieneVenv) {
   let tieneWhisper = false;
   try {
@@ -143,7 +143,7 @@ if (tieneVenv) {
   anotar('aviso', 'Sin transcripción local', 'se usa la del navegador (menos preciso)', "python3 -m venv .venv-tts && .venv-tts/bin/pip install 'supertonic[serve]' faster-whisper fastapi uvicorn");
 }
 
-// ── Datos y entorno aislado ─────────────────────────────────────────────
+// ── Data and sandbox ────────────────────────────────────────────────────
 const db = 'server/data/meetings.db';
 if (await existe(db)) {
   const { size } = await stat(path.join(raiz, db));
@@ -153,7 +153,7 @@ if (await existe(db)) {
 }
 anotar('ok', 'Entorno aislado', 'todo lo que genere el equipo va a workspace/<empresa>/<proyecto>/');
 
-// ── Puertos ─────────────────────────────────────────────────────────────
+// ── Ports ───────────────────────────────────────────────────────────────
 const servicios = [
   { puerto: 8787, nombre: 'backend', prueba: 'http://127.0.0.1:8787/api/companies' },
   { puerto: 7788, nombre: 'voz', prueba: 'http://127.0.0.1:7788/docs' },
@@ -165,7 +165,7 @@ for (const s of servicios) {
   if (await puertoLibre(s.puerto)) {
     continue;
   }
-  // Ocupado: si contesta lo nuestro, es el sistema andando, no un estorbo.
+  // Busy: if ours answers, it's the system running, not a blocker.
   if (await responde(s.prueba)) {
     propios.push(`${s.nombre} (:${s.puerto})`);
   } else {
@@ -187,7 +187,7 @@ if (!propios.length && !ajenos.length) {
   anotar('ok', 'Puertos', '8787, 7788 y 7789 libres');
 }
 
-// ── Informe ─────────────────────────────────────────────────────────────
+// ── Report ──────────────────────────────────────────────────────────────
 console.log(`\n${NEGRITA}Revisión de la instalación${FIN}\n`);
 for (const r of resultados) {
   const marca = r.estado === 'ok' ? `${VERDE}✓${FIN}` : r.estado === 'aviso' ? `${AMARILLO}!${FIN}` : `${ROJO}✗${FIN}`;

@@ -23,7 +23,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, 'fixtures', 'parakeet-warmup.wav');
 const PARAKEET = { name: 'parakeet', health: 'http://127.0.0.1:7790/health', spawn: { cmd: 'python3', args: ['s.py'] } };
 
-// Parsea header WAV → {rate, channels, bits, samples, dataOffset}.
+// Parses WAV header → {rate, channels, bits, samples, dataOffset}.
 function parseWavHeader(buf) {
   assert.equal(buf.toString('ascii', 0, 4), 'RIFF');
   assert.equal(buf.toString('ascii', 8, 12), 'WAVE');
@@ -38,7 +38,7 @@ function parseWavHeader(buf) {
 
 const flush = () => new Promise((r) => setImmediate(r));
 
-test('fixture warmup existe y es válido (16k mono, 0.5-1s, no silencio)', () => {
+test('warmup fixture exists and is valid (16k mono, 0.5-1s, not silence)', () => {
   const buf = readFileSync(FIXTURE);
   const h = parseWavHeader(buf);
   assert.equal(h.rate, 16000);
@@ -46,7 +46,7 @@ test('fixture warmup existe y es válido (16k mono, 0.5-1s, no silencio)', () =>
   assert.equal(h.bits, 16);
   const secs = h.samples / 16000;
   assert.ok(secs >= 0.5 && secs <= 1.0, `duración ${secs}s fuera de rango`);
-  // RMS alto = habla/chirp real, no silencio (el silencio emite ~0 tokens).
+  // High RMS = real speech/chirp, not silence (silence emits ~0 tokens).
   let sum = 0;
   for (let i = 0; i < h.samples; i++) {
     const v = buf.readInt16LE(h.dataOffset + i * 2) / 32768;
@@ -56,7 +56,7 @@ test('fixture warmup existe y es válido (16k mono, 0.5-1s, no silencio)', () =>
   assert.ok(rms > 0.05, `RMS ${rms}: el fixture parece silencio`);
 });
 
-test('loadWarmupWavBase64 devuelve el fixture como base64 válido', () => {
+test('loadWarmupWavBase64 returns the fixture as valid base64', () => {
   const b64 = loadWarmupWavBase64();
   assert.ok(typeof b64 === 'string' && b64.length > 1000);
   const buf = Buffer.from(b64, 'base64');
@@ -65,15 +65,15 @@ test('loadWarmupWavBase64 devuelve el fixture como base64 válido', () => {
   assert.equal(h.channels, 1);
 });
 
-test('firstNonEmpty elige Piper → fixture → silencio', () => {
+test('firstNonEmpty picks Piper → fixture → silence', () => {
   assert.equal(firstNonEmpty('piper', 'fixture', 'silencio'), 'piper');
   assert.equal(firstNonEmpty(null, 'fixture', 'silencio'), 'fixture');
   assert.equal(firstNonEmpty('', null, 'silencio'), 'silencio');
   assert.equal(firstNonEmpty(null, '', null), null);
 });
 
-test('pcmToWav16kBase64 resamplea PCM Piper a WAV 16k mono', () => {
-  // 0.2s de seno 440Hz a 22050Hz, PCM16.
+test('pcmToWav16kBase64 resamples Piper PCM to 16k mono WAV', () => {
+  // 0.2s of 440Hz sine at 22050Hz, PCM16.
   const rate = 22050;
   const n = Math.floor(rate * 0.2);
   const pcm = Buffer.alloc(n * 2);
@@ -90,14 +90,14 @@ test('pcmToWav16kBase64 resamplea PCM Piper a WAV 16k mono', () => {
   assert.ok(Math.abs(h.samples - 3200) < 5, `muestras ${h.samples} ≈ 3200`);
 });
 
-test('pcmToWav16kBase64 con entrada rota devuelve null', () => {
+test('pcmToWav16kBase64 with broken input returns null', () => {
   assert.equal(pcmToWav16kBase64(null, 22050), null);
   assert.equal(pcmToWav16kBase64('eA==', 0), null);
   assert.equal(pcmToWav16kBase64('eA==', 'lala'), null);
   assert.equal(pcmToWav16kBase64('eA==', 22050), null); // 1 byte: PCM impar
 });
 
-test('withTimeoutMs: rápido vale, lento/rechazo cae a fallback', async () => {
+test('withTimeoutMs: fast counts, slow/reject falls to fallback', async () => {
   assert.equal(await withTimeoutMs(Promise.resolve('ok'), 500, 'fb'), 'ok');
   assert.equal(await withTimeoutMs(Promise.reject(new Error('x')), 500, 'fb'), 'fb');
   const t0 = Date.now();
@@ -106,10 +106,10 @@ test('withTimeoutMs: rápido vale, lento/rechazo cae a fallback', async () => {
   assert.ok(Date.now() - t0 < 2000, 'el timeout no bloquea');
 });
 
-test('nextKeepaliveAt/shouldKeepalive: agenda pura cada 75s', () => {
+test('nextKeepaliveAt/shouldKeepalive: pure schedule every 75s', () => {
   assert.equal(KEEPALIVE_INTERVAL_MS, 75000);
   assert.equal(nextKeepaliveAt(1000, 5000), 76000);
-  // Sin último disparo, toca enseguida.
+  // With no last fire, it is due right away.
   assert.equal(shouldKeepalive(5000, 0), true);
   assert.equal(shouldKeepalive(5000, null), true);
   assert.equal(shouldKeepalive(1000 + 74999, 1000), false);
@@ -117,7 +117,7 @@ test('nextKeepaliveAt/shouldKeepalive: agenda pura cada 75s', () => {
   assert.equal(shouldKeepalive(1000 + 20000, 1000), false, 'el tick de 20s no dispara');
 });
 
-test('postKeepalive POSTea el fixture y nunca lanza', async () => {
+test('postKeepalive POSTs the fixture and never throws', async () => {
   const calls = [];
   const r = await postKeepalive('http://x/v1/transcribe', 'RkFLRQ==', {
     fetchFn: async (url, opts) => { calls.push({ url, opts }); return { ok: true }; }
@@ -127,7 +127,7 @@ test('postKeepalive POSTea el fixture y nunca lanza', async () => {
   assert.equal(calls[0].url, 'http://x/v1/transcribe');
   const body = JSON.parse(calls[0].opts.body);
   assert.equal(body.audio_base64, 'RkFLRQ==');
-  // fetch roto → {ok:false}, sin throw.
+  // Broken fetch → {ok:false}, no throw.
   const r2 = await postKeepalive('http://x/v1/transcribe', 'RkFLRQ==', {
     fetchFn: async () => { throw new Error('down'); }
   });
@@ -136,7 +136,7 @@ test('postKeepalive POSTea el fixture y nunca lanza', async () => {
   assert.equal(r3.ok, false);
 });
 
-test('watchdog: keepalive SOLO a parakeet cada 75s (no cada tick)', async () => {
+test('watchdog: keepalive ONLY to parakeet every 75s (not every tick)', async () => {
   const calls = [];
   const wd = startSidecarWatchdog({
     intervalMs: 60000,
@@ -170,7 +170,7 @@ test('watchdog: keepalive SOLO a parakeet cada 75s (no cada tick)', async () => 
   }
 });
 
-test('watchdog: sin parakeet en specs no hay keepalive', async () => {
+test('watchdog: without parakeet in specs there is no keepalive', async () => {
   let n = 0;
   const wd = startSidecarWatchdog({
     intervalMs: 60000,
@@ -190,7 +190,7 @@ test('watchdog: sin parakeet en specs no hay keepalive', async () => {
   }
 });
 
-test('watchdog: keepalive silencioso salvo 3 fallos seguidos', async () => {
+test('watchdog: keepalive silent except after 3 consecutive failures', async () => {
   const events = [];
   const wd = startSidecarWatchdog({
     intervalMs: 60000,
@@ -217,7 +217,7 @@ test('watchdog: keepalive silencioso salvo 3 fallos seguidos', async () => {
   }
 });
 
-test('watchdog: keepalive OK resetea racha de fallos', async () => {
+test('watchdog: keepalive OK resets the failure streak', async () => {
   let fail = true;
   const events = [];
   const wd = startSidecarWatchdog({
@@ -251,7 +251,7 @@ test('watchdog: keepalive OK resetea racha de fallos', async () => {
   }
 });
 
-test('parseSwapPressure/shouldWarnSwap: puras con umbral 80% y cooldown 1h', () => {
+test('parseSwapPressure/shouldWarnSwap: pure with 80% threshold and 1h cooldown', () => {
   const mem = 'MemTotal:        7720956 kB\nSwapTotal:      16088308 kB\nSwapFree:        1608830 kB\n';
   const p = parseSwapPressure(mem);
   assert.equal(p.totalKb, 16088308);
@@ -265,7 +265,7 @@ test('parseSwapPressure/shouldWarnSwap: puras con umbral 80% y cooldown 1h', () 
   assert.equal(shouldWarnSwap(90, now, now - 3600000), true);
 });
 
-test('maybeWarnSwap avisa 1 vez/hora con lector inyectado', () => {
+test('maybeWarnSwap warns 1 time/hour with injected reader', () => {
   const high = () => 'SwapTotal:      1000 kB\nSwapFree:        100 kB\n';
   const r1 = maybeWarnSwap({ now: 1000000, lastWarnedAt: 0, readMeminfo: high });
   assert.equal(r1.warned, true);
@@ -278,7 +278,7 @@ test('maybeWarnSwap avisa 1 vez/hora con lector inyectado', () => {
   assert.equal(maybeWarnSwap({ now: 1, readMeminfo: low }).warned, false);
 });
 
-test('watchdog: emite host_swap_pressure 1 vez/hora si swap >80%', async () => {
+test('watchdog: emits host_swap_pressure 1 time/hour if swap >80%', async () => {
   const events = [];
   const wd = startSidecarWatchdog({
     intervalMs: 60000,
@@ -303,9 +303,9 @@ test('watchdog: emite host_swap_pressure 1 vez/hora si swap >80%', async () => {
   }
 });
 
-test('prewarm no bloquea: Piper colgado cae al fixture con techo', async () => {
-  // Replica la selección de audio de prewarmLocalModels con mocks: Piper
-  // que nunca resuelve + techo 50ms → fixture, rápido.
+test('prewarm does not block: hung Piper falls to the fixture with a cap', async () => {
+  // Replicates prewarmLocalModels' audio selection with mocks: Piper
+  // that never resolves + 50ms cap → fixture, fast.
   const fixture = loadWarmupWavBase64();
   assert.ok(fixture);
   const hanging = new Promise(() => {});
@@ -314,6 +314,6 @@ test('prewarm no bloquea: Piper colgado cae al fixture con techo', async () => {
   const chosen = firstNonEmpty(piperWav, fixture);
   assert.equal(chosen, fixture, 'Piper DOWN → fixture local');
   assert.ok(Date.now() - t0 < 2000, 'el prewarm no espera al Piper colgado');
-  // Piper sano gana.
+  // Healthy Piper wins.
   assert.equal(firstNonEmpty('piper-wav', fixture), 'piper-wav');
 });

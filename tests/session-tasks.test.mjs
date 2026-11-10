@@ -5,6 +5,19 @@ import { companyTemplates } from '../server/lib/config.js';
 import { ApiKeyRing } from '../server/lib/key-ring.js';
 import { MeetingSession } from '../server/lib/meeting-session.js';
 import { Store } from '../server/lib/store.js';
+import { initSettings } from '../server/lib/settings.js';
+
+// Settings store stub (unset default: English since TI 09/11).
+const settingsDb = new Map();
+initSettings(
+  {
+    getSetting: (k) => (settingsDb.has(k) ? settingsDb.get(k) : null),
+    setSetting: (k, v) => { settingsDb.set(k, v); },
+    deleteSetting: (k) => { settingsDb.delete(k); },
+    logChange: () => {}
+  },
+  { setKeys: () => {} }
+);
 
 function fakeSocket() {
   const sent = [];
@@ -360,6 +373,7 @@ test('archive_agent solo permite archivar agentes custom', async () => {
 });
 
 test('set_scenario actualiza el contexto que ven los prompts', async () => {
+  settingsDb.set('tts.language', 'es');
   const { socket, session } = newSession();
 
   await session.handleClientMessage({ type: 'set_scenario', text: 'Sprint de migración del sistema de pedidos' });

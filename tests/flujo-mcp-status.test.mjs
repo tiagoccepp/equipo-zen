@@ -1,6 +1,6 @@
-// T5 — Manager MCP/skills: status puro, sin spawnear servers.
-// Config fake (env + HOME temporal), skills reales, snapshot inyectable,
-// gaps honestos, planReconnect documenta. Nunca hace spawn.
+// T5 — MCP/skills manager: pure status, never spawns servers.
+// Fake config (env + temp HOME), real skills, injectable snapshot,
+// honest gaps, planReconnect documents. Never spawns.
 
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -60,11 +60,11 @@ afterEach(() => {
   __resetSkillsCache();
 });
 
-test('sin config: servers [] + gap honesto + skills reales', () => {
+test('no config: servers [] + honest gap + real skills', () => {
   const st = getMcpStatus();
   assert.deepEqual(st.servers, []);
   assert.ok(st.gaps.some((g) => g.includes('sin servers')), `gaps: ${JSON.stringify(st.gaps)}`);
-  // Skills reales del repo (no fakes).
+  // Real repo skills (not fakes).
   const names = st.skills.map((s) => s.name);
   assert.ok(names.includes('diseno-web'), 'skill real diseno-web');
   assert.ok(names.includes('revision-codigo'), 'skill real revision-codigo');
@@ -73,7 +73,7 @@ test('sin config: servers [] + gap honesto + skills reales', () => {
   }
 });
 
-test('config fake vía env: configured true, alive false, tools [] (sin snapshot)', () => {
+test('fake config via env: configured true, alive false, tools [] (no snapshot)', () => {
   process.env[ENV_SERVERS] = JSON.stringify([
     { name: 'fake-a', cmd: '/bin/false', args: [] },
     { name: 'fake-b', cmd: '/bin/false', args: [] },
@@ -89,7 +89,7 @@ test('config fake vía env: configured true, alive false, tools [] (sin snapshot
   assert.ok(st.gaps.some((g) => g.includes('fake-b') && g.includes('no vivo')));
 });
 
-test('config fake vía archivo HOME temporal', () => {
+test('fake config via temp HOME file', () => {
   writeHomeConfig([{ name: 'file-srv', cmd: '/bin/false', args: [] }]);
   const st = getMcpStatus();
   assert.equal(st.servers.length, 1);
@@ -98,7 +98,7 @@ test('config fake vía archivo HOME temporal', () => {
   assert.equal(st.servers[0].alive, false);
 });
 
-test('snapshot inyectado: alive + tools, gaps se achican', () => {
+test('injected snapshot: alive + tools, gaps shrink', () => {
   process.env[ENV_SERVERS] = JSON.stringify([{ name: 'srv', cmd: '/bin/false', args: [] }]);
   setMcpStatusSnapshot({ alive: { srv: true }, tools: { srv: ['echo', 'sumar'] } });
   const st = getMcpStatus();
@@ -106,13 +106,13 @@ test('snapshot inyectado: alive + tools, gaps se achican', () => {
   assert.equal(st.servers[0].alive, true);
   assert.deepEqual(st.servers[0].tools, ['echo', 'sumar']);
   assert.ok(!st.gaps.some((g) => g.includes('"srv"')), `gaps: ${JSON.stringify(st.gaps)}`);
-  // Snapshot override puntual no pisa el global.
+  // One-off snapshot override does not clobber the global one.
   const st2 = getMcpStatus({ snapshot: { alive: {}, tools: {} } });
   assert.equal(st2.servers[0].alive, false);
   assert.deepEqual(getMcpStatusSnapshot().tools, { srv: ['echo', 'sumar'] });
 });
 
-test('vivo sin tools → gap honesto', () => {
+test('alive without tools → honest gap', () => {
   process.env[ENV_SERVERS] = JSON.stringify([{ name: 'empty', cmd: '/bin/false', args: [] }]);
   setMcpStatusSnapshot({ alive: { empty: true }, tools: { empty: [] } });
   const st = getMcpStatus();
@@ -120,7 +120,7 @@ test('vivo sin tools → gap honesto', () => {
   assert.ok(st.gaps.some((g) => g.includes('"empty"') && g.includes('sin tools')));
 });
 
-test('stale: snapshot con server ya no configurado → configured false + gap', () => {
+test('stale: snapshot with no-longer-configured server → configured false + gap', () => {
   setMcpStatusSnapshot({ alive: { viejo: true }, tools: { viejo: ['x'] } });
   const st = getMcpStatus();
   assert.equal(st.servers.length, 1);
@@ -130,7 +130,7 @@ test('stale: snapshot con server ya no configurado → configured false + gap', 
   assert.ok(st.gaps.some((g) => g.includes('"viejo"') && g.includes('ya no configurado')));
 });
 
-test('planReconnect documenta pasos para main (puro)', () => {
+test('planReconnect documents steps for main (pure)', () => {
   const plan = planReconnect();
   assert.equal(plan.method, 'POST');
   assert.equal(plan.path, '/api/mcp/reconnect');
@@ -142,13 +142,13 @@ test('planReconnect documenta pasos para main (puro)', () => {
   assert.ok(joined.includes('getMcpStatus'), 'menciona status fresco');
 });
 
-test('SIN spawn: fuente no referencia spawn/McpClient/getMcpTools + retorno síncrono', () => {
+test('NO spawn: source does not reference spawn/McpClient/getMcpTools + sync return', () => {
   const src = readFileSync(
     join(fileURLToPath(new URL('.', import.meta.url)), '..', 'server', 'lib', 'mcp-status.js'),
     'utf8'
   );
-  // Código real: sin comentarios ni strings (los strings de planReconnect
-  // DOCUMENTAN getMcpTools/shutdown a propósito; los comentarios explican).
+  // Real code: no comments or strings (planReconnect strings
+  // DOCUMENT getMcpTools/shutdown on purpose; comments explain).
   const code = src
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|\s)\/\/.*$/gm, '$1')
@@ -156,10 +156,10 @@ test('SIN spawn: fuente no referencia spawn/McpClient/getMcpTools + retorno sín
   for (const banned of ['spawn', 'child_process', 'McpClient', 'getMcpTools', 'callMcpTool', 'withMcpClient']) {
     assert.ok(!new RegExp(`\\b${banned}\\b`).test(code), `mcp-status.js no debe usar ${banned} en código`);
   }
-  // Imports allowlist: solo readMcpConfig + loadSkills (ambos puros, sin spawn).
+  // Imports allowlist: only readMcpConfig + loadSkills (both pure, no spawn).
   const srcImports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual(srcImports.sort(), ['./manos-mcp.js', './skills.js']);
-  // Síncrono: si spawneara/listara sería async. getMcpStatus devuelve objeto directo.
+  // Sync: if it spawned/listed it would be async. getMcpStatus returns a direct object.
   process.env[ENV_SERVERS] = JSON.stringify([{ name: 'no-spawn', cmd: '/bin/false', args: [] }]);
   const st = getMcpStatus();
   assert.equal(typeof st.then, 'undefined', 'getMcpStatus es síncrono (no Promise)');
@@ -167,7 +167,7 @@ test('SIN spawn: fuente no referencia spawn/McpClient/getMcpTools + retorno sín
   assert.equal(st.servers[0].alive, false, 'sin snapshot: no vivo, sin sondear');
 });
 
-test('opts.config / opts.skillsList permiten overrides puros', () => {
+test('opts.config / opts.skillsList allow pure overrides', () => {
   const st = getMcpStatus({
     config: [{ name: 'inj', cmd: 'x', args: [] }],
     skillsList: [{ name: 'demo', scopes: ['chat'], scope: 'chat' }],

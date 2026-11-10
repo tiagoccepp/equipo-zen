@@ -1,31 +1,31 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Esferas de partículas del modo llamada.
+// Particle spheres for call mode.
 //
-// Una sola <canvas> dibuja TODAS las esferas (una por empleado presente) con
-// un único requestAnimationFrame. Cada esfera es una nube de puntos sobre una
-// esfera unitaria: se proyecta ortográficamente, así que gire o salte, la
-// silueta sigue siendo un círculo. Lo que cambia es el radio de cada
-// partícula, nunca la forma del conjunto.
+// A single <canvas> draws ALL spheres (one per present employee) with one
+// requestAnimationFrame. Each sphere is a point cloud on a unit sphere:
+// projected orthographically, so whether it spins or jumps, the silhouette
+// stays a circle. What changes is each particle's radius, never the overall
+// shape.
 //
-// Dos decisiones que valen la pena explicar:
+// Two decisions worth explaining:
 //
-//  1. El COLOR se armoniza en OKLCh: de cada `agent.color` conservamos solo el
-//     tono (H) y le imponemos la misma luminosidad y una croma bajísima a
-//     todos. En HSL "misma L" no es "mismo brillo percibido" (un amarillo con
-//     L=60% grita y un azul con L=60% se hunde), y esa diferencia es
-//     exactamente la que hace que seis colores se lean como un semáforo. En
-//     OKLCh sí: las esferas quedan como una familia de grises con un dejo de
-//     tono cada uno. Ver ORB_TONE.
+//  1. COLOR is harmonized in OKLCh: from each `agent.color` we keep only the
+//     hue (H) and impose the same lightness and a very low chroma on all of
+//     them. In HSL "same L" is not "same perceived brightness" (a yellow at
+//     L=60% screams while a blue at L=60% sinks), and that difference is
+//     exactly what makes six colors read like a traffic light. In OKLCh it
+//     works: the spheres end up as a family of grays with a hint of hue
+//     each. See ORB_TONE.
 //
-//  2. El LAYOUT no lo decide el canvas. Cada esfera tiene un hueco en el DOM
-//     (una celda de la grilla, con el nombre del empleado debajo como texto
-//     real) y el canvas se limita a dibujar dentro del rectángulo que esa
-//     celda ocupa. Así el responsive, el salto de línea y el centrado los
-//     resuelve CSS, y el lector de pantalla lee nombres, no un dibujo.
+//  2. The canvas does NOT decide LAYOUT. Each sphere has a slot in the DOM
+//     (a grid cell, with the employee's name below as real text) and the
+//     canvas just draws inside the rectangle that cell occupies. That way
+//     CSS resolves responsiveness, line breaks and centering, and the screen
+//     reader reads names, not a drawing.
 // ═══════════════════════════════════════════════════════════════════════
 
 const TAU = Math.PI * 2;
-// Ángulo dorado: el paso que reparte puntos (o tonos) sin que se apelotonen.
+// Golden angle: the step that spreads points (or hues) without clumping.
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 export type OrbTheme = 'light' | 'dark';
@@ -33,12 +33,12 @@ export type OrbTheme = 'light' | 'dark';
 export type OrbAgent = {
   id: string;
   name: string;
-  // Color original del empleado (#rrggbb). Se armoniza acá adentro.
+  // Employee's original color (#rrggbb). Harmonized in here.
   color: string;
 };
 
-// Dónde y de qué tamaño va cada esfera, en píxeles CSS relativos al canvas.
-// Lo mide el cliente sobre el DOM (getBoundingClientRect de cada celda).
+// Where and how big each sphere goes, in CSS pixels relative to the canvas.
+// Measured by the client on the DOM (getBoundingClientRect of each cell).
 export type OrbSlot = {
   id: string;
   cx: number;
@@ -46,22 +46,22 @@ export type OrbSlot = {
   r: number;
 };
 
-// ── Color: una familia, no un semáforo ─────────────────────────────────
-// Luminosidad y croma fijas por tema; del color del empleado solo sobrevive
-// el tono. Los valores están elegidos contra los tokens de la app:
-//   claro  → fondo #f5f3ed (L≈0.96): puntos a L=0.58 tienen contraste sobrado.
-//   oscuro → fondo #171913 (L≈0.22): puntos a L=0.76 se leen sin brillar.
-// La croma (0.05) es deliberadamente ridícula: apenas un dejo de tono.
+// ── Color: one family, not a traffic light ────────────────────────────
+// Fixed lightness and chroma per theme; only the hue survives from the
+// employee's color. Values are chosen against the app tokens:
+//   light → background #f5f3ed (L≈0.96): points at L=0.58 have plenty of contrast.
+//   dark  → background #171913 (L≈0.22): points at L=0.76 read without glowing.
+// The chroma (0.05) is deliberately silly: barely a hint of hue.
 export const ORB_TONE: Record<OrbTheme, { l: number; c: number }> = {
   light: { l: 0.58, c: 0.062 },
   dark: { l: 0.76, c: 0.065 }
 };
 
-// Separación mínima de tono entre dos esferas, en radianes (~31°). Hace falta
-// porque el color del empleado NO es único: a la CEO y al contratista de las
-// empresas viejas se les asignó el color de la empresa, y dos plantillas
-// distintas repiten paletas. Con la croma tan baja, dos tonos a menos de 30°
-// dan exactamente el mismo gris.
+// Minimum hue separation between two spheres, in radians (~31°). Needed
+// because the employee color is NOT unique: the CEO and contractors from old
+// companies were assigned the company color, and two different templates may
+// repeat palettes. With such low chroma, two hues less than 30° apart yield
+// exactly the same gray.
 const MIN_HUE_GAP = 0.55;
 
 type Rgb = { r: number; g: number; b: number };
@@ -89,8 +89,8 @@ export function parseHexColor(hex: string): Rgb | null {
   };
 }
 
-// sRGB → OKLab (Björn Ottosson). Es la única transformación que hace que
-// "misma L" signifique "mismo brillo" para el ojo.
+// sRGB → OKLab (Björn Ottosson). The only transform that makes "same L"
+// mean "same brightness" to the eye.
 function rgbToOklab(rgb: Rgb) {
   const r = srgbToLinear(rgb.r);
   const g = srgbToLinear(rgb.g);
@@ -128,8 +128,8 @@ function toHex(rgb: Rgb) {
   return `#${byte(rgb.r)}${byte(rgb.g)}${byte(rgb.b)}`;
 }
 
-// Tono (en radianes) del color del empleado. null si el color es inválido o
-// un gris puro: no hay tono que conservar.
+// Hue (in radians) of the employee's color. null if the color is invalid or
+// a pure gray: no hue to keep.
 export function colorHue(hex: string): number | null {
   const rgb = parseHexColor(hex);
   if (!rgb) {
@@ -142,7 +142,7 @@ export function colorHue(hex: string): number | null {
   return Math.atan2(lab.b, lab.a);
 }
 
-// Un tono + la luminosidad y croma de la familia = el color final del punto.
+// One hue + the family's lightness and chroma = the point's final color.
 export function orbColorFromHue(hue: number, theme: OrbTheme): string {
   const tone = ORB_TONE[theme];
   return toHex(oklabToRgb({
@@ -157,17 +157,16 @@ function hueDistance(a: number, b: number) {
   return diff;
 }
 
-// Reparte los tonos de una llamada: el primero que llega conserva el suyo tal
-// cual, y a los que caen demasiado cerca de uno ya tomado se los corre lo
-// mínimo necesario. Determinista (mismo elenco → mismos tonos) y estable en el
-// orden en que llega el equipo.
+// Spreads a call's hues: the first to arrive keeps its own as-is, and those
+// landing too close to a taken one get shifted the minimum needed.
+// Deterministic (same cast → same hues) and stable in team arrival order.
 export function resolveOrbHues(colors: string[]): number[] {
   const taken: number[] = [];
   const free = (hue: number) => !taken.some((other) => hueDistance(hue, other) < MIN_HUE_GAP);
 
-  // Último recurso: el medio del hueco más grande que quede. Con 8 esferas la
-  // rueda se fragmenta y puede no quedar NINGÚN lugar a 0.55 de todos; ahí lo
-  // correcto es repartir lo mejor posible, no repetir un tono.
+  // Last resort: the middle of the largest remaining gap. With 8 spheres the
+  // wheel fragments and there may be NO spot at 0.55 from everyone; then the
+  // right move is to spread as best as possible, not repeat a hue.
   const widestGap = () => {
     const sorted = [...taken].sort((a, b) => a - b);
     let best = sorted[0] + TAU - sorted[sorted.length - 1];
@@ -183,14 +182,14 @@ export function resolveOrbHues(colors: string[]): number[] {
   };
 
   return colors.map((color, index) => {
-    // Un gris (o un color roto) igual necesita un tono propio: el ángulo
-    // dorado por posición reparte esos casos sin apelotonarlos.
+    // A gray (or a broken color) still needs its own hue: the golden
+    // angle by position spreads those cases without clumping.
     const original = colorHue(color) ?? (index * GOLDEN_ANGLE) % TAU;
     const nearest = (hue: number) => taken.reduce((min, other) => Math.min(min, hueDistance(hue, other)), Infinity);
 
-    // Se busca el hueco libre más cercano probando a un lado y al otro, no
-    // siempre en la misma dirección: así el tono se corre lo menos posible
-    // (un rojo termina en un rojo apagado vecino, no en un verde).
+    // The nearest free gap is found by probing both sides, not always
+    // in the same direction: that way the hue shifts as little as possible
+    // (a red ends up as a neighboring muted red, not a green).
     let hue = original;
     let best = original;
     let bestDistance = nearest(original);
@@ -204,8 +203,8 @@ export function resolveOrbHues(colors: string[]): number[] {
       }
     }
     if (!free(hue)) {
-      // Nada libre: se elige lo que más separe, entre el mejor candidato
-      // cercano al tono original y el centro del hueco más grande que quede.
+      // Nothing free: pick what separates most, between the best candidate
+      // near the original hue and the center of the largest remaining gap.
       const fallback = widestGap();
       hue = nearest(fallback) > bestDistance ? fallback : best;
     }
@@ -214,8 +213,8 @@ export function resolveOrbHues(colors: string[]): number[] {
   });
 }
 
-// El tono del empleado, con la luminosidad y la croma de la familia.
-// Un color ilegible (o gris puro) cae a un neutro del tema, nunca a negro.
+// The employee's hue, with the family's lightness and chroma.
+// An unreadable color (or pure gray) falls back to a theme neutral, never black.
 export function harmonizeOrbColor(hex: string, theme: OrbTheme): string {
   const hue = colorHue(hex);
   if (hue === null) {
@@ -224,33 +223,32 @@ export function harmonizeOrbColor(hex: string, theme: OrbTheme): string {
   return orbColorFromHue(hue, theme);
 }
 
-// ── Geometría de la nube ───────────────────────────────────────────────
+// ── Cloud geometry ───────────────────────────────────────────────────
 
-// Cuántas partículas por esfera según su radio en píxeles CSS. Con 8 esferas
-// grandes son ~4.300 puntos por frame, que se dibujan en 4 pasadas (una por
-// bucket de profundidad), no en 4.300 llamadas a fill(). La densidad importa:
-// con la mitad de puntos la nube se lee como un círculo punteado, no como una
-// esfera.
+// How many particles per sphere given its radius in CSS pixels. With 8 large
+// spheres that's ~4,300 points per frame, drawn in 4 passes (one per depth
+// bucket), not 4,300 fill() calls. Density matters: with half the points the
+// cloud reads as a dotted circle, not a sphere.
 export function particleCount(radius: number) {
   return Math.round(Math.min(720, Math.max(150, radius * 6.2)));
 }
 
 export type OrbParticle = {
-  // Dirección sobre la esfera unitaria (|u| = 1).
+  // Direction on the unit sphere (|u| = 1).
   ux: number;
   uy: number;
   uz: number;
-  // Radio propio dentro de la cáscara (0.72..1): le da volumen a la nube.
+  // Own radius inside the shell (0.72..1): gives the cloud volume.
   rad: number;
-  // Desfase del salto, para que las partículas no reboten todas juntas.
+  // Jump offset, so particles don't all bounce together.
   phase: number;
 };
 
-// Pseudo-aleatorio determinista y sin estado (la misma esfera se ve igual en
-// cada reconstrucción). Tiene que ser un hash con avalancha, no la parte
-// fraccionaria de un irracional: esa opción parece aleatoria pero sigue siendo
-// una secuencia lineal, y sumada al ángulo dorado dibuja meridianos visibles
-// sobre la esfera (se vio: las nubes quedaban como melones).
+// Deterministic stateless pseudo-random (the same sphere looks the same on
+// every rebuild). It must be an avalanche hash, not the fractional part
+// of an irrational: that option looks random but is still a linear sequence,
+// and added to the golden angle it draws visible meridians on the sphere
+// (seen in practice: clouds looked like melons).
 function hashUnit(index: number, seed: number) {
   let hash = Math.imul((index | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(Math.round(seed * 1e6) | 0, 0xc2b2ae35);
   hash ^= hash >>> 15;
@@ -259,15 +257,15 @@ function hashUnit(index: number, seed: number) {
   return (hash >>> 0) / 4294967296;
 }
 
-// Distribución de Fibonacci (con temblor): puntos repartidos parejo sobre la
-// esfera, sin los polos apelotonados que deja el muestreo por lat/long.
+// Fibonacci distribution (with jitter): points spread evenly over the
+// sphere, without the clumped poles left by lat/long sampling.
 export function sphereParticles(count: number, seed = 0): OrbParticle[] {
   const total = Math.max(1, Math.round(count));
   const particles: OrbParticle[] = [];
   for (let index = 0; index < total; index += 1) {
-    // Fibonacci puro dibuja espirales visibles (efecto muaré) sobre la esfera.
-    // Un temblor chico en la altura y el ángulo rompe ese patrón y la nube
-    // pasa de "malla" a "polvo", sin perder el reparto parejo.
+    // Pure Fibonacci draws visible spirals (moiré effect) on the sphere.
+    // A small jitter in height and angle breaks that pattern and the cloud
+    // goes from "mesh" to "dust" without losing the even spread.
     const uy = 1 - (2 * index + 1 + (hashUnit(index * 5 + 2, seed + 0.11) - 0.5) * 1.1) / total;
     const ring = Math.sqrt(Math.max(0, 1 - uy * uy));
     const theta = index * GOLDEN_ANGLE + seed + (hashUnit(index * 11 + 7, seed + 0.53) - 0.5) * 0.85;
@@ -275,9 +273,9 @@ export function sphereParticles(count: number, seed = 0): OrbParticle[] {
       ux: Math.cos(theta) * ring,
       uy,
       uz: Math.sin(theta) * ring,
-      // Cáscara gruesa (72%..100% del radio): el borde queda definido y el
-      // interior semitransparente, que es lo que hace leer una esfera y no un
-      // aro de puntos.
+      // Thick shell (72%..100% of radius): the edge stays defined and the
+      // interior semi-transparent, which is what reads as a sphere rather
+      // than a ring of dots.
       rad: 0.72 + 0.28 * hashUnit(index, seed),
       phase: hashUnit(index * 3 + 1, seed + 0.31) * TAU
     });
@@ -285,18 +283,18 @@ export function sphereParticles(count: number, seed = 0): OrbParticle[] {
   return particles;
 }
 
-// Seguimiento de la amplitud: sube rápido (la voz arranca de golpe) y baja
-// lento (si bajara igual de rápido, las partículas titilarían con cada
-// consonante sorda).
+// Amplitude tracking: rises fast (voice starts abruptly) and falls
+// slowly (if it fell just as fast, particles would flicker on every
+// voiceless consonant).
 export function followEnergy(current: number, target: number, dt: number) {
   const rate = target > current ? 14 : 4.5;
   const step = Math.min(1, rate * Math.max(0, dt));
   return current + (target - current) * step;
 }
 
-// ── Movimiento ─────────────────────────────────────────────────────────
-// Reposo: una sala en silencio. La flotación tiene período ~7 s y amplitud
-// 6% del radio; la rotación da una vuelta cada ~40 s.
+// ── Motion ───────────────────────────────────────────────────────────
+// At rest: a silent room. Floating has a ~7 s period and 6% of radius
+// amplitude; rotation makes one turn every ~40 s.
 const FLOAT_SPEED = 0.9;
 const FLOAT_AMPLITUDE = 0.06;
 const DRIFT_SPEED = 0.6;
@@ -304,37 +302,37 @@ const DRIFT_AMPLITUDE = 0.022;
 const ROTATION_SPEED = 0.155;
 const TILT = 0.42;
 
-// Al hablar: las partículas saltan hasta un 20% de su radio y toda la esfera
-// hace un zoom de 7%. El techo (1.2 × 1.07 ≈ 1.28) es el que fija el radio
-// base contra el hueco reservado en el DOM, así nada se sale de su celda.
+// When speaking: particles jump up to 20% of their radius and the whole
+// sphere zooms 7%. The ceiling (1.2 × 1.07 ≈ 1.28) is what sets the base
+// radius against the DOM-reserved slot, so nothing leaves its cell.
 const JUMP_AMPLITUDE = 0.2;
 const JUMP_SPEED = 6.5;
 const ZOOM_AMPLITUDE = 0.07;
 const BASE_RADIUS_RATIO = 0.78;
 
-// Opacidad por bucket de profundidad: el fondo de la nube se desvanece y el
-// frente queda nítido. Es lo que hace que un círculo plano parezca un volumen.
+// Opacity per depth bucket: the cloud's back fades out and the front stays
+// sharp. That's what makes a flat circle look like a volume.
 const DEPTH_ALPHA = [0.34, 0.52, 0.74, 1];
 const BUCKETS = DEPTH_ALPHA.length;
 
-// Opacidad general de la esfera: en reposo respira apagada, al hablar se
-// asienta. Con prefers-reduced-motion esto es TODO el cambio visible.
+// Overall sphere opacity: at rest it breathes dimmed, when speaking it
+// settles. With prefers-reduced-motion this is ALL the visible change.
 const ORB_ALPHA_IDLE = 0.78;
 const ORB_ALPHA_SPEAKING = 1;
-// Mientras habla alguien, el resto de la sala se corre un paso atrás.
+// While someone speaks, the rest of the room steps back.
 const ORB_FOCUS_DIM = 0.62;
 
-// ── Estado "trabajando" ────────────────────────────────────────────────
-// Un agente que está PRODUCIENDO en segundo plano no habla, pero tiene que
-// verse vivo: un arco fino que gira despacio alrededor de la esfera. Es
-// deliberadamente distinto de hablar (que late con la voz) y deliberadamente
-// lento — un giro rápido en el borde de la pantalla es ruido, no información.
+// ── "Working" state ──────────────────────────────────────────────────
+// An agent PRODUCING in the background doesn't speak, but must look alive:
+// a thin arc slowly circling the sphere. It's deliberately different from
+// speaking (which pulses with the voice) and deliberately slow — a fast spin
+// at the screen's edge is noise, not information.
 const WORK_ARC_SPEED = 0.85;
 const WORK_ARC_SWEEP = TAU * 0.26;
 const WORK_ARC_ALPHA = 0.55;
 const WORK_ARC_WIDTH = 2;
 const WORK_ARC_GAP = 1.1;
-// Quien trabaja no se apaga aunque otro esté hablando: sigue en foco.
+// Whoever works doesn't dim even while another speaks: stays in focus.
 const ORB_FOCUS_WORKING = 0.9;
 
 type Orb = {
@@ -343,7 +341,7 @@ type Orb = {
   hue: number;
   color: string;
   particles: OrbParticle[];
-  // Scratch de proyección: x, y, tamaño por partícula (se reusa cada frame).
+  // Projection scratch: x, y, size per particle (reused every frame).
   projected: Float32Array;
   bucket: Uint8Array;
   slot: OrbSlot | null;
@@ -351,14 +349,14 @@ type Orb = {
   phaseRot: number;
   energy: number;
   target: number;
-  // Cuánto se atenúa la esfera cuando habla OTRO (1 = plena). Es el único
-  // cambio visible con prefers-reduced-motion, y en movimiento normal ayuda a
-  // que la mirada vaya a quien tiene la palabra.
+  // How much the sphere dims when ANOTHER speaks (1 = full). It's the only
+  // visible change with prefers-reduced-motion, and in normal motion it helps
+  // the eye go to whoever holds the floor.
   focus: number;
 };
 
 export type OrbFieldOptions = {
-  // Amplitud actual de la voz del agente que habla (0..1).
+  // Current voice amplitude of the speaking agent (0..1).
   energy: () => number;
 };
 
@@ -369,7 +367,7 @@ export class OrbField {
   private orbs: Orb[] = [];
   private theme: OrbTheme = 'light';
   private speakingId = '';
-  // Quiénes están produciendo AHORA, según los work_event del servidor.
+  // Who is producing RIGHT NOW, per the server's work_events.
   private workingIds = new Set<string>();
   private reduced = false;
   private raf = 0;
@@ -378,7 +376,7 @@ export class OrbField {
   private dpr = 1;
   private width = 0;
   private height = 0;
-  // FPS medido sobre ventanas de ~1 s (para reportar, no para decidir nada).
+  // FPS measured over ~1 s windows (for reporting, not for deciding anything).
   private fpsFrames = 0;
   private fpsSince = 0;
   private fpsValue = 0;
@@ -388,8 +386,8 @@ export class OrbField {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.options = options;
-    // El campo vive lo que vive la página, así que este listener no se
-    // desengancha nunca (la llamada se abre y se cierra; el canvas es uno solo).
+    // The field lives as long as the page, so this listener is never
+    // unhooked (the call opens and closes; the canvas is a single one).
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       this.reducedMedia = window.matchMedia('(prefers-reduced-motion: reduce)');
       this.reduced = this.reducedMedia.matches;
@@ -406,19 +404,18 @@ export class OrbField {
     return this.reduced;
   }
 
-  // Reconstruye las nubes solo si cambió el elenco (id o color): sin esto,
-  // cada mensaje del servidor reiniciaría las fases y las esferas pegarían
-  // un salto.
-  // Los que están trabajando en segundo plano. Idempotente y barato: se llama
-  // en cada work_event.
+  // Rebuilds the clouds only if the cast changed (id or color): without this,
+  // every server message would restart the phases and the spheres would jump.
+  // Those working in the background. Idempotent and cheap: called on every
+  // work_event.
   setWorking(ids: string[]) {
     const siguiente = new Set(ids);
     if (siguiente.size === this.workingIds.size && [...siguiente].every((id) => this.workingIds.has(id))) {
       return;
     }
     this.workingIds = siguiente;
-    // Con movimiento reducido el bucle está parado si nada viaja: hay que
-    // despertarlo para que el arco aparezca o desaparezca.
+    // With reduced motion the loop is stopped when nothing travels: it must
+    // be woken so the arc appears or disappears.
     this.kick();
   }
 
@@ -450,7 +447,7 @@ export class OrbField {
         projected: new Float32Array(0),
         bucket: new Uint8Array(0),
         slot: null,
-        // Cada esfera flota y gira con su propio desfase: nunca laten al unísono.
+        // Each sphere floats and spins with its own offset: they never pulse in unison.
         phaseFloat: (index * 1.371) % TAU,
         phaseRot: (index * 2.117) % TAU,
         energy: 0,
@@ -461,8 +458,8 @@ export class OrbField {
     this.kick();
   }
 
-  // Posiciones medidas en el DOM. Si cambió el radio, se rehace la nube con
-  // la densidad que corresponde a ese tamaño.
+  // DOM-measured positions. If the radius changed, the cloud is rebuilt with
+  // the density matching that size.
   setSlots(slots: OrbSlot[]) {
     const byId = new Map(slots.map((slot) => [slot.id, slot]));
     for (const orb of this.orbs) {
@@ -549,9 +546,9 @@ export class OrbField {
     };
   }
 
-  // Con movimiento reducido el bucle se apaga en cuanto la opacidad llega a
-  // destino: no hay nada que animar hasta que alguien hable. Cualquier cambio
-  // de estado lo vuelve a encender.
+  // With reduced motion the loop turns off as soon as opacity reaches its
+  // destination: nothing to animate until someone speaks. Any state change
+  // turns it back on.
   private kick() {
     if (this.raf || !this.reduced) {
       return;
@@ -566,7 +563,7 @@ export class OrbField {
       return;
     }
 
-    // dt acotado: si la pestaña estuvo trabada, no queremos un salto.
+    // Clamped dt: if the tab was stuck, we don't want a jump.
     const dt = Math.min(0.05, Math.max(0, (now - this.lastAt) / 1000));
     this.lastAt = now;
     this.clock += dt;
@@ -585,9 +582,9 @@ export class OrbField {
     for (const orb of this.orbs) {
       const speaking = orb.id === this.speakingId;
       const working = this.workingIds.has(orb.id);
-      // Con movimiento reducido la opacidad NO sigue la amplitud: seguir la voz
-      // ahí sería un parpadeo, justo lo que hay que evitar. Sube una vez al
-      // arrancar el turno y baja al terminarlo.
+      // With reduced motion opacity does NOT follow amplitude: following the voice
+      // there would be flicker, exactly what must be avoided. It rises once when
+      // the turn starts and falls when it ends.
       orb.target = speaking ? (this.reduced ? 1 : energy) : 0;
       orb.energy = followEnergy(orb.energy, orb.target, dt);
       const focusTarget = !this.speakingId || speaking
@@ -600,13 +597,13 @@ export class OrbField {
       this.drawOrb(ctx, orb);
       if (working) {
         this.drawWorkArc(ctx, orb);
-        // El arco gira: mientras haya alguien trabajando el bucle no para.
+        // The arc spins: while anyone works, the loop doesn't stop.
         animating = true;
       }
     }
 
-    // En movimiento normal el bucle es continuo (flotación + rotación). En
-    // reducido solo sigue mientras la opacidad esté viajando.
+    // In normal motion the loop is continuous (floating + rotation). In reduced
+    // it only continues while opacity is traveling.
     if (!this.reduced || animating) {
       this.raf = requestAnimationFrame(this.tick);
     } else {
@@ -614,9 +611,9 @@ export class OrbField {
     }
   };
 
-  // El anillo de "está produciendo": un arco que recorre el borde. Con
-  // movimiento reducido no gira — queda un anillo punteado completo, que
-  // comunica lo mismo sin animación.
+  // The "producing" ring: an arc traveling the edge. With reduced motion
+  // it doesn't spin — a full dotted ring remains, which communicates the
+  // same thing without animation.
   private drawWorkArc(ctx: CanvasRenderingContext2D, orb: Orb) {
     const slot = orb.slot;
     if (!slot) {
@@ -638,7 +635,7 @@ export class OrbField {
       ctx.beginPath();
       ctx.arc(slot.cx, slot.cy, radio, desde, desde + WORK_ARC_SWEEP);
       ctx.stroke();
-      // Un segundo arco enfrentado: se lee como giro, no como recorte.
+      // A second opposing arc: reads as spinning, not as clipping.
       ctx.globalAlpha = WORK_ARC_ALPHA * 0.5 * orb.focus;
       ctx.beginPath();
       ctx.arc(slot.cx, slot.cy, radio + WORK_ARC_GAP, desde + Math.PI, desde + Math.PI + WORK_ARC_SWEEP * 0.6);
@@ -669,20 +666,20 @@ export class OrbField {
     const jump = reduced ? 0 : JUMP_AMPLITUDE * energy;
     const jumpClock = this.clock * JUMP_SPEED;
 
-    // Pasada 1: proyección. Una sola vuelta con trigonometría, guardada en
-    // los scratch buffers de la esfera.
+    // Pass 1: projection. A single trigonometry round, stored in the
+    // sphere's scratch buffers.
     const particles = orb.particles;
     const projected = orb.projected;
     const buckets = orb.bucket;
     for (let index = 0; index < particles.length; index += 1) {
       const particle = particles[index];
-      // Giro sobre el eje Y (el de la nube), después inclinación sobre X.
+      // Spin around the Y axis (the cloud's), then tilt around X.
       const x = particle.ux * cos + particle.uz * sin;
       const zRot = particle.uz * cos - particle.ux * sin;
       const y = particle.uy * cosTilt - zRot * sinTilt;
       const z = particle.uy * sinTilt + zRot * cosTilt;
 
-      // El radio de CADA partícula late; el conjunto sigue siendo un círculo.
+      // EACH particle's radius pulses; the whole stays a circle.
       const wave = jump > 0 ? jump * (0.55 + 0.45 * Math.sin(jumpClock + particle.phase)) : 0;
       const scale = radius * particle.rad * (1 + wave) * zoom;
 
@@ -694,8 +691,8 @@ export class OrbField {
       buckets[index] = Math.min(BUCKETS - 1, Math.max(0, Math.floor(depth * BUCKETS)));
     }
 
-    // Pasada 2: un fill() por bucket de profundidad. Cuatro llamadas por
-    // esfera en vez de una por partícula.
+    // Pass 2: one fill() per depth bucket. Four calls per sphere
+    // instead of one per particle.
     const orbAlpha = (ORB_ALPHA_IDLE + (ORB_ALPHA_SPEAKING - ORB_ALPHA_IDLE) * energy) * orb.focus;
     ctx.fillStyle = orb.color;
     for (let bucket = 0; bucket < BUCKETS; bucket += 1) {
@@ -719,16 +716,16 @@ export class OrbField {
     ctx.globalAlpha = 1;
   }
 
-  // ── Hooks de lectura para fx/* (aditivo, 09/11, track visual-wow) ────
-  // Solo LECTURA: no cambian ningún comportamiento del campo. El main los
-  // usa para espejar estado (mesh reactivo, glow, palette) sin tocar el loop.
+  // ── Read hooks for fx/* (additive, 09/11, visual-wow track) ──────
+  // READ ONLY: they change no field behavior. Main uses them to mirror
+  // state (reactive mesh, glow, palette) without touching the loop.
 
-  // Quién tiene la palabra ahora ('' = nadie).
+  // Who holds the floor now ('' = nobody).
   getSpeakingId() {
     return this.speakingId;
   }
 
-  // Foto por esfera: energía suavizada, foco, flags. Objeto nuevo cada vez.
+  // Per-sphere snapshot: smoothed energy, focus, flags. New object each time.
   snapshot(): OrbSnapshot[] {
     return this.orbs.map((orb) => ({
       id: orb.id,
@@ -740,7 +737,7 @@ export class OrbField {
   }
 }
 
-// Foto de una esfera para consumidores externos (fx/mesh, main). Solo datos.
+// One sphere's snapshot for external consumers (fx/mesh, main). Data only.
 export type OrbSnapshot = {
   id: string;
   energy: number;

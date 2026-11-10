@@ -1,4 +1,4 @@
-// Mission Control — tipos (solo lectura de endpoints existentes + /api/mission/live).
+// Mission Control — types (read-only from existing endpoints + /api/mission/live).
 
 export interface LiveTeamMember {
   id: string;
@@ -97,15 +97,15 @@ export interface AudioDevices {
   sources: AudioNode[];
 }
 
-/** Estado vivo que solo el cliente (WS) conoce; el main lo inyecta. */
+/** Live state only the client (WS) knows; main injects it. */
 export interface MissionLiveHooks {
-  /** Ids de agentes hablando ahora mismo (vacío = nadie / desconocido). */
+  /** Ids of agents speaking right now (empty = nobody / unknown). */
   getLiveSpeakers?: () => string[];
-  /** true si hay sesión de voz activa. */
+  /** true if a voice session is active. */
   getVoiceActive?: () => boolean;
 }
 
-/** Monitor de conectividad (TC 09/11): snapshot de GET /api/connectivity. */
+/** Connectivity monitor (TC 09/11): snapshot of GET /api/connectivity. */
 export interface ConnectivityCheck {
   name: string;
   ok: boolean;

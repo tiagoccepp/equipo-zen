@@ -7,9 +7,9 @@ import path from 'node:path';
 import { auditarApp } from '../scripts/auditar-app.mjs';
 import { STACKS } from '../server/lib/playbooks.js';
 
-// La auditoría de estructura: ¿lo que hay en la carpeta es una app bien armada?
-// Todo se mide sobre carpetas de verdad en un temporal, nunca sobre workspace/,
-// y por STACK, nunca por nombre de plantilla.
+// Structure audit: is what lives in the folder a well-built app?
+// Everything is measured on real folders in a temp dir, never on workspace/,
+// and by STACK, never by template name.
 
 function carpeta(t, archivos) {
   const dir = mkdtempSync(path.join(tmpdir(), 'auditoria-'));
@@ -38,7 +38,7 @@ const HTML_SANO = [
 const APP_JSON = JSON.stringify({ expo: { name: 'Contador', slug: 'contador' } });
 const PKG_RN = JSON.stringify({ name: 'contador', dependencies: { expo: '~52.0.0', 'react-native': '0.76.5' } });
 
-test('cada nicho declarado tiene su auditor: uno nuevo no puede pasar en silencio', async (t) => {
+test('every declared niche has its auditor: a new one cannot pass silently', async (t) => {
   for (const stack of STACKS) {
     const dir = carpeta(t, { 'algo.txt': 'nada' });
     const r = await auditarApp(dir, stack);
@@ -47,22 +47,22 @@ test('cada nicho declarado tiene su auditor: uno nuevo no puede pasar en silenci
   }
 });
 
-test('una carpeta vacía no es una app a medias: no se entregó nada', async (t) => {
+test('an empty folder is not a half-done app: nothing was delivered', async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'auditoria-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const r = await auditarApp(dir, 'web');
   assert.equal(r.veredicto, 'VACÍA', acta(r));
 });
 
-test('web: index.html con cabecera, tokens y sin referencias rotas está bien armada', async (t) => {
+test('web: index.html with header, tokens and no broken references is well-built', async (t) => {
   const r = await auditarApp(carpeta(t, { 'index.html': HTML_SANO }), 'web');
   assert.equal(r.graves, 0, acta(r));
   assert.match(r.veredicto, /BIEN ARMADA/, acta(r));
 });
 
-test('web: una web sin punto de entrada no abre, y los documentos no son el producto', async (t) => {
-  // Es el caso real más común en workspace/: la corrida escribió PROYECTO.md,
-  // una bitácora y los tokens, y ningún producto.
+test('web: a web without an entry point does not open, and documents are not the product', async (t) => {
+  // The most common real case in workspace/: the run wrote PROYECTO.md,
+  // a log and the tokens, and no product.
   const r = await auditarApp(carpeta(t, {
     'PROYECTO.md': '# Plan\n\nEtapas del trabajo.\n',
     'BITACORA.md': '- alguien dejó los tokens\n',
@@ -72,7 +72,7 @@ test('web: una web sin punto de entrada no abre, y los documentos no son el prod
   assert.equal(r.veredicto, 'NO ES UNA APP BIEN ARMADA', acta(r));
 });
 
-test('web: se apoya en verify.js para el HTML roto y las referencias que no existen', async (t) => {
+test('web: it relies on verify.js for broken HTML and missing references', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'index.html': HTML_SANO.replace('</body>', '<script src="app.js"></script><div>')
   }), 'web');
@@ -80,14 +80,14 @@ test('web: se apoya en verify.js para el HTML roto y las referencias que no exis
   assert.ok(grave(r, 'balanceado'), acta(r));
 });
 
-test('web: sin tokens.css ni :root cada bloque inventa su paleta', async (t) => {
+test('web: without tokens.css or :root every block invents its own palette', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'index.html': HTML_SANO.replace(/<style>[\s\S]*?<\/style>/, '<style>body{background:#101a12}</style>')
   }), 'web');
   assert.ok(grave(r, 'no hay tokens.css ni un :root'), acta(r));
 });
 
-test('movil-rn: con manifiesto, punto de entrada y pantallas montadas está bien armada', async (t) => {
+test('movil-rn: with manifest, entry point and mounted screens it is well-built', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'package.json': PKG_RN,
     'app.json': APP_JSON,
@@ -99,9 +99,9 @@ test('movil-rn: con manifiesto, punto de entrada y pantallas montadas está bien
   assert.match(r.veredicto, /BIEN ARMADA/, acta(r));
 });
 
-test('movil-rn: solo src/ no es una app, es la carpeta de código de una app que falta', async (t) => {
-  // Tal cual apareció en workspace/: la corrida escribió las pantallas y se quedó
-  // sin pasos antes de andamiar el proyecto.
+test('movil-rn: src/ alone is not an app, it is the code folder of a missing app', async (t) => {
+  // Exactly as it appeared in workspace/: the run wrote the screens and ran
+  // out of steps before scaffolding the project.
   const r = await auditarApp(carpeta(t, {
     'src/screens/Principal.jsx': "import { View } from 'react-native';\nexport default () => <View />;\n"
   }), 'movil-rn');
@@ -110,9 +110,9 @@ test('movil-rn: solo src/ no es una app, es la carpeta de código de una app que
   assert.equal(r.veredicto, 'NO ES UNA APP BIEN ARMADA', acta(r));
 });
 
-test('movil-rn: el punto de entrada que no monta ninguna pantalla es el error del nicho', async (t) => {
-  // Se abre la app y se ve la plantilla de Expo mientras el trabajo vive en
-  // src/screens/. Es lo que el flujo del nicho ataca de frente.
+test('movil-rn: the entry point mounting no screen is the niche signature failure', async (t) => {
+  // The app opens showing the Expo template while the work lives in
+  // src/screens/. That is what the niche flow attacks head-on.
   const r = await auditarApp(carpeta(t, {
     'package.json': PKG_RN,
     'app.json': APP_JSON,
@@ -122,7 +122,7 @@ test('movil-rn: el punto de entrada que no monta ninguna pantalla es el error de
   assert.ok(grave(r, 'no monta ninguna pantalla'), acta(r));
 });
 
-test('movil-rn: una web disfrazada de app no pasa', async (t) => {
+test('movil-rn: a web disguised as an app does not pass', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'package.json': PKG_RN,
     'app.json': APP_JSON,
@@ -133,7 +133,7 @@ test('movil-rn: una web disfrazada de app no pasa', async (t) => {
   assert.ok(grave(r, 'browser APIs'), acta(r));
 });
 
-test('android: el namespace del módulo tiene que coincidir con el paquete del código', async (t) => {
+test('android: the module namespace must match the code package', async (t) => {
   const base = {
     'settings.gradle.kts': 'include(":app")',
     'app/src/main/AndroidManifest.xml': '<manifest><application><activity android:name=".MainActivity" /></application></manifest>',
@@ -154,7 +154,7 @@ test('android: el namespace del módulo tiene que coincidir con el paquete del c
   assert.ok(grave(mal, 'no coincide con el paquete del código'), acta(mal));
 });
 
-test('android: sin proyecto Gradle no hay app que compilar', async (t) => {
+test('android: without a Gradle project there is no app to compile', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'app/src/main/java/com/equipo/app/MainActivity.kt': 'package com.equipo.app\nclass MainActivity\n'
   }), 'android');
@@ -162,7 +162,7 @@ test('android: sin proyecto Gradle no hay app que compilar', async (t) => {
   assert.ok(grave(r, 'app/build.gradle.kts'), acta(r));
 });
 
-test('python: compila de verdad, y un .py roto se marca con archivo y línea', async (t) => {
+test('python: it really compiles, and a broken .py is flagged with file and line', async (t) => {
   const bien = await auditarApp(carpeta(t, {
     'main.py': 'def principal():\n    print("hola")\n\n\nif __name__ == "__main__":\n    principal()\n',
     'requirements.txt': '# sin dependencias externas\n'
@@ -178,13 +178,13 @@ test('python: compila de verdad, y un .py roto se marca con archivo y línea', a
   assert.ok(roto.mal.some((m) => m.que.includes('main.py')), acta(roto));
 });
 
-test('python: sin punto de entrada ni dependencias declaradas no se sabe qué correr', async (t) => {
+test('python: without entry point or declared dependencies nobody knows what to run', async (t) => {
   const r = await auditarApp(carpeta(t, { 'src/util.py': 'def sumar(a, b):\n    return a + b\n' }), 'python');
   assert.ok(grave(r, 'no hay punto de entrada'), acta(r));
   assert.ok(grave(r, 'requirements.txt'), acta(r));
 });
 
-test('el nicho declarado manda: una web entregada en un proyecto móvil falla como móvil', async (t) => {
+test('the declared niche rules: a web delivered in a mobile project fails as mobile', async (t) => {
   const dir = carpeta(t, { 'index.html': HTML_SANO });
   const comoMovil = await auditarApp(dir, 'movil-rn');
   assert.equal(comoMovil.veredicto, 'NO ES UNA APP BIEN ARMADA', acta(comoMovil));
@@ -192,7 +192,7 @@ test('el nicho declarado manda: una web entregada en un proyecto móvil falla co
   assert.match(comoWeb.veredicto, /BIEN ARMADA/, acta(comoWeb));
 });
 
-test('sin nicho declarado se deduce de lo que hay adentro, y se dice', async (t) => {
+test('without a declared niche it is inferred from the contents, and disclosed', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'package.json': PKG_RN,
     'app.json': APP_JSON,
@@ -203,7 +203,7 @@ test('sin nicho declarado se deduce de lo que hay adentro, y se dice', async (t)
   assert.equal(r.stackDeducido, 'movil-rn', 'tiene que quedar dicho que el nicho se dedujo');
 });
 
-test('los intermedios de compilación no se auditan: arruinarían la medición', async (t) => {
+test('build intermediates are not audited: they would ruin the measurement', async (t) => {
   const r = await auditarApp(carpeta(t, {
     'index.html': HTML_SANO,
     'node_modules/algo/roto.js': 'function ( {',

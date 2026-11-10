@@ -1,20 +1,20 @@
-// Audita la ESTRUCTURA de un entregable: ¿lo que hay en esa carpeta es una app
-// bien armada, o son archivos sueltos que parecen una?
+// Audits the STRUCTURE of a deliverable: is what's in that folder a well-built app
+// or just loose files that look like one?
 //
-// No reimplementa lo que ya existe. La verificación de contenido la hace
-// verify.js (HTML balanceado, título, descripción, recursos remotos, referencias
-// rotas, JS que no parsea) y la de "esto es una app de verdad" la hace
-// native-build.js (revisarReactNative, compilarPython, detectarProyecto). Acá
-// solo va lo que ninguna de las dos mira: que estén los archivos que la
-// ESTRUCTURA del nicho exige y que encajen entre ellos (el namespace del módulo
-// contra el paquete del código, el punto de entrada contra las pantallas).
+// It doesn't reimplement what already exists. Content verification is done by
+// verify.js (balanced HTML, title, description, remote resources, broken
+// references, JS that doesn't parse) and the "this is a real app" check is done by
+// native-build.js (revisarReactNative, compilarPython, detectarProyecto). Only
+// what neither of them looks at goes here: that the files the niche's
+// STRUCTURE requires are present and fit together (the module namespace
+// against the code package, the entry point against the screens).
 //
-//   node scripts/auditar-app.mjs <carpeta> [stack]
-//   node scripts/auditar-app.mjs --workspace          # todo lo que hay en workspace/
-//   node scripts/auditar-app.mjs <carpeta> --json
+//   node scripts/auditar-app.mjs <folder> [stack]
+//   node scripts/auditar-app.mjs --workspace          # everything in workspace/
+//   node scripts/auditar-app.mjs <folder> --json
 //
-// Sin stack, lo deduce con detectarProyecto() y lo dice. Con --workspace lo saca
-// de la base (goals.stack), que es la fuente de verdad.
+// Without a stack, it infers it with detectarProyecto() and says so. With --workspace
+// it takes it from the DB (goals.stack), which is the source of truth.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -25,10 +25,10 @@ import { archivosPython, compilarPython, detectarProyecto, revisarReactNative } 
 import { esCarpetaIgnorada } from '../server/lib/workforce.js';
 import { normalizeStack } from '../server/lib/playbooks.js';
 
-// ── Lectura de la carpeta ───────────────────────────────────────────────────
+// ── Folder reading ──────────────────────────────────────────────────────────
 
-// Mismo filtro que usa el motor: sin esto, después de una compilación el listado
-// devuelve miles de intermedios y la auditoría mide basura.
+// Same filter the engine uses: without this, after a build the listing
+// returns thousands of intermediates and the audit measures garbage.
 function listar(base, prefijo = '') {
   const out = [];
   let entradas = [];
@@ -71,10 +71,10 @@ function json(dir, rel) {
   }
 }
 
-// ── El acta ─────────────────────────────────────────────────────────────────
+// ── The report ──────────────────────────────────────────────────────────────
 
-// Un acta con dos columnas: lo que está y lo que falta. El veredicto sale de que
-// no falte nada grave, no de una nota inventada.
+// A report with two columns: what is there and what is missing. The verdict comes from
+// nothing critical missing, not from a made-up grade.
 function nuevaActa() {
   const bien = [];
   const mal = [];
@@ -87,7 +87,7 @@ function nuevaActa() {
     falta(que, grave = true) {
       mal.push({ que, grave });
     },
-    // Azúcar para el caso más común: "existe o falta".
+    // Sugar for the most common case: "exists or missing".
     archivo(existe, nombre, detalle = '', grave = true) {
       if (existe) {
         bien.push(`${nombre}${detalle ? ` — ${detalle}` : ''}`);
@@ -99,17 +99,17 @@ function nuevaActa() {
   };
 }
 
-// ── Lo que comparten todos los nichos ───────────────────────────────────────
+// ── What all niches share ───────────────────────────────────────────────────
 
-// verify.js mide el CONTENIDO de lo que se puede medir sin ejecutar. Se le pasa
-// el listado completo del proyecto aparte, porque un archivo puede referenciar a
-// otro y sin esa lista se reporta como roto algo que existe.
+// verify.js measures the CONTENT of what can be measured without running. The
+// project's full file list is passed separately, because one file may reference
+// another and without that list something that exists gets reported as broken.
 function verificarContenido(dir, archivos, acta, { soloEstos = null } = {}) {
   const candidatos = (soloEstos || archivos).filter((rel) => /\.(html?|css|js|mjs|md|txt)$/i.test(rel));
   const mapa = new Map();
   for (const rel of candidatos) {
-    // Un archivo enorme no se verifica: verify.js trabaja con regex y no aporta
-    // nada leer un bundle.
+    // A huge file is not verified: verify.js works with regex and reading
+    // a bundle adds nothing.
     let tamano = 0;
     try {
       tamano = statSync(path.join(dir, rel)).size;
@@ -129,8 +129,8 @@ function verificarContenido(dir, archivos, acta, { soloEstos = null } = {}) {
     return;
   }
   for (const h of hallazgos.slice(0, 12)) {
-    // El JS que no parsea y las referencias rotas son estructurales; el resto
-    // (placeholders, inglés, un color a mano) es calidad y no tumba la app.
+    // JS that doesn't parse and broken references are structural; the rest
+    // (placeholders, English, a hand-picked color) is quality and doesn't fail the app.
     const estructural = /no parsea|no existen|balanceado|remoto/i.test(h.que);
     acta.falta(`[${h.archivo}] ${h.que}`, estructural);
   }
@@ -152,15 +152,15 @@ async function auditarWeb(dir, archivos, acta) {
   }
 
   const html = leer(dir, entrada);
-  // Estructura del documento. verify.js ya mide título, descripción y lang, pero
-  // da por sentado que es un documento: si no hay <html>/<head>/<body> ni se
-  // molesta en mirar la cabecera, así que eso se chequea acá.
+  // Document structure. verify.js already measures title, description and lang, but
+  // it takes for granted that this is a document: if there is no <html>/<head>/<body>
+  // it doesn't even bother looking at the head, so that is checked here.
   for (const [tag, porque] of [['html', 'el documento'], ['head', 'la cabecera'], ['body', 'el cuerpo']]) {
     acta.archivo(new RegExp(`<${tag}[\\s>]`, 'i').test(html), `<${tag}>`, porque);
   }
 
-  // Tokens: el único artefacto de coordinación que el proyecto conserva. Vale
-  // como archivo aparte o como :root embebido — las dos formas son legítimas.
+  // Tokens: the only coordination artifact the project keeps. Valid either
+  // as a separate file or as an embedded :root — both forms are legitimate.
   const tokensAparte = archivos.some((rel) => /tokens\.css$/i.test(rel));
   const rootEmbebido = /:root\s*\{/i.test(html);
   const rootEnCss = archivos
@@ -219,9 +219,9 @@ async function auditarMovilRn(dir, archivos, acta) {
     );
   }
 
-  // El punto de entrada con la plantilla por defecto de Expo mientras el trabajo
-  // vive en src/screens/ es el error que el flujo del nicho ataca de frente: se
-  // abre la app y se ve el cartel de Expo, no el producto.
+  // The entry point with the default Expo template while the work lives in
+  // src/screens/ is the bug the niche flow attacks head-on: you open the app
+  // and see the Expo banner, not the product.
   if (entrada && pantallas.length) {
     const texto = leer(dir, entrada);
     const montaAlgo = pantallas.some((rel) => {
@@ -235,10 +235,10 @@ async function auditarMovilRn(dir, archivos, acta) {
     }
   }
 
-  // Etiquetas HTML y APIs del navegador en el JSX: es exactamente cómo se cuela
-  // una web disfrazada de app. Lo mide native-build.js, no se reescribe acá.
-  // De su informe se toma SOLO la parte del JSX: package.json y app.json ya se
-  // revisaron arriba con más detalle y repetirlo llena el acta de lo mismo.
+  // HTML tags and browser APIs in the JSX: exactly how a web disguised as an
+  // app slips in. native-build.js measures it, it is not rewritten here.
+  // Only the JSX part of its report is taken: package.json and app.json were
+  // already reviewed above in more detail and repeating it fills the report with the same.
   const revision = await revisarReactNative(dir);
   const delJsx = (revision.errores || []).filter((e) => !['package.json', 'app.json'].includes(e.archivo));
   if (revision.ok) {
@@ -251,7 +251,7 @@ async function auditarMovilRn(dir, archivos, acta) {
     }
   }
 
-  // El JS/JSX que no parsea también rompe la app, y de eso sabe verify.js.
+  // JS/JSX that doesn't parse also breaks the app, and verify.js knows about that.
   verificarContenido(dir, archivos, acta, {
     soloEstos: archivos.filter((rel) => /\.(js|mjs|md|txt)$/i.test(rel))
   });
@@ -278,9 +278,9 @@ async function auditarAndroid(dir, archivos, acta) {
     acta.falta('todo el código está en un solo .kt: falta separar pantallas y tema', false);
   }
 
-  // El namespace del módulo contra el paquete del código: si no coinciden, Gradle
-  // compila y la app no encuentra su propia clase. Es la falla que no se ve
-  // leyendo un archivo solo, y por eso se audita acá y no en verify.js.
+  // The module namespace against the code package: if they don't match, Gradle
+  // compiles and the app can't find its own class. It's the failure you don't see
+  // reading a single file, which is why it's audited here and not in verify.js.
   const gradle = leer(dir, 'app/build.gradle.kts');
   const namespace = gradle.match(/namespace\s*=\s*["']([\w.]+)["']/)?.[1] || null;
   const paquete = mainActivity ? leer(dir, mainActivity).match(/^\s*package\s+([\w.]+)/m)?.[1] || null : null;
@@ -298,7 +298,7 @@ async function auditarAndroid(dir, archivos, acta) {
     );
   }
 
-  // El manifiesto tiene que apuntar a una actividad que exista de verdad.
+  // The manifest must point to an activity that really exists.
   const manifiesto = leer(dir, 'app/src/main/AndroidManifest.xml');
   if (manifiesto) {
     const declarada = manifiesto.match(/<activity[^>]*android:name=["']([^"']+)["']/)?.[1] || null;
@@ -352,8 +352,8 @@ async function auditarPython(dir, archivos, acta) {
     acta.falta('falta requirements.txt o pyproject.toml: no se sabe qué hace falta para correrlo');
   }
 
-  // La compilación de verdad: py_compile archivo por archivo, con la caché fuera
-  // del entregable. Es la misma que corre el motor antes de aceptar el finish.
+  // The real compilation: py_compile file by file, with the cache outside
+  // the deliverable. It's the same one the engine runs before accepting the finish.
   const build = await compilarPython(dir);
   if (build.saltado) {
     acta.falta(`no se pudo compilar: ${build.motivo}`, false);
@@ -370,7 +370,7 @@ async function auditarPython(dir, archivos, acta) {
   });
 }
 
-// ── automatizacion ──────────────────────────────────────────────────────────
+// ── automation ──────────────────────────────────────────────────────────────
 
 async function auditarAutomatizacion(dir, archivos, acta) {
   const scripts = archivos.filter((rel) => /\.(js|mjs)$/i.test(rel));
@@ -388,7 +388,7 @@ async function auditarAutomatizacion(dir, archivos, acta) {
   verificarContenido(dir, archivos, acta);
 }
 
-// ── Orquestación ────────────────────────────────────────────────────────────
+// ── Orchestration ───────────────────────────────────────────────────────────
 
 const AUDITORES = {
   web: auditarWeb,
@@ -398,7 +398,7 @@ const AUDITORES = {
   automatizacion: auditarAutomatizacion
 };
 
-// Del tipo que detecta native-build.js al nicho del proyecto.
+// From the type native-build.js detects to the project niche.
 const NICHO_DETECTADO = { android: 'android', 'react-native': 'movil-rn', python: 'python' };
 
 export async function auditarApp(dir, stackPedido = null) {
@@ -409,9 +409,9 @@ export async function auditarApp(dir, stackPedido = null) {
 
   const archivos = listar(absoluto);
   const detectado = NICHO_DETECTADO[detectarProyecto(absoluto)] || null;
-  // Si no dijeron el nicho, se deduce; si lo dijeron, manda lo que dijeron — un
-  // proyecto móvil que entregó una web tiene que fallar como móvil, no pasar
-  // como web.
+  // If no niche was given, it's inferred; if one was given, what was said wins — a
+  // mobile project that delivered a web must fail as mobile, not pass
+  // as web.
   const stack = stackPedido ? normalizeStack(stackPedido) : (detectado || 'web');
 
   const acta = nuevaActa();
@@ -434,7 +434,7 @@ export async function auditarApp(dir, stackPedido = null) {
     bien: acta.bien,
     mal: acta.mal,
     graves: graves.length,
-    // El veredicto no promedia nada: o está armada o le falta algo que la rompe.
+    // The verdict averages nothing: either it's well-built or something breaking is missing.
     veredicto: archivos.length === 0
       ? 'VACÍA'
       : graves.length === 0
@@ -462,8 +462,8 @@ function imprimir(resultado) {
   console.log('');
 }
 
-// Todas las carpetas de workspace/, con el nicho que dice la base. Es la forma
-// de responder "¿de lo que ya produjo el equipo, qué está bien armado?".
+// Every folder in workspace/, with the niche the DB says. It's the way
+// to answer "of what the team already produced, what is well-built?".
 function proyectosDelWorkspace() {
   const raiz = path.resolve(process.env.WORKSPACE_ROOT || 'workspace');
   const db = new DatabaseSync(path.resolve('server/data/meetings.db'), { readOnly: true });
@@ -495,8 +495,8 @@ function proyectosDelWorkspace() {
   return out;
 }
 
-// La línea de comandos corre SOLO cuando se invoca el script; importar
-// auditarApp() desde un test no tiene que leer process.argv ni tocar la base.
+// The CLI runs ONLY when the script is invoked; importing
+// auditarApp() from a test must not read process.argv nor touch the DB.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2);
   const comoJson = args.includes('--json');

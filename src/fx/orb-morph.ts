@@ -1,18 +1,18 @@
 // ═══════════════════════════════════════════════════════════════════════
-// OrbMorph: partículas que FORMAN FIGURAS (Canvas 2D, cero dependencias).
+// OrbMorph: particles that FORM SHAPES (Canvas 2D, zero dependencies).
 //
-// COMPOSICIÓN sobre OrbField, no fork: posee un OrbField interno sobre el
-// mismo canvas y le delega TODO (agents/slots/theme/speaking/working/
-// resize/start/stop/stats). Mientras todas las figuras sean 'sphere', el
-// loop que corre es el upstream byte a byte. Cuando alguna esfera pide otra
-// figura, se pausa el OrbField y corre el loop propio de morph — con la
-// MISMA matemática de proyección (rotación, tilt, buckets de profundidad,
-// followEnergy) para que la familia visual no cambie.
+// COMPOSITION over OrbField, not a fork: owns an internal OrbField on the
+// same canvas and delegates EVERYTHING to it (agents/slots/theme/speaking/
+// working/resize/start/stop/stats). While every shape is 'sphere', the
+// running loop is upstream byte-for-byte. When some sphere requests another
+// shape, OrbField pauses and the own morph loop runs — with the SAME
+// projection math (rotation, tilt, depth buckets, followEnergy) so the
+// visual family doesn't change.
 //
-// Uso: drop-in donde hoy hay `new OrbField(canvas, {energy})`.
-// V3 (09/11, modelo-manda): los ESTADOS ya no piden figuras (STATE_SHAPE
-// todo 'sphere'); el loop propio corre por glifos del modelo o por
-// vibración de estado. setGlyph intacto — única vía de figuras.
+// Usage: drop-in wherever there is `new OrbField(canvas, {energy})` today.
+// V3 (09/11, model-driven): STATES no longer request shapes (STATE_SHAPE
+// all 'sphere'); the own loop runs for model glyphs or state vibration.
+// setGlyph untouched — the only path to shapes.
 // ═══════════════════════════════════════════════════════════════════════
 
 import {
@@ -33,7 +33,7 @@ import {
 } from './morph.ts';
 import { lookupGlyph } from './glyphs-a.ts';
 
-// Estados visuales por agente (claves = protocolo orb.ts + work_event).
+// Per-agent visual states (keys = orb.ts protocol + work_event).
 export type AgentVisualState = 'idle' | 'escuchando' | 'hablando' | 'pensando' | 'trabajando';
 
 export const STATE_SHAPE: Record<AgentVisualState, MorphShape> = {
@@ -44,10 +44,10 @@ export const STATE_SHAPE: Record<AgentVisualState, MorphShape> = {
   trabajando: 'sphere'
 };
 
-// V3 modelo-manda: el estado NUNCA cambia la figura (orbe siempre orbe).
-// Solo modula vibración/energía sutil: hablando vibra más, pensando pulso
-// leve, resto casi quieto. Figuras SOLO vía setGlyph (el modelo decide).
-// idle=0 permite que el loop upstream (OrbField) siga cuando todo descansa.
+// V3 model-driven: state NEVER changes the shape (orb always orb).
+// It only modulates subtle vibration/energy: speaking vibrates more, thinking a
+// faint pulse, the rest almost still. Shapes ONLY via setGlyph (the model decides).
+// idle=0 lets the upstream loop (OrbField) keep running when everything rests.
 export const STATE_VIBRATION: Record<AgentVisualState, number> = {
   idle: 0,
   escuchando: 0.12,
@@ -57,15 +57,15 @@ export const STATE_VIBRATION: Record<AgentVisualState, number> = {
 };
 
 export type OrbMorphOptions = {
-  // Amplitud actual de la voz del agente que habla (0..1).
+  // Current voice amplitude of the speaking agent (0..1).
   energy: () => number;
-  // Duración de la transición entre figuras (ms). Default 900.
+  // Transition duration between shapes (ms). Default 900.
   morphMs?: number;
 };
 
 const TAU = Math.PI * 2;
-// Misma base de movimiento que call-orbs.ts (ver comentarios ahí):
-// flotación ~7s, rotación una vuelta cada ~40s, tilt fijo.
+// Same motion base as call-orbs.ts (see comments there):
+// float ~7s, rotation one turn every ~40s, fixed tilt.
 const FLOAT_SPEED = 0.9;
 const FLOAT_AMPLITUDE = 0.06;
 const DRIFT_SPEED = 0.6;
@@ -82,7 +82,7 @@ const ORB_ALPHA_IDLE = 0.78;
 const ORB_ALPHA_SPEAKING = 1;
 const ORB_FOCUS_DIM = 0.62;
 const ORB_FOCUS_WORKING = 0.9;
-// Extras por figura (ver matriz shape×estado en research/visual-wow-plan.md).
+// Per-shape extras (see shape×state matrix in research/visual-wow-plan.md).
 const RING_PULSE_HZ = 2.2;
 const RING_PULSE_AMP = 0.04;
 const TORUS_SPIN = 2.5;
@@ -94,12 +94,12 @@ type MorphOrb = {
   color: string;
   hue: number;
   shape: MorphShape;
-  glyph: string | null; // T2a: glifo activo (null = figura clásica)
+  glyph: string | null; // T2a: active glyph (null = classic shape)
   count: number;
   current: Float32Array;
   from: Float32Array;
   to: Float32Array;
-  morphT0: number; // performance.now() del inicio, -1 = quieto
+  morphT0: number; // performance.now() of the start, -1 = still
   slot: OrbSlot | null;
   phaseFloat: number;
   phaseRot: number;
@@ -107,11 +107,11 @@ type MorphOrb = {
   energy: number;
   target: number;
   focus: number;
-  vibe: number; // V3: vibración por estado (0..1), nunca cambia figura
+  vibe: number; // V3: per-state vibration (0..1), never changes shape
 };
 
-// Target de morph glyph-aware (T2a): si el orbe tiene glifo activo y el
-// nombre resuelve en el registro A+B, puntos del glifo; si no, figura.
+// Glyph-aware morph target (T2a): if the orb has an active glyph and the
+// name resolves in the A+B registry, glyph points; otherwise, shape.
 function orbTargetPoints(shape: MorphShape, glyph: string | null, count: number, seed: number, phase: number): Float32Array {
   if (glyph) {
     const found = lookupGlyph(glyph);
@@ -146,7 +146,7 @@ export class OrbMorph {
     this.ctx = canvas.getContext('2d');
   }
 
-  // Escape hatch: el OrbField interno (por si el main necesita algo crudo).
+  // Escape hatch: the internal OrbField (in case main needs something raw).
   get orbField(): OrbField {
     return this.field;
   }
@@ -159,9 +159,9 @@ export class OrbMorph {
     return this.field.running || this.raf !== 0;
   }
 
-  // ── Delegación total al upstream ─────────────────────────────────────
-  // Cada setter actualiza el OrbField Y el espejo de morph, así el cambio
-  // de modo (sphere ↔ figuras) nunca pierde estado.
+  // ── Full delegation to upstream ─────────────────────────────────────
+  // Each setter updates the OrbField AND the morph mirror, so the mode
+  // switch (sphere ↔ shapes) never loses state.
 
   setAgents(agents: OrbAgent[]) {
     this.field.setAgents(agents);
@@ -285,10 +285,10 @@ export class OrbMorph {
     return { ...base, mode: 'sphere' as const };
   }
 
-  // ── Figuras ──────────────────────────────────────────────────────────
+  // ── Shapes ──────────────────────────────────────────────────────────
 
-  // Cambia la figura global o de un agente. Con reduced-motion el cambio es
-  // instantáneo (sin loop decorativo); si no, transiciona en morphMs.
+  // Changes the global or per-agent shape. With reduced-motion the change is
+  // instant (no decorative loop); otherwise it transitions over morphMs.
   setShape(shape: MorphShape, agentId?: string) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     const reduced = this.prefersReducedMotion;
@@ -296,7 +296,7 @@ export class OrbMorph {
       if (agentId && orb.id !== agentId) continue;
       if (orb.shape === shape && orb.morphT0 < 0 && orb.glyph === null) continue;
       orb.shape = shape;
-      orb.glyph = null; // T2a: setShape vuelve a figura clásica (limpia glifo)
+      orb.glyph = null; // T2a: setShape returns to classic shape (clears glyph)
       if (orb.count === 0) continue;
       orb.from = orb.current.slice();
       orb.to = generateShape(shape, orb.count, { seed: orb.phaseRot, phase: orb.wavePhase });
@@ -312,9 +312,9 @@ export class OrbMorph {
     this.kick();
   }
 
-  // V3 modelo-manda: estado → vibración, NUNCA figura. Si el orbe venía con
-  // figura vieja (ring/wave/torus/cube) y no hay glifo, morph a esfera; con
-  // glifo activo solo fija el fallback a esfera (el glifo manda, intacto).
+  // V3 model-driven: state → vibration, NEVER shape. If the orb had an old
+  // shape (ring/wave/torus/cube) and no glyph, morph to sphere; with an
+  // active glyph only pin the fallback to sphere (the glyph rules, intact).
   setAgentState(agentId: string, state: AgentVisualState) {
     const vibe = STATE_VIBRATION[state] ?? 0;
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
@@ -347,12 +347,12 @@ export class OrbMorph {
     return this.orbs.find((o) => o.id === agentId)?.shape ?? null;
   }
 
-  // ── Glifos (T2a: motor de gestos) ────────────────────────────────────
-  // Muestra el glifo NOMBRE en un agente (morph con la misma curva y
-  // duración que setShape). Nombre desconocido o null → fallback a la
-  // figura de estado actual (el shape del orbe). Nunca tira: lookup
-  // miss = fallback. setShape limpia el glifo; setAgentState NO (V3: el
-  // estado solo vibra, el glifo del modelo queda intacto).
+  // ── Glyphs (T2a: gesture engine) ────────────────────────────────────
+  // Shows glyph NAME on an agent (morph with the same curve and duration
+  // as setShape). Unknown name or null → fallback to the current state
+  // shape (the orb's shape). Never throws: lookup miss = fallback.
+  // setShape clears the glyph; setAgentState does NOT (V3: state only
+  // vibrates, the model's glyph stays intact).
   setGlyph(agentId: string, glyphName: string | null) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     const reduced = this.prefersReducedMotion;
@@ -388,15 +388,15 @@ export class OrbMorph {
     return this.orbs.find((o) => o.id === agentId)?.glyph ?? null;
   }
 
-  // ── Cambio de modo ───────────────────────────────────────────────────
-  // Solo un loop dibuja a la vez. Si nadie pide figuras, el OrbField corre
-  // solo (comportamiento upstream intacto).
+  // ── Mode switching ───────────────────────────────────────────────────
+  // Only one loop draws at a time. If nobody requests shapes, OrbField runs
+  // alone (upstream behavior intact).
 
   private useMorph() {
-    // T2a: un glifo activo también retiene el loop de morph (si no, un
-    // orbe idle volvería al upstream y el glifo se perdería al terminar).
-    // V3: la vibración por estado también retiene el loop (el upstream no
-    // sabe vibrar; idle=0 libera al upstream cuando todo descansa).
+    // T2a: an active glyph also retains the morph loop (otherwise an idle
+    // orb would return to upstream and the glyph would be lost at the end).
+    // V3: state vibration also retains the loop (upstream can't vibrate;
+    // idle=0 releases upstream when everything rests).
     return this.orbs.some((o) => o.shape !== 'sphere' || o.morphT0 >= 0 || o.glyph !== null || (o.vibe ?? 0) > 0.01);
   }
 
@@ -470,7 +470,7 @@ export class OrbMorph {
       if (Math.abs(orb.target - orb.energy) > 0.002 || Math.abs(focusTarget - orb.focus) > 0.002) {
         animating = true;
       }
-      // Avance del morph.
+      // Morph progress.
       if (orb.morphT0 >= 0) {
         const t = (now - orb.morphT0) / this.morphMs;
         if (t >= 1) {
@@ -482,8 +482,8 @@ export class OrbMorph {
           animating = true;
         }
       }
-      // La onda respira siempre (es su figura, no una transición).
-      // T2a: salvo que haya un glifo activo (el glifo manda).
+      // The wave always breathes (it's its shape, not a transition).
+      // T2a: unless a glyph is active (the glyph rules).
       if (orb.shape === 'wave' && !reduced && orb.glyph === null) {
         orb.wavePhase += dt * WAVE_SPEED * (0.5 + orb.energy);
         if (orb.morphT0 < 0) {
@@ -497,7 +497,7 @@ export class OrbMorph {
     }
 
     if (!this.started) return;
-    // Si el último morph terminó en sphere pura, volver al upstream.
+    // If the last morph ended in pure sphere, return to upstream.
     if (!this.useMorph()) {
       this.updateMode();
       return;
@@ -514,20 +514,20 @@ export class OrbMorph {
     if (!slot) return;
     const reduced = this.prefersReducedMotion;
     const energy = orb.energy;
-    const vibe = orb.vibe ?? 0; // V3: vibración por estado (0..1)
-    // Drive = voz real o vibración de estado (la que mande). Hablando vibra
-    // aun en pausas; pensando/escuchando respiran leve sin audio.
+    const vibe = orb.vibe ?? 0; // V3: per-state vibration (0..1)
+    // Drive = real voice or state vibration (whichever rules). Speaking vibrates
+    // even in pauses; thinking/listening breathe faintly without audio.
     const drive = Math.max(energy, vibe * 0.8);
     const radius = slot.r * BASE_RADIUS_RATIO;
     let zoom = reduced ? 1 : 1 + ZOOM_AMPLITUDE * drive;
-    // V3: pulso de vibración (hablando más, pensando leve). Nunca figura.
+    // V3: vibration pulse (speaking more, thinking faint). Never shape.
     if (!reduced && vibe > 0) {
       zoom *= 1 + vibe * 0.05 * Math.sin(this.clock * 9 + orb.phaseFloat);
     }
     let spin = ROTATION_SPEED;
     let tilt = TILT;
     let zScale = 1;
-    // Extras por figura (la matriz del plan).
+    // Per-shape extras (the plan's matrix).
     if (orb.shape === 'ring' && !reduced) {
       zoom *= 1 + RING_PULSE_AMP * Math.sin(this.clock * TAU * RING_PULSE_HZ + orb.phaseFloat)
         + energy * 0.05;
@@ -537,7 +537,7 @@ export class OrbMorph {
     } else if (orb.shape === 'cube' && !reduced) {
       tilt += CUBE_TILT_SWING * Math.sin(this.clock * 0.7 + orb.phaseFloat);
     } else if (orb.shape === 'wave') {
-      // Hablando = la energy real modula la amplitud; en reposo, leve.
+      // Speaking = real energy modulates amplitude; at rest, faint.
       zScale = reduced ? 1 : 0.35 + energy * 1.1;
     }
     const rotation = reduced ? orb.phaseRot : orb.phaseRot + this.clock * spin;
@@ -550,11 +550,11 @@ export class OrbMorph {
     const dot = Math.min(1.7, Math.max(0.6, slot.r * 0.015));
     const jump = reduced ? 0 : JUMP_AMPLITUDE * drive;
     const jumpClock = this.clock * JUMP_SPEED;
-    // V3: jitter de alta frecuencia por estado (visible al hablar/pensar).
+    // V3: high-frequency state jitter (visible when speaking/thinking).
     const jx = !reduced && vibe > 0 ? Math.sin(this.clock * 31 + orb.phaseFloat * 3) * slot.r * vibe * 0.012 : 0;
     const jy = !reduced && vibe > 0 ? Math.cos(this.clock * 27 + orb.phaseFloat * 2) * slot.r * vibe * 0.012 : 0;
 
-    // Proyección por partícula (igual que upstream: giro Y + tilt X).
+    // Per-particle projection (same as upstream: Y spin + X tilt).
     const count = orb.count;
     const pts = orb.current;
     const buckets: number[] = [];
@@ -571,13 +571,13 @@ export class OrbMorph {
       const z = py * sinTilt + zRot * cosTilt;
       const w = jump > 0 ? jump * (0.55 + 0.45 * Math.sin(jumpClock + i * 0.7)) : 0;
       const scale = radius * (1 + w) * zoom;
-      const depth = (z / 1.4 + 1) * 0.5; // figuras no unitarias: rango aprox
+      const depth = (z / 1.4 + 1) * 0.5; // non-unit shapes: approx range
       xs[i] = cx + jx + x * scale;
       ys[i] = cy + jy + y * scale;
       ss[i] = dot * (0.7 + 0.55 * Math.min(1, Math.max(0, depth)));
       buckets.push(Math.min(BUCKETS - 1, Math.max(0, Math.floor(Math.min(1, Math.max(0, depth)) * BUCKETS))));
     }
-    // Un fill() por bucket (igual que upstream: 4 pasadas, no N).
+    // One fill() per bucket (same as upstream: 4 passes, not N).
     const orbAlpha = (ORB_ALPHA_IDLE + (ORB_ALPHA_SPEAKING - ORB_ALPHA_IDLE) * energy) * orb.focus;
     ctx.fillStyle = orb.color;
     for (let b = 0; b < BUCKETS; b += 1) {

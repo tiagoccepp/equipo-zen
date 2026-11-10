@@ -30,14 +30,14 @@ afterEach(() => {
   __resetPabloMemoryCache();
 });
 
-test('memoryDirFor resuelve <base>/<slug>/memoria y rechaza slugs malos', () => {
+test('memoryDirFor resolves <base>/<slug>/memoria and rejects bad slugs', () => {
   assert.equal(memoryDirFor('acme'), join(tmp, 'acme', 'memoria'));
   for (const malo of ['', '../x', 'a/b', 'a\\b', '..', '  ']) {
     assert.throws(() => memoryDirFor(malo), /Empresa inválida/);
   }
 });
 
-test('roundtrip write/read deja el archivo en disco', () => {
+test('roundtrip write/read leaves the file on disk', () => {
   const abs = writeMemoryFile('acme', 'SOUL.md', 'yo soy pablo');
   assert.ok(existsSync(abs));
   assert.equal(abs, join(tmp, 'acme', 'memoria', 'SOUL.md'));
@@ -45,7 +45,7 @@ test('roundtrip write/read deja el archivo en disco', () => {
   assert.equal(readFileSync(abs, 'utf-8'), 'yo soy pablo');
 });
 
-test('read faltante o nombre inválido devuelve null, nunca throw', () => {
+test('missing read or invalid name returns null, never throws', () => {
   assert.equal(readMemoryFile('acme', 'USER.md'), null);
   assert.equal(readMemoryFile('sin-empresa', 'MEMORY.md'), null);
   assert.equal(readMemoryFile('acme', 'hack.txt'), null);
@@ -56,13 +56,13 @@ test('read faltante o nombre inválido devuelve null, nunca throw', () => {
   assert.equal(readDaily('acme', '../../etc/passwd'), null);
 });
 
-test('write rechaza path traversal y nombres fuera de allowlist', () => {
+test('write rejects path traversal and names outside the allowlist', () => {
   for (const malo of ['../evil.md', 'sub/x.md', '..', 'x.md/', 'hack.txt', '', 'SOUL.md/..']) {
     assert.throws(() => writeMemoryFile('acme', malo, 'x'), /inválido/);
   }
 });
 
-test('appendDaily crea memory/YYYY-MM-DD.md y acumula', () => {
+test('appendDaily creates memory/YYYY-MM-DD.md and accumulates', () => {
   const stamp = todayStamp();
   assert.match(stamp, /^\d{4}-\d{2}-\d{2}$/);
   const abs = appendDaily('acme', 'línea uno');
@@ -74,7 +74,7 @@ test('appendDaily crea memory/YYYY-MM-DD.md y acumula', () => {
   assert.ok(daily.indexOf('línea uno') < daily.indexOf('línea dos'));
 });
 
-test('render respeta orden SOUL > USER > MEMORY > hoy, con headers', () => {
+test('render respects SOUL > USER > MEMORY > today order, with headers', () => {
   writeMemoryFile('acme', 'SOUL.md', 'alma');
   writeMemoryFile('acme', 'USER.md', 'directivas');
   writeMemoryFile('acme', 'MEMORY.md', 'hechos');
@@ -87,24 +87,24 @@ test('render respeta orden SOUL > USER > MEMORY > hoy, con headers', () => {
   assert.ok(idx('PABLO SOUL') < idx('PABLO USER'));
   assert.ok(idx('PABLO USER') < idx('PABLO MEMORY'));
   assert.ok(idx('PABLO MEMORY') < idx('PABLO TODAY'));
-  // AGENTS.md existe pero NO se inyecta al prompt de voz.
+  // AGENTS.md exists but is NOT injected into the voice prompt.
   writeMemoryFile('acme', 'AGENTS.md', 'convenciones-secretas');
   __resetPabloMemoryCache();
   assert.ok(!renderMemorySection('acme', { maxChars: 10000 }).includes('convenciones-secretas'));
 });
 
-test('render respeta maxChars y empresa vacía devuelve cadena vacía', () => {
+test('render respects maxChars and empty company returns an empty string', () => {
   writeMemoryFile('big', 'SOUL.md', 's'.repeat(500));
   writeMemoryFile('big', 'USER.md', 'u'.repeat(500));
   writeMemoryFile('big', 'MEMORY.md', 'm'.repeat(500));
   const corto = renderMemorySection('big', { maxChars: 200 });
   assert.ok(corto.length <= 200, `largo ${corto.length} > 200`);
-  assert.ok(corto.includes('PABLO SOUL')); // lo primero sobrevive al recorte
+  assert.ok(corto.includes('PABLO SOUL')); // the first part survives the trim
   assert.equal(renderMemorySection('vacia'), '');
   assert.equal(renderMemorySection('big', { maxChars: 0 }), '');
 });
 
-test('write invalida la caché de lectura (sin lecturas rancias)', () => {
+test('write invalidates the read cache (no stale reads)', () => {
   writeMemoryFile('acme', 'SOUL.md', 'v1');
   assert.equal(readMemoryFile('acme', 'SOUL.md'), 'v1');
   writeMemoryFile('acme', 'SOUL.md', 'v2');
@@ -115,7 +115,7 @@ test('write invalida la caché de lectura (sin lecturas rancias)', () => {
   assert.ok(readDaily('acme').includes('segundo'));
 });
 
-test('seeds parsean: existen y traen sus headers', () => {
+test('seeds parse: they exist and carry their headers', () => {
   const esperados = {
     'SOUL.md': ['# SOUL.md', 'Pablo'],
     'USER.md': ['# USER.md', 'observed:', 'Always', 'Never'],

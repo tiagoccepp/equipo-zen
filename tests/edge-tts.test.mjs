@@ -3,14 +3,35 @@ import assert from 'node:assert/strict';
 
 import { looksLikeMp3, mapVoiceToEdge } from '../server/lib/edge-tts.js';
 import { transcribeWithFallback } from '../server/lib/stt.js';
+import { initSettings } from '../server/lib/settings.js';
+
+// Store stub (default sin setear: inglés desde TI 09/11).
+const db = new Map();
+initSettings(
+  {
+    getSetting: (k) => (db.has(k) ? db.get(k) : null),
+    setSetting: (k, v) => { db.set(k, v); },
+    deleteSetting: (k) => { db.delete(k); },
+    logChange: () => {}
+  },
+  { setKeys: () => {} }
+);
 
 test('edge voice map: M* → Álvaro, F* → Elvira, resto → Álvaro', () => {
+  db.set('tts.language', 'es');
   assert.equal(mapVoiceToEdge('M1'), 'es-ES-AlvaroNeural');
   assert.equal(mapVoiceToEdge('M4'), 'es-ES-AlvaroNeural');
   assert.equal(mapVoiceToEdge('F1'), 'es-ES-ElviraNeural');
   assert.equal(mapVoiceToEdge('F5'), 'es-ES-ElviraNeural');
   assert.equal(mapVoiceToEdge(''), 'es-ES-AlvaroNeural');
   assert.equal(mapVoiceToEdge(undefined), 'es-ES-AlvaroNeural');
+});
+
+test('edge voice map default: M* → Andrew, F* → Ava (en-US)', () => {
+  db.delete('tts.language');
+  assert.equal(mapVoiceToEdge('M1'), 'en-US-AndrewNeural');
+  assert.equal(mapVoiceToEdge('F1'), 'en-US-AvaNeural');
+  assert.equal(mapVoiceToEdge(''), 'en-US-AndrewNeural');
 });
 
 test('mp3 magic: ID3 y frame-sync pasan, basura no', () => {

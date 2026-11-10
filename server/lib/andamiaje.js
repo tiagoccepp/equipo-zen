@@ -4,33 +4,33 @@ import path from 'node:path';
 import { ejecutar } from './herramientas.js';
 import { esCarpetaIgnorada } from './workforce-fs.js';
 
-// El andamiaje NO es un consejo del playbook: lo corre el motor.
+// Scaffolding is NOT playbook advice: the engine runs it.
 //
-// Está medido: de 18 proyectos producidos, la ÚNICA app bien armada fue la única
-// donde el agente corrió `create-expo-app` por su cuenta. Las otras escribieron
-// el andamiaje a mano y quedaron sin package.json, sin app.json y sin punto de
-// entrada — dos archivos sueltos en una carpeta, no una app.
+// Measured: out of 18 produced projects, the ONLY well-built app was the one
+// where the agent ran `create-expo-app` on its own. The others hand-wrote
+// the scaffolding and ended up with no package.json, no app.json and no entry
+// point — two loose files in a folder, not an app.
 //
-// La conclusión es que no se le puede pedir: hay que hacerlo. Un proyecto vacío
-// se andamia con la herramienta oficial ANTES de que el primer agente entre, y
-// el agente encuentra la estructura ya hecha y trabaja sobre ella.
+// The takeaway is you can't ask for it: you have to do it. An empty project
+// gets scaffolded with the official tool BEFORE the first agent enters, and
+// the agent finds the structure already built and works on top of it.
 //
-// Si el usuario pidió un comando concreto ("hacelo con Vite", "usá expo router"),
-// manda ese: el andamiaje por defecto es un default, no una imposición.
+// If the user asked for a concrete command ("hacelo con Vite", "usá expo router"),
+// that one wins: default scaffolding is a default, not an imposition.
 
-// Cuánto se le da a cada uno: bajar dependencias tarda.
+// How much time each one gets: downloading dependencies takes a while.
 const TIMEOUT_MS = Number(process.env.ANDAMIAJE_TIMEOUT_MS || 480000);
 
 const RECETAS = {
   'movil-rn': {
-    // El template blank deja App.js, app.json, package.json y los assets.
+    // The blank template leaves App.js, app.json, package.json and the assets.
     cmd: 'npx --yes create-expo-app@latest . --template blank --no-install && npm install --no-audit --no-fund',
     prueba: (dir) => existsSync(path.join(dir, 'package.json')) && existsSync(path.join(dir, 'app.json')),
     que: 'proyecto Expo (React Native) con su package.json, app.json y punto de entrada'
   },
   android: {
-    // No hay CLI oficial sin Android Studio, así que el andamiaje es una
-    // plantilla propia. Es la misma que se verificó que compila con
+    // No official CLI without Android Studio, so scaffolding is a
+    // homegrown template. It's the same one verified to compile with
     // Gradle 9 + AGP 9 + Kotlin 2.2 + Compose.
     plantilla: 'android',
     prueba: (dir) => existsSync(path.join(dir, 'settings.gradle.kts')),
@@ -47,17 +47,17 @@ const RECETAS = {
     que: 'proyecto Python con entorno virtual, main.py y requirements.txt'
   },
   automatizacion: {
-    // El package.json se escribe, no se genera con `npm init`: ese toma el
-    // nombre de la carpeta y falla si el slug del proyecto no es un nombre
-    // válido de paquete npm (pasó con una carpeta que empezaba con punto).
+    // package.json is written, not generated with `npm init`: that one takes
+    // the folder name and fails if the project slug is not a valid
+    // npm package name (happened with a folder starting with a dot).
     plantilla: 'automatizacion',
     prueba: (dir) => existsSync(path.join(dir, 'flujo.js')) && existsSync(path.join(dir, 'package.json')),
     que: 'flujo con su package.json y datos de ejemplo'
   }
 };
 
-// Plantilla mínima de Android, escrita a mano porque no hay CLI. Los valores
-// están verificados: AGP 9 trae Kotlin, aplicar kotlin.android aparte rompe.
+// Minimal Android template, hand-written because there is no CLI. Values
+// are verified: AGP 9 brings Kotlin, applying kotlin.android separately breaks.
 function plantillaAndroid(nombre) {
   const paquete = 'com.equipo.app';
   const ruta = paquete.replace(/\./g, '/');
@@ -138,8 +138,8 @@ function plantillaAndroid(nombre) {
   ];
 }
 
-// ¿La carpeta está vacía de trabajo real? Los artefactos de coordinación
-// (BITACORA.md, diseno.op) no cuentan como proyecto.
+// Is the folder empty of real work? Coordination artifacts
+// (BITACORA.md, diseno.op) don't count as a project.
 export function proyectoVacio(dir) {
   let entradas = [];
   try {
@@ -159,11 +159,11 @@ export function recetaPara(stack) {
   return RECETAS[stack] || null;
 }
 
-// Busca en lo que pidió el usuario un comando de andamiaje explícito. Si lo hay,
-// manda ese: el default es un default.
+// Looks for an explicit scaffolding command in what the user asked. If found,
+// that one wins: the default is a default.
 export function comandoPedidoPorElUsuario(textos) {
   const texto = Array.isArray(textos) ? textos.join(' ') : String(textos || '');
-  // Un comando entre backticks o que arranca con npx/npm/yarn/pnpm/python.
+  // A command in backticks or one starting with npx/npm/yarn/pnpm/python.
   const entreComillas = texto.match(/`([^`]{6,200})`/);
   if (entreComillas && /^(npx|npm|yarn|pnpm|python3?|gradle|expo)\b/.test(entreComillas[1].trim())) {
     return entreComillas[1].trim();
@@ -172,9 +172,9 @@ export function comandoPedidoPorElUsuario(textos) {
   return suelto ? suelto[1].trim() : null;
 }
 
-// Andamia el proyecto. Devuelve qué se hizo, para poder contárselo al agente y
-// al usuario. No lanza: si falla, el agente lo va a tener que hacer a mano y se
-// le dice por qué.
+// Scaffolds the project. Returns what was done, so it can be told to the agent and
+// the user. Never throws: on failure the agent will have to do it by hand and is
+// told why.
 export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } = {}) {
   const receta = recetaPara(stack);
   if (!receta) {
@@ -184,11 +184,11 @@ export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } =
     return { hecho: false, yaEstaba: true };
   }
 
-  // Lo que pidió el usuario gana.
+  // What the user asked for wins.
   const explicito = comandoPedidoPorElUsuario(pedidoDelUsuario);
 
   if (!explicito && receta.plantilla === 'automatizacion') {
-    // Nombre saneado para npm: minúsculas, sin puntos al inicio, sin espacios.
+    // Sanitized name for npm: lowercase, no leading dots, no spaces.
     const nombre = path.basename(dir).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '') || 'flujo';
     await escribir('package.json', `${JSON.stringify({
       name: nombre,
@@ -233,7 +233,7 @@ export async function andamiar(dir, stack, { pedidoDelUsuario = '', escribir } =
   };
 }
 
-// Lo que el agente lee cuando el motor ya andamió por él.
+// What the agent reads when the engine already scaffolded for it.
 export function renderAndamiaje(resultado) {
   if (!resultado || !resultado.hecho) {
     return '';

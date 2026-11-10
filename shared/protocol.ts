@@ -1,6 +1,6 @@
-// Protocolo WebSocket compartido entre server (Node, type-stripping nativo)
-// y cliente (Vite). Única fuente de verdad: todo tipo de mensaje nuevo se
-// declara acá y se valida acá.
+// WebSocket protocol shared between server (Node, native type-stripping)
+// and client (Vite). Single source of truth: every new message type is
+// declared here and validated here.
 
 export const VOICES = ['M1', 'M2', 'M3', 'M4', 'M5', 'F1', 'F2', 'F3', 'F4', 'F5'] as const;
 export type VoiceName = (typeof VOICES)[number];
@@ -30,7 +30,7 @@ export const LIMITS = {
   taskText: 300,
   audioChunkBase64: 262144,
   transcriptHint: 2000,
-  // Previews de actividad de tools: ya llegan recortadas del server.
+  // Tool activity previews: already trimmed coming from the server.
   toolPreview: 200,
   toolName: 80,
   maxAgents: 8
@@ -67,8 +67,8 @@ export interface MeetingScenario {
   text: string | null;
 }
 
-// Qué clase de tarea es: solo 'entregable' (y sus derivadas de proceso)
-// llega a producir archivos; los acuerdos quedan registrados sin trabajo.
+// What kind of task it is: only 'entregable' (and its process derivatives)
+// goes on to produce files; agreements stay recorded without work.
 export type TaskKind = 'entregable' | 'decision' | 'seguimiento' | 'revision' | 'refinamiento';
 
 export interface PublicCompany {
@@ -154,14 +154,14 @@ export type ClientMessage =
   | { type: 'audio_end'; transcriptHint?: string }
   | { type: 'audio_cancel'; reason?: string; speechMs?: number }
   | { type: 'audio_stop' }
-  // Telemetría de voz del cliente (VAD/barge por turno): sin este case el
-  // servidor respondía error en cada turno de voz.
+  // Client voice telemetry (VAD/barge per turn): without this case the
+  // server answered with an error on every voice turn.
   | { type: 'client_stats'; stats: Record<string, number | string | boolean> }
-  // El cliente declara si QUIERE voz. Fuera del modo llamada no la quiere: sin
-  // esto el servidor sintetizaba en todos los turnos igual, gastaba Supertonic
-  // y serializaba las respuestas por el SpeakerGate para un audio que nadie oía.
+  // The client declares whether it WANTS voice. Outside call mode it doesn't:
+  // without this the server synthesized on every turn anyway, spending Supertonic
+  // and serializing responses through the SpeakerGate for audio nobody heard.
   | { type: 'set_voice'; enabled: boolean }
-  // ¿El equipo arranca solo apenas se reparte una tarea en la reunión?
+  // Does the team start on its own as soon as a task is dealt in the meeting?
   | { type: 'set_auto_work'; enabled: boolean }
   | { type: 'reset' }
   | { type: 'health' }
@@ -172,8 +172,8 @@ export type ClientMessage =
   | { type: 'set_scenario'; text: string }
   | { type: 'end_meeting' }
   | { type: 'confirm_end_meeting' }
-  // Poner al equipo a trabajar SIN cerrar la reunión: se usa lo que ya
-  // tienen asignado; si no hay tareas, no pasa nada.
+  // Put the team to work WITHOUT closing the meeting: whatever is already
+  // assigned gets used; with no tasks, nothing happens.
   | { type: 'start_work' }
   | { type: 'add_task'; agentId: string; text: string }
   | { type: 'toggle_task'; agentId: string; taskId: string; completed: boolean }
@@ -186,8 +186,8 @@ export type ServerMessage =
       meetingId: string;
       resumed: boolean;
       company: PublicCompany;
-      // El proyecto en el que vive la reunión: acota el contexto que reciben
-      // los agentes y es la clave con la que el cliente guarda la reunión.
+      // The project the meeting lives in: bounds the context agents receive
+      // and is the key the client uses to store the meeting.
       project?: { id: string; title: string; slug: string; brief: string; stack: string } | null;
       agents: PublicAgent[];
       scenario: MeetingScenario;
@@ -202,7 +202,7 @@ export type ServerMessage =
   | { type: 'scenario_updated'; scenario: MeetingScenario }
   | {
       type: 'meeting_closing_summary';
-      // false = la reunión no genera nada para construir: solo quedan acuerdos.
+      // false = the meeting generates nothing to build: only agreements remain.
       producesWork: boolean;
       goalTitle: string;
       goalDescription: string;
@@ -211,13 +211,13 @@ export type ServerMessage =
         agentName: string;
         tasks: Array<{ text: string; kind: TaskKind }>;
       }>;
-      // El equipo es fijo: en vez de contratar, se refuerza a quien ya está.
+      // The team is fixed: instead of hiring, whoever is already there is reinforced.
       refinements: Array<{ agentName: string; need: string }>;
     }
   | { type: 'work_event'; kind: string; [key: string]: unknown }
   | {
       type: 'work_started';
-      // 0 = nadie tenía nada asignado; el botón no hace nada y se avisa.
+      // 0 = nobody had anything assigned; the button does nothing and it gets reported.
       tasks: number;
       goalTitle: string | null;
       note: string;
@@ -231,8 +231,8 @@ export type ServerMessage =
   | { type: 'agent_turn_start'; turnId: string; agentId: string }
   | { type: 'agent_speak_start'; turnId: string; agentId: string }
   | { type: 'agent_progress'; turnId: string; agentId: string; text: string }
-  // Actividad de tools en vivo: el server los emite vía emit() y el forward
-  // genérico de meeting-session les agrega turnId/agentId (igual que progress).
+  // Live tool activity: the server emits them via emit() and the generic
+  // meeting-session forward adds turnId/agentId (same as progress).
   | { type: 'agent_tool_call'; turnId: string; agentId: string; tool: string; argsPreview?: string }
   | { type: 'agent_tool_done'; turnId: string; agentId: string; tool: string; ok: boolean; ms: number; outputPreview?: string }
   | { type: 'agent_transcript_delta'; turnId: string; agentId: string; delta: string; seq?: number }
@@ -337,8 +337,8 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     case 'hello': {
       const meetingId = optionalCappedString(value.meetingId, 40);
       const companyId = optionalCappedString(value.companyId, 40);
-      // El proyecto en el que se abre la reunión: sin esto el validador lo
-      // descartaba en silencio y la reunión nacía huérfana.
+      // The project the meeting opens in: without this the validator silently
+      // dropped it and the meeting was born orphaned.
       const goalId = optionalCappedString(value.goalId, 40);
       if (meetingId === null || companyId === null || goalId === null) {
         return { ok: false, error: 'hello inválido.' };
@@ -486,8 +486,8 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     }
 
     case 'client_stats': {
-      // Telemetría VAD del cliente: record chico de números finitos,
-      // strings cortos (hintEnd) y booleanos (reopened).
+      // Client VAD telemetry: small record of finite numbers,
+      // short strings (hintEnd) and booleans (reopened).
       if (!isRecord(value.stats)) {
         return { ok: false, error: 'client_stats requiere stats.' };
       }
@@ -622,8 +622,8 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
   }
 }
 
-// El cliente es permisivo: tipos desconocidos pasan (forward-compat para que
-// el servidor pueda estrenar mensajes antes de que el cliente los conozca).
+// The client is permissive: unknown types pass through (forward-compat so
+// the server can debut messages before the client knows them).
 export function parseServerMessage(raw: unknown): (ServerMessage & Record<string, unknown>) | null {
   let value: unknown = raw;
   if (typeof raw === 'string') {
@@ -639,9 +639,9 @@ export function parseServerMessage(raw: unknown): (ServerMessage & Record<string
   return value as ServerMessage & Record<string, unknown>;
 }
 
-// Validador estricto de los eventos de tools (los previews ya llegan
-// recortados a LIMITS.toolPreview desde el server; acá solo se verifica
-// forma y topes con los helpers del archivo).
+// Strict validator for tool events (previews already arrive trimmed
+// to LIMITS.toolPreview from the server; here only shape and caps are
+// verified with the file's helpers).
 export type AgentToolEvent = Extract<ServerMessage, { type: 'agent_tool_call' | 'agent_tool_done' }>;
 
 export function parseAgentToolEvent(raw: unknown): ParseResult<AgentToolEvent> {

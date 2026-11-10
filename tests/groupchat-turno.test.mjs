@@ -1,13 +1,13 @@
-// Tests llamada grupal en vivo (proceso de turno): R1 → réplica R2 → cierre
-// CEO, detrás del flag sala.groupchat (default OFF). Modelo 100% fake.
+// Live group-call tests (turn process): R1 → R2 reply → CEO
+// close, behind the sala.groupchat flag (default OFF). 100% fake model.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// El diario en disco y los seeds de convenciones no son parte de lo que se
-// prueba: se apagan ANTES de cargar los módulos.
+// The on-disk journal and convention seeds are not part of what is
+// tested: they are turned off BEFORE loading the modules.
 process.env.SESSION_LOG = '0';
 process.env.PABLO_MEMORY_DIR = mkdtempSync(join(tmpdir(), 'gc-turno-'));
 
@@ -29,9 +29,9 @@ function fakeSocket() {
   };
 }
 
-// Bruno habla en R1 y nombra a Camila (sin dominios de QA: el handoff VIEJO
-// no dispara y el OFF queda en una sola voz). Camila le contesta A ÉL.
-// Renata (CEO) cierra. Textos sin aliases ni dominios ajenos.
+// Bruno speaks in R1 and names Camila (no QA domains: the OLD handoff
+// does not fire and OFF stays at a single voice). Camila answers HIM.
+// Renata (CEO) closes. Texts without aliases or foreign domains.
 const TEXTO_BRUNO = 'Yo saldría con la página estática: publica hoy mismo. Camila, el CMS nos suma una semana, ¿lo ves viable?';
 const TEXTO_CAMILA = 'Bruno, el CMS deja editar sin programar: para mí compensa.';
 const TEXTO_RENATA = 'Decisión: salimos con estática y el CMS queda para fase dos.';
@@ -53,7 +53,7 @@ function nuevaSesion({ groupchat }) {
   const renata = byName('Renata');
   assert.ok(bruno && camila && renata, 'roster trae Bruno, Camila y Renata');
 
-  const turnos = []; // { agentId, turn } — lo que cada agente VIO
+  const turnos = []; // { agentId, turn } — what each agent SAW
   const callados = [];
   for (const agent of session.sessionAgents) {
     const rt = session.agents.get(agent.id);
@@ -79,14 +79,14 @@ function voces(socket) {
   return socket.sent.filter((m) => m.type === 'agent_turn_complete' && m.text).map((m) => m.agentId);
 }
 
-test('flag ON: R1 → réplica del aludido → cierre CEO (3 voces)', async () => {
+test('flag ON: R1 → reply of the mentioned one → CEO close (3 voices)', async () => {
   const { session, socket, bruno, camila, renata, turnos, telemetria } = nuevaSesion({ groupchat: true });
   try {
     await session.processUserTurn('t1', 'Bruno, ¿la landing la hacemos estática o con CMS?');
 
     assert.deepEqual(voces(socket), [bruno.id, camila.id, renata.id], 'hablan Bruno, Camila y Renata en orden');
 
-    // Camila replica UNA vez (R2 la toma antes que el followup viejo).
+    // Camila replies ONCE (R2 picks her up before the old followup).
     const turnosCamila = turnos.filter((t) => t.agentId === camila.id);
     assert.equal(turnosCamila.length, 1, 'Camila habla una sola vez');
     assert.ok(turnosCamila[0].turn.isContextualFollowup, 'la réplica va como followup');
@@ -97,12 +97,12 @@ test('flag ON: R1 → réplica del aludido → cierre CEO (3 voces)', async () =
       've quién dijo qué (nombre: texto)'
     );
 
-    // Renata cierra en una línea.
+    // Renata closes in one line.
     const turnosRenata = turnos.filter((t) => t.agentId === renata.id);
     assert.equal(turnosRenata.length, 1, 'Renata habla una sola vez');
     assert.ok(turnosRenata[0].turn.text.includes('Cerrá la ronda'), 'cierre CEO');
 
-    // Telemetría grupal.
+    // Group telemetry.
     const replica = telemetria.find((t) => t.type === 'groupchat_replica');
     assert.ok(replica, 'evento groupchat_replica');
     assert.equal(replica.payload.agentId, camila.id);
@@ -113,7 +113,7 @@ test('flag ON: R1 → réplica del aludido → cierre CEO (3 voces)', async () =
   }
 });
 
-test('flag ON: si nadie alude a nadie, no hay R2 ni cierre', async () => {
+test('flag ON: if nobody mentions anybody, no R2 nor close', async () => {
   const { session, socket, bruno, telemetria } = nuevaSesion({ groupchat: true });
   try {
     const rt = session.agents.get(bruno.id);
@@ -127,7 +127,7 @@ test('flag ON: si nadie alude a nadie, no hay R2 ni cierre', async () => {
   }
 });
 
-test('flag OFF (default): una voz, cero telemetría grupal', async () => {
+test('flag OFF (default): one voice, zero group telemetry', async () => {
   const { session, socket, bruno, telemetria } = nuevaSesion({ groupchat: false });
   try {
     await session.processUserTurn('t1', 'Bruno, ¿la landing la hacemos estática o con CMS?');
@@ -138,7 +138,7 @@ test('flag OFF (default): una voz, cero telemetría grupal', async () => {
   }
 });
 
-test('flag ON: convenciones seed creadas para el roster', async () => {
+test('flag ON: seed conventions created for the roster', async () => {
   const { readFileSync } = await import('node:fs');
   const { session } = nuevaSesion({ groupchat: true });
   try {

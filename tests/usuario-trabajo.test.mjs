@@ -5,9 +5,9 @@ import { readFileSync, rmSync } from 'node:fs';
 import { Store } from '../server/lib/store.js';
 import { projectDir, Workforce } from '../server/lib/workforce.js';
 
-// El equipo produciendo: la cola, el checkout, los cerrojos y qué ve el usuario
-// cuando algo sale mal. Nada de red ni de modelo: se intercepta executeTask, que
-// es justo el pedazo que habla con la nube.
+// The team producing: the queue, checkout, locks, and what the user sees
+// when something goes wrong. No network, no model: executeTask is intercepted,
+// which is exactly the piece that talks to the cloud.
 
 const companyTemplates = JSON.parse(readFileSync(new URL('../server/company-templates.json', import.meta.url), 'utf-8'));
 
@@ -16,7 +16,7 @@ function nuevaEmpresa() {
   const company = store.createCompanyFromTemplate(
     companyTemplates.templates.find((t) => t.id === 'web'), 'test'
   );
-  // Por rol, nunca por nombre: la plantilla cambia y los tests no.
+  // By role, never by name: the template changes and the tests do not.
   const equipo = store.listAgents({ companyId: company.id }).filter((a) => a.role === 'worker');
   return { store, company, equipo };
 }
@@ -24,15 +24,15 @@ function nuevaEmpresa() {
 function nuevoMotor(store) {
   const workforce = new Workforce(store, { hasKeys: () => true });
   const eventos = [];
-  // El motor real avisa por telemetría y deja rastro en el diario de la empresa
-  // (disco). Acá se junta en memoria: es el MISMO payload que le llega a la UI.
+  // The real engine reports via telemetry and leaves a trace in the company
+  // journal (disk). Here it is collected in memory: it is the SAME payload the UI gets.
   workforce.emitEvent = (_companyId, event) => eventos.push(event);
   workforce.eventos = eventos;
   return workforce;
 }
 
-// Fechas fijas y crecientes: la cola ordena por fecha de creación y dos tareas
-// creadas en el mismo milisegundo dejarían el orden librado al azar.
+// Fixed, increasing dates: the queue orders by creation date and two tasks
+// created in the same millisecond would leave the order to chance.
 let reloj = 0;
 function encargar(store, goal, agente, { archivo = null, kind = 'entregable', texto = null } = {}) {
   reloj += 1;
@@ -44,8 +44,8 @@ function encargar(store, goal, agente, { archivo = null, kind = 'entregable', te
   return store.getTask(taskId);
 }
 
-// Cada corrida queda EN VUELO hasta que el test la termina a mano: el cerrojo se
-// sostiene exactamente el tiempo que hace falta, sin sleeps ni relojes.
+// Each run stays IN FLIGHT until the test ends it by hand: the lock is held
+// exactly as long as needed, with no sleeps or clocks.
 function enVuelo(workforce) {
   const corridas = [];
   workforce.executeTask = async (companyId, agente, tarea) => {
@@ -60,8 +60,8 @@ function enVuelo(workforce) {
   return corridas;
 }
 
-// Deja que el motor termine de acomodar lo que quedó colgado: los `finally` que
-// sueltan cerrojos corren como microtareas, y setImmediate va después de todas.
+// Lets the engine finish settling what was left hanging: the `finally` blocks
+// releasing locks run as microtasks, and setImmediate goes after all of them.
 const asentar = () => new Promise((resolve) => setImmediate(resolve));
 
 function limpiarCarpetas(t, companyId, ...goals) {
@@ -72,7 +72,7 @@ function limpiarCarpetas(t, companyId, ...goals) {
   });
 }
 
-test('lo que quedó anotado como acuerdo en la reunión no pone a nadie a trabajar', async (t) => {
+test('what was noted as an agreement in the meeting puts nobody to work', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
@@ -90,7 +90,7 @@ test('lo que quedó anotado como acuerdo en la reunión no pone a nadie a trabaj
 
   assert.equal(corridas.length, 1, 'se pone a trabajar una sola persona: la del entregable');
   assert.equal(corridas[0].tarea.id, entregable.id);
-  // Y los acuerdos siguen visibles en el tablero, sin que nadie los "trabaje".
+  // And agreements stay visible on the board, with nobody "working" them.
   assert.equal(store.getTask(acuerdo.id).status, 'noted');
   assert.equal(store.getTask(seguimiento.id).status, 'noted');
 
@@ -98,16 +98,16 @@ test('lo que quedó anotado como acuerdo en la reunión no pone a nadie a trabaj
   await asentar();
 });
 
-test('nadie se pone a hacer una tarea que otro ya tomó', async (t) => {
+test('nobody starts a task someone else already took', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
 
   const tarea = encargar(store, goal, equipo[0], { archivo: 'index.html' });
 
-  // Los dos motores miran la MISMA foto de la cola (con la tarea todavía
-  // pendiente). Lo único que puede evitar que el trabajo se haga —y se pague—
-  // dos veces es que quedarse con la tarea sea atómico.
+  // Both engines look at the SAME snapshot of the queue (with the task still
+  // pending). The only thing that can stop the work from being done — and paid —
+  // twice is taking the task atomically.
   const foto = store.workQueue(company.id);
   store.workQueue = () => foto;
 
@@ -128,7 +128,7 @@ test('nadie se pone a hacer una tarea que otro ya tomó', async (t) => {
   await asentar();
 });
 
-test('dos personas construyen el mismo sitio a la vez, cada una en su archivo', async (t) => {
+test('two people build the same site at once, each in their own file', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
@@ -150,7 +150,7 @@ test('dos personas construyen el mismo sitio a la vez, cada una en su archivo', 
   await asentar();
 });
 
-test('si dos quedaron con el mismo archivo no lo escriben a la vez, y el segundo no se pierde', async (t) => {
+test('if two end up with the same file they do not write it at once, and the second one is not lost', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
@@ -166,7 +166,7 @@ test('si dos quedaron con el mismo archivo no lo escriben a la vez, y el segundo
   assert.equal(corridas[0].tarea.id, primera.id);
   assert.equal(store.getTask(segunda.id).status, 'pending', 'la segunda espera turno');
 
-  // Y sigue esperando en la cola: no se descarta ni se da por hecha.
+  // And it keeps waiting in the queue: not discarded, not taken as done.
   await motor.tick();
   assert.equal(corridas.length, 1, 'insistir no la hace entrar antes');
   assert.ok(store.workQueue(company.id).some((t2) => t2.id === segunda.id), 'el pedido no se perdió');
@@ -181,7 +181,7 @@ test('si dos quedaron con el mismo archivo no lo escriben a la vez, y el segundo
   await asentar();
 });
 
-test('una persona no arranca lo segundo hasta terminar lo primero, aunque sean archivos distintos', async (t) => {
+test('one person does not start the second thing until finishing the first, even in different files', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
@@ -207,7 +207,7 @@ test('una persona no arranca lo segundo hasta terminar lo primero, aunque sean a
   await asentar();
 });
 
-test('mientras alguien revisa un proyecto entero ese proyecto se frena, pero el de al lado sigue', async (t) => {
+test('while someone reviews a whole project that project pauses, but the one next door goes on', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const sitio = store.createProject({ companyId: company.id, title: 'Sitio' });
   const tienda = store.createProject({ companyId: company.id, title: 'Tienda' });
@@ -236,14 +236,14 @@ test('mientras alguien revisa un proyecto entero ese proyecto se frena, pero el 
   await asentar();
 });
 
-test('si a alguien se le rompe la tarea, la persona y el archivo quedan libres para la que sigue', async (t) => {
+test("if someone's task breaks, the person and the file stay free for the next one", async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
 
   const rota = encargar(store, goal, equipo[0], { archivo: 'index.html', texto: 'armar la home' });
-  // La siguiente es de la MISMA persona y sobre el MISMO archivo: si algo quedó
-  // tomado, esta no arranca nunca.
+  // The next one belongs to the SAME person and touches the SAME file: if
+  // anything stayed taken, this one never starts.
   const siguiente = encargar(store, goal, equipo[0], { archivo: 'index.html', texto: 'sumar el formulario' });
 
   const motor = nuevoMotor(store);
@@ -265,7 +265,7 @@ test('si a alguien se le rompe la tarea, la persona y el archivo quedan libres p
   await asentar();
 });
 
-test('cuando una tarea queda trabada el usuario puede leer por qué, y nadie la reintenta para siempre', async (t) => {
+test('when a task gets stuck the user can read why, and nobody retries it forever', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   limpiarCarpetas(t, company.id, goal);
@@ -283,15 +283,15 @@ test('cuando una tarea queda trabada el usuario puede leer por qué, y nadie la 
   assert.ok(trabada.blocked_reason, 'una tarea trabada sin motivo no le sirve a nadie');
   assert.match(trabada.blocked_reason, /saldo/, 'dice qué pasó, con las palabras del error real');
 
-  // Y no vuelve sola a la cola: sin esto, el equipo reintentaría en loop la
-  // misma tarea rota quemando la clave.
+  // And it does not return to the queue on its own: without this, the team
+  // would loop-retry the same broken task burning the key.
   assert.equal(store.workQueue(company.id).length, 0);
   await motor.tick();
   assert.equal(corridas.length, 1, 'no se reintenta sola');
   assert.equal(store.getTask(tarea.id).run_count, 1);
 });
 
-test('un proyecto donde todo se trabó no se anuncia como cumplido ni queda congelado', async (t) => {
+test('a project where everything got stuck is neither announced as done nor left frozen', async (t) => {
   const { store, company, equipo } = nuevaEmpresa();
   const sitio = store.createProject({ companyId: company.id, title: 'Sitio' });
   const tienda = store.createProject({ companyId: company.id, title: 'Tienda' });
@@ -307,16 +307,16 @@ test('un proyecto donde todo se trabó no se anuncia como cumplido ni queda cong
   corridas.find((c) => c.tarea.id === rota.id).romper(new Error('se cayó el servicio'));
   await asentar();
 
-  // Lo del vecino no se toca: que un proyecto se rompa no arrastra al otro.
+  // The neighbor's stuff is untouched: one project breaking does not drag the other.
   assert.equal(store.getGoal(tienda.id).status, 'active');
   assert.equal(store.getTask(enLaTienda.id).status, 'in_progress', 'la tienda sigue trabajando como si nada');
 
-  // Lo del proyecto roto: al usuario le tiene que quedar claro que quedó trabado.
+  // As for the broken project: the user must see clearly that it got stuck.
   assert.equal(motor.eventos.filter((e) => e.kind === 'goal_done' && e.goalId === sitio.id).length, 0,
     'no se le avisa "meta cumplida" por un proyecto donde no se entregó nada');
   assert.notEqual(store.getGoal(sitio.id).status, 'done', 'el proyecto quedó trabado, no terminado');
 
-  // Y lo que se pida después en ese proyecto tiene que trabajarse igual.
+  // And whatever is asked later in that project still gets worked on.
   const pedidoNuevo = encargar(store, sitio, equipo[2], { archivo: 'estilos.css', texto: 'y ahora los estilos' });
   assert.ok(store.workQueue(company.id).some((t2) => t2.id === pedidoNuevo.id),
     'lo que pedís después de un error no puede quedar en el limbo');

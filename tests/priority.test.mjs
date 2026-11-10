@@ -11,7 +11,7 @@ import {
   unregisterSession
 } from '../server/lib/priority.js';
 
-test('mientras hay un turno humano en vuelo, el trabajo de fondo cede', () => {
+test('while a human turn is in flight, background work yields', () => {
   resetTurnPriority();
   assert.equal(isUserSpeaking(), false);
 
@@ -19,12 +19,12 @@ test('mientras hay un turno humano en vuelo, el trabajo de fondo cede', () => {
   assert.equal(isUserSpeaking(), true, 'la persona tiene prioridad');
 
   endUserTurn();
-  // Colchón: recién terminado sigue teniendo prioridad (suele encadenar ideas).
+  // Cushion: just finished still has priority (people usually chain ideas).
   assert.equal(isUserSpeaking(), true);
   resetTurnPriority();
 });
 
-test('turnos anidados: la prioridad no se libera hasta que terminan todos', () => {
+test('nested turns: priority is not released until all of them end', () => {
   resetTurnPriority();
   beginUserTurn();
   beginUserTurn();
@@ -35,14 +35,14 @@ test('turnos anidados: la prioridad no se libera hasta que terminan todos', () =
   assert.equal(isUserSpeaking(), false);
 });
 
-test('con una reunión abierta el equipo trabaja de a uno', () => {
+test('with an open meeting the team works one at a time', () => {
   resetTurnPriority();
   assert.equal(hasLiveSession(), false);
   registerSession();
   assert.equal(hasLiveSession(), true);
   unregisterSession();
   assert.equal(hasLiveSession(), false);
-  // Nunca baja de cero aunque se cierre de más.
+  // Never drops below zero even if closed extra times.
   unregisterSession();
   assert.equal(hasLiveSession(), false);
 });

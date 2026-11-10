@@ -19,9 +19,9 @@ function nuevaEmpresa() {
   return { store, company, workforce, eventos };
 }
 
-// Cada tarea con su archivo y su dueño. `desde` corre el índice del equipo
-// para que dos llamadas no le den todo a la misma persona: un agente sigue
-// haciendo UNA cosa por vez, como una persona.
+// Each task with its file and its owner. `desde` shifts the team index
+// so two calls do not give everything to the same person: an agent still
+// does ONE thing at a time, like a person.
 function repartir(store, company, goal, reparto, desde = 0) {
   const equipo = store.listAgents({ companyId: company.id }).filter((a) => a.role === 'worker');
   return reparto.map(({ archivo, kind = 'entregable' }, i) => {
@@ -32,7 +32,7 @@ function repartir(store, company, goal, reparto, desde = 0) {
   });
 }
 
-test('dos agentes construyen el MISMO proyecto a la vez si son archivos distintos', async (t) => {
+test('two agents build the SAME project at once if the files differ', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
@@ -50,7 +50,7 @@ test('dos agentes construyen el MISMO proyecto a la vez si son archivos distinto
   assert.deepEqual([...arrancadas].sort(), ['estilos.css', 'index.html']);
 });
 
-test('dos tareas sobre el MISMO archivo se serializan', async (t) => {
+test('two tasks on the SAME file serialize', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
@@ -71,7 +71,7 @@ test('dos tareas sobre el MISMO archivo se serializan', async (t) => {
   assert.equal(arrancadas.length, 2, 'liberado el archivo, entra el segundo');
 });
 
-test('una revisión toma el proyecto entero: lee todo, no puede leerlo a medio escribir', async (t) => {
+test('a review takes the whole project: it reads everything, it cannot read it half-written', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
@@ -89,7 +89,7 @@ test('una revisión toma el proyecto entero: lee todo, no puede leerlo a medio e
   assert.equal(arrancadas[0], 'revision');
 });
 
-test('una tarea sin archivo declarado también toma el proyecto entero', async (t) => {
+test('a task without a declared file also takes the whole project', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
@@ -103,7 +103,7 @@ test('una tarea sin archivo declarado también toma el proyecto entero', async (
   assert.equal(arrancadas.length, 1, 'sin saber qué va a tocar, se es conservador');
 });
 
-test('proyectos distintos nunca se estorban', async (t) => {
+test("different projects never get in each other's way", async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const uno = store.createProject({ companyId: company.id, title: 'Uno' });
   const dos = store.createProject({ companyId: company.id, title: 'Dos' });
@@ -122,7 +122,7 @@ test('proyectos distintos nunca se estorban', async (t) => {
   assert.equal(arrancadas.length, 2, 'mismo nombre de archivo, proyectos distintos: sin conflicto');
 });
 
-test('el cerrojo se suelta aunque la tarea explote', async (t) => {
+test('the lock releases even if the task blows up', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
@@ -136,12 +136,12 @@ test('el cerrojo se suelta aunque la tarea explote', async (t) => {
   assert.equal(workforce.busyAgents.size, 0);
 });
 
-test('un agente hace UNA cosa por vez, como una persona', async (t) => {
+test('an agent does ONE thing at a time, like a person', async (t) => {
   const { store, company, workforce } = nuevaEmpresa();
   const goal = store.createProject({ companyId: company.id, title: 'Sitio' });
   t.after(() => rmSync(projectDir(company.id, goal.slug), { recursive: true, force: true }));
 
-  // Los dos archivos son distintos, pero el dueño es el mismo.
+  // The two files differ, but the owner is the same.
   const equipo = store.listAgents({ companyId: company.id }).filter((a) => a.role === 'worker');
   for (const archivo of ['index.html', 'estilos.css']) {
     const id = store.insertTask(null, equipo[0].id, { text: `escribir ${archivo}` });

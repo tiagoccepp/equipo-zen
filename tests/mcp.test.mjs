@@ -1,5 +1,5 @@
-// Tests del cliente MCP (mcp.js) y el adaptador a Manos (manos-mcp.js).
-// Usan un server MCP fake (fixture temporal) que habla JSON-RPC por stdio.
+// Tests for the MCP client (mcp.js) and the Manos adapter (manos-mcp.js).
+// They use a fake MCP server (temp fixture) speaking JSON-RPC over stdio.
 
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,11 +14,11 @@ const ENV_SERVERS = 'PABLO_MCP_SERVERS';
 const ENV_TIMEOUT = 'PABLO_MCP_TIMEOUT_MS';
 const NODE = process.execPath;
 
-// Server MCP fake. Modos por argv[2]:
-//   normal: initialize + list (2 tools) + call con eco
-//   noisy:  igual pero escupe una línea no-JSON por stdout al arrancar
-//   slow:   tools/call nunca responde (para probar timeout)
-//   crash:  sale con código 1 al arrancar
+// Fake MCP server. Modes via argv[2]:
+//   normal: initialize + list (2 tools) + call with echo
+//   noisy:  same but spits a non-JSON line on stdout at startup
+//   slow:   tools/call never answers (to test timeout)
+//   crash:  exits with code 1 at startup
 const FAKE_SERVER = `
 import { createInterface } from 'node:readline';
 const mode = process.argv[2] || 'normal';
@@ -29,7 +29,7 @@ if (mode === 'noisy') process.stdout.write('ESTO NO ES JSON, soy un log ruidoso\
 rl.on('line', (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { return; }
-  if (msg.id === undefined) return; // notificación: sin respuesta
+  if (msg.id === undefined) return; // notification: no response
   const { id, method, params } = msg;
   if (method === 'initialize') {
     send({ jsonrpc: '2.0', id, result: {
@@ -44,7 +44,7 @@ rl.on('line', (line) => {
         inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } } },
     ]}});
   } else if (method === 'tools/call') {
-    if (mode === 'slow') return; // nunca responde -> timeout del cliente
+    if (mode === 'slow') return; // never responds -> client timeout
     send({ jsonrpc: '2.0', id, result: {
       content: [{ type: 'text', text: 'eco:' + JSON.stringify(params.arguments) }],
     }});
@@ -70,8 +70,8 @@ function fakeEntry(serverName, mode) {
 before(() => {
   savedServers = process.env[ENV_SERVERS];
   savedTimeout = process.env[ENV_TIMEOUT];
-  // Integración manos 09/11: readMcpConfig tiene fallback a
-  // ~/.config/equipo-mcp.json; HOME aislado para que 'ausente' sea ausente.
+  // Manos integration 09/11: readMcpConfig falls back to
+  // ~/.config/equipo-mcp.json; isolated HOME so 'missing' is really missing.
   savedHome = process.env.HOME;
   process.env.HOME = mkdtempSync(join(tmpdir(), 'mcp-sin-config-'));
   const dir = mkdtempSync(join(tmpdir(), 'mcp-test-'));
@@ -95,21 +95,21 @@ afterEach(async () => {
   await shutdown();
 });
 
-test('config ausente -> [] sin throw', async () => {
+test('missing config -> [] without throwing', async () => {
   assert.deepEqual(await getMcpTools(), []);
 });
 
-test('config inválida -> [] sin throw', async () => {
+test('invalid config -> [] without throwing', async () => {
   process.env[ENV_SERVERS] = 'esto no es json';
   assert.deepEqual(await getMcpTools(), []);
   process.env[ENV_SERVERS] = JSON.stringify({ no: 'es un array' });
   assert.deepEqual(await getMcpTools(), []);
-  // Entradas inválidas se saltean (falta cmd).
+  // Invalid entries are skipped (missing cmd).
   process.env[ENV_SERVERS] = JSON.stringify([{ name: 'roto' }]);
   assert.deepEqual(await getMcpTools(), []);
 });
 
-test('list mapea nombres mcp_<server>_<tool> y parameters (server ruidoso)', async () => {
+test('list maps mcp_<server>_<tool> names and parameters (noisy server)', async () => {
   setServers([fakeEntry('fs', 'noisy')]);
   const tools = await getMcpTools();
   assert.equal(tools.length, 2);
@@ -123,7 +123,7 @@ test('list mapea nombres mcp_<server>_<tool> y parameters (server ruidoso)', asy
   });
 });
 
-test('call devuelve {ok:true, output} con el eco', async () => {
+test('call returns {ok:true, output} with the echo', async () => {
   setServers([fakeEntry('fs', 'normal')]);
   const res = await callMcpTool('mcp_fs_echo', { text: 'hola' });
   assert.equal(res.ok, true);
@@ -132,16 +132,16 @@ test('call devuelve {ok:true, output} con el eco', async () => {
   assert.ok(res.output.length <= 2000);
 });
 
-test('server que duerme -> {ok:false} por timeout', async () => {
+test('sleeping server -> {ok:false} via timeout', async () => {
   setServers([fakeEntry('lento', 'slow')]);
-  process.env[ENV_TIMEOUT] = '300'; // override corto solo para este test
+  process.env[ENV_TIMEOUT] = '300'; // short override just for this test
   const res = await callMcpTool('mcp_lento_echo', { text: 'x' });
   assert.equal(res.ok, false);
   assert.equal(res.output, '');
   assert.ok(res.error.includes('timeout'), `error inesperado: ${res.error}`);
 });
 
-test('server que crashea -> [] y {ok:false} sin colgar', async () => {
+test('crashing server -> [] and {ok:false} without hanging', async () => {
   setServers([fakeEntry('muerto', 'crash')]);
   assert.deepEqual(await getMcpTools(), []);
   const res = await callMcpTool('mcp_muerto_echo', { text: 'x' });
@@ -150,14 +150,14 @@ test('server que crashea -> [] y {ok:false} sin colgar', async () => {
   assert.ok(res.error.length > 0);
 });
 
-test('tool con prefijo desconocido -> {ok:false}', async () => {
+test('tool with unknown prefix -> {ok:false}', async () => {
   setServers([fakeEntry('fs', 'normal')]);
   const res = await callMcpTool('mcp_otro_echo', {});
   assert.equal(res.ok, false);
   assert.ok(res.error.includes('desconocida'));
 });
 
-test('McpClient directo: start/list/call/close y error tras close', async () => {
+test('McpClient direct: start/list/call/close and error after close', async () => {
   const c = new McpClient({ cmd: NODE, args: [fixture, 'normal'], timeoutMs: 5000 });
   await c.start();
   assert.equal(c.isAlive(), true);
@@ -170,7 +170,7 @@ test('McpClient directo: start/list/call/close y error tras close', async () => 
   await assert.rejects(() => c.listTools(), /cerrado/);
 });
 
-test('McpClient con comando inexistente rechaza al arrancar', async () => {
+test('McpClient with missing command rejects on start', async () => {
   const c = new McpClient({ cmd: 'comando-que-no-existe-xyz-123', timeoutMs: 2000 });
   await assert.rejects(() => c.start(), /no se pudo iniciar/);
 });

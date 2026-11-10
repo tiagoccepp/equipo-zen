@@ -1,17 +1,17 @@
-// Audio routing (PipeWire/WirePlumber): listar sinks/sources, mover streams
-// de la app, default, volumen/mute y tono de prueba.
+// Audio routing (PipeWire/WirePlumber): list sinks/sources, move app
+// streams, default, volume/mute and test tone.
 //
-// Realidad del box (09/11, verificado): wpctl NO tiene --json ni move.
-// - Listado primario: `pw-dump` (JSON). Fallback: parseo de `wpctl status`.
+// Box reality (09/11, verified): wpctl has NO --json nor move.
+// - Primary listing: `pw-dump` (JSON). Fallback: parsing `wpctl status`.
 // - Defaults: `pw-metadata -n default` (keys default.audio.sink/source).
-// - Mover stream: `pw-metadata -n default <stream> target.node <sink>`
-//   (verificado en vivo con stream silencioso propio; -1 = auto).
-// - Volumen/mute set: `wpctl set-volume/set-mute`; lectura vía pw-dump
-//   (wpctl no expone mute en lectura).
+// - Move stream: `pw-metadata -n default <stream> target.node <sink>`
+//   (verified live with our own silent stream; -1 = auto).
+// - Volume/mute set: `wpctl set-volume/set-mute`; reads via pw-dump
+//   (wpctl doesn't expose mute on read).
 //
-// Todo corre por `run(cmd, args)` inyectable: spawn argv sin shell, con
-// timeout. Los tests inyectan fakes; este módulo nunca toca audio real
-// si se le pasa un runner falso.
+// Everything runs through injectable `run(cmd, args)`: argv spawn with no shell,
+// with timeout. Tests inject fakes; this module never touches real audio
+// when given a fake runner.
 
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,7 @@ import { unlink, writeFile } from 'node:fs/promises';
 
 export const AUDIO_TIMEOUT_MS = 5000;
 export const AUDIO_MAX_BUFFER = 8 * 1024 * 1024;
-// Streams propios: los de equipo/equipo-node (nombre de app, nodo o binario).
+// Own streams: the equipo/equipo-node ones (app name, node or binary).
 export const APP_STREAM_RE = /equipo/i;
 
 export function audioError(code, message) {
@@ -29,7 +29,7 @@ export function audioError(code, message) {
   return err;
 }
 
-// Runner default: argv directo (sin shell), timeout con SIGKILL.
+// Default runner: direct argv (no shell), timeout with SIGKILL.
 export function runCommand(cmd, args = [], { timeoutMs = AUDIO_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     let child;
@@ -48,7 +48,7 @@ export function runCommand(cmd, args = [], { timeoutMs = AUDIO_TIMEOUT_MS } = {}
       try {
         child.kill('SIGKILL');
       } catch {
-        // Ya muerto.
+        // Already dead.
       }
       reject(audioError('AUDIO_TIMEOUT', `${cmd} ${args.join(' ')} tardó más de ${timeoutMs}ms`));
     }, timeoutMs);
@@ -89,7 +89,7 @@ async function mustOk(run, cmd, args, opts) {
   return res.stdout;
 }
 
-// ── Parsers puros ────────────────────────────────────────────────────
+// ── Pure parsers ─────────────────────────────────────────────────────
 
 function avgVolume(vols) {
   if (!Array.isArray(vols) || vols.length === 0) return null;
@@ -107,8 +107,8 @@ function firstPropsParams(obj) {
   return (Array.isArray(list) && list[0]) || {};
 }
 
-// pw-dump completo → sinks/sources/streams. Streams: solo clases exactas
-// Stream/Output/Audio y Stream/Input/Audio (los */Internal son filtros).
+// Full pw-dump → sinks/sources/streams. Streams: only exact classes
+// Stream/Output/Audio and Stream/Input/Audio (*/Internal ones are filters).
 export function parsePwDump(jsonText) {
   let arr;
   try {
@@ -157,8 +157,8 @@ export function parsePwDump(jsonText) {
   return { sinks, sources, streams };
 }
 
-// `pw-metadata -n default` → nombres de default. Prefiere default.audio.*
-// sobre default.configured.audio.* (el efectivo sobre el configurado).
+// `pw-metadata -n default` → default names. Prefers default.audio.*
+// over default.configured.audio.* (the effective over the configured one).
 export function parseDefaultMetadata(text) {
   let sink = null;
   let source = null;
@@ -184,15 +184,15 @@ export function parseDefaultMetadata(text) {
   return { sink: sink || cfgSink, source: source || cfgSource };
 }
 
-// `wpctl status` (descripciones o -n nombres) → ids, volúmenes, defaults.
-// Secciones Sinks/Sources: líneas `│  [*]  ID. NOMBRE  [vol: x]`. Streams:
-// solo líneas de cliente (indent 7-8 según dígitos del id); Video se ignora.
+// `wpctl status` (descriptions or -n names) → ids, volumes, defaults.
+// Sinks/Sources sections: lines `│  [*]  ID. NAME  [vol: x]`. Streams:
+// client lines only (indent 7-8 depending on id digits); Video is ignored.
 export function parseWpctlStatus(text) {
   const sinks = [];
   const sources = [];
   const streams = [];
   let section = null;
-  let video = false; // Video trae sus propios Sinks/Sources: no son audio.
+  let video = false; // Video brings its own Sinks/Sources: not audio.
   for (const raw of String(text || '').split('\n')) {
     const line = raw.replace(/\t/g, '  ');
     if (/^\s*Audio\s*$/.test(line)) { video = false; section = null; continue; }
@@ -204,7 +204,7 @@ export function parseWpctlStatus(text) {
     if (/Devices:|Filters:|Clients:|Video|Settings|Default Configured/.test(line)) { section = null; continue; }
     if (!section) continue;
     if (section === 'streams') {
-      // Cliente a indent 7-8 (el id va alineado a derecha); puertos a 12+.
+      // Client at indent 7-8 (id is right-aligned); ports at 12+.
       const m = line.match(/^ {7,8}(\d+)\.\s+(\S(?:.*?\S)?)\s*$/);
       if (!m) continue;
       streams.push({ id: Number(m[1]), nodeName: '', app: m[2].trim(), binary: '', mediaClass: '', driverId: null });
@@ -231,7 +231,7 @@ export function isAppStream(stream) {
   return [stream.app, stream.nodeName, stream.binary].some((v) => typeof v === 'string' && APP_STREAM_RE.test(v));
 }
 
-// ref: id numérico ('80'/80) o node.name. Devuelve el nodo o null.
+// ref: numeric id ('80'/80) or node.name. Returns the node or null.
 export function resolveNode(nodes, ref) {
   if (ref === null || ref === undefined) return null;
   const s = String(ref).trim();
@@ -244,7 +244,7 @@ export function resolveNode(nodes, ref) {
   return (nodes || []).find((n) => n.name === s) || null;
 }
 
-// ── Operaciones ──────────────────────────────────────────────────────
+// ── Operations ───────────────────────────────────────────────────────
 
 function markDefaults(devices, defaults) {
   if (defaults?.sink) {
@@ -263,13 +263,13 @@ async function listViaPwDump(run) {
     const meta = await mustOk(run, 'pw-metadata', ['-n', 'default']);
     markDefaults(devices, parseDefaultMetadata(meta));
   } catch {
-    // Sin metadata igual servimos el listado (isDefault=false).
+    // Without metadata we still serve the listing (isDefault=false).
   }
   return { ...devices, backend: 'pw-dump', available: true };
 }
 
 async function listViaWpctl(run) {
-  // -n da node.names; el status normal da descripciones lindas. Merge por id.
+  // -n gives node.names; plain status gives nice descriptions. Merge by id.
   const [names, desc] = await Promise.all([
     mustOk(run, 'wpctl', ['status', '-n']),
     mustOk(run, 'wpctl', ['status'])
@@ -292,7 +292,7 @@ export async function listDevices({ run } = {}) {
     return await listViaPwDump(run);
   } catch (err) {
     if (err?.code !== 'AUDIO_UNAVAILABLE' && err?.code !== 'AUDIO_CMD' && err?.code !== 'AUDIO_PARSE') throw err;
-    // Fallback a wpctl texto; si tampoco está, error claro único.
+    // Fallback to text wpctl; if that's missing too, single clear error.
     try {
       return await listViaWpctl(run);
     } catch {
@@ -334,9 +334,9 @@ export async function setNodeMute(ref, muted, { run, devices } = {}) {
   return node;
 }
 
-// Mueve los streams VIVOS de la app al sink/source indicado. kind:
-// 'playback' (Stream/Output/Audio → sink) o 'capture' (Stream/Input/Audio →
-// source). Sin streams vivos no falla: no hay nada que mover.
+// Moves the app's LIVE streams to the given sink/source. kind:
+// 'playback' (Stream/Output/Audio → sink) or 'capture' (Stream/Input/Audio →
+// source). No live streams is not a failure: nothing to move.
 export async function moveAppStreams(targetRef, { run, devices, kind = 'playback' } = {}) {
   const dev = devices || (await listDevices({ run }));
   const pool = kind === 'capture' ? dev.sources : dev.sinks;
@@ -352,7 +352,7 @@ export async function moveAppStreams(targetRef, { run, devices, kind = 'playback
   return { target, moved };
 }
 
-// Despin: los streams vuelven a seguir el default del sistema.
+// Unpin: streams go back to following the system default.
 export async function unpinAppStreams({ run, devices } = {}) {
   const dev = devices || (await listDevices({ run }));
   const ours = dev.streams.filter(isAppStream);
@@ -364,7 +364,7 @@ export async function unpinAppStreams({ run, devices } = {}) {
   return { unpinned };
 }
 
-// WAV 16-bit mono: tono con fade in/out (sin clicks). Puro → testeable.
+// 16-bit mono WAV: tone with fade in/out (no clicks). Pure → testable.
 export function beepWavBytes({ freq = 880, ms = 400, rate = 48000 } = {}) {
   const n = Math.max(1, Math.floor((rate * ms) / 1000));
   const data = Buffer.alloc(44 + n * 2);
@@ -392,7 +392,7 @@ export function beepWavBytes({ freq = 880, ms = 400, rate = 48000 } = {}) {
   return data;
 }
 
-// Tono de prueba al sink indicado (o al default si ref vacía/'default').
+// Test tone to the given sink (or the default if ref is empty/'default').
 export async function playTestTone(sinkRef, { run, tmpFile } = {}) {
   const file = tmpFile || join(tmpdir(), `equipo-beep-${process.pid}-${Date.now()}.wav`);
   const owned = !tmpFile;
@@ -409,8 +409,8 @@ export async function playTestTone(sinkRef, { run, tmpFile } = {}) {
   }
 }
 
-// Aplica la selección guardada. Nunca tira: devuelve {ok, error?} para
-// que el PUT de settings informe sin romper el guardado.
+// Applies the saved selection. Never throws: returns {ok, error?} so
+// the settings PUT reports without breaking the save.
 export async function applyAudioSettings(selection = {}, { run } = {}) {
   const { output = 'default', input = 'default', followDefault = true } = selection;
   try {

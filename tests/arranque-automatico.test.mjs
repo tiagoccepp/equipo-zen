@@ -20,7 +20,7 @@ function enProyecto(stack = 'web') {
   return { store, company, project, session, enviados };
 }
 
-test('una tarea repartida en la reunión entra a la cola sola', () => {
+test('a task handed out in the meeting enters the queue on its own', () => {
   const { store, project, session } = enProyecto();
   const alguien = session.sessionAgents.find((a) => a.role === 'worker');
 
@@ -32,7 +32,7 @@ test('una tarea repartida en la reunión entra a la cola sola', () => {
   assert.equal(enCola[0].status, 'pending');
 });
 
-test('con el arranque apagado, nadie se mueve hasta que lo pidas', () => {
+test('with auto-start off, nobody moves until you ask', () => {
   const { store, project, session } = enProyecto();
   session.autoWork = false;
   const alguien = session.sessionAgents.find((a) => a.role === 'worker');
@@ -41,7 +41,7 @@ test('con el arranque apagado, nadie se mueve hasta que lo pidas', () => {
   assert.equal(store.tasksForGoal(project.id).length, 0, 'la tarea existe pero no está en la cola');
 });
 
-test('el usuario puede apagar y prender el arranque automático', async () => {
+test('the user can turn auto-start off and on', async () => {
   const { session, enviados } = enProyecto();
 
   await session.handleClientMessage({ type: 'set_auto_work', enabled: false });
@@ -52,12 +52,12 @@ test('el usuario puede apagar y prender el arranque automático', async () => {
   assert.equal(session.autoWork, true);
 });
 
-// El defecto que anulaba el paralelismo: encolar sin archivo hace que la
-// tarea tome el proyecto entero y el equipo vuelva a trabajar de a uno.
-test('cada entregable se lleva SU archivo, no el proyecto entero', () => {
+// The defect that killed parallelism: queueing without a file makes the
+// task take the whole project and the team goes back to working one by one.
+test('each deliverable takes ITS file, not the whole project', () => {
   const { store, project, session } = enProyecto();
-  // Solo quienes producen código: el QA revisa y el de talento refina, y esas
-  // tareas NO llevan archivo a propósito.
+  // Only those who produce code: QA reviews and talent refines, and those
+  // tasks carry NO file on purpose.
   const productores = session.sessionAgents.filter((a) =>
     a.role === 'worker' && !/qa|calidad|testing/i.test(`${a.title} ${a.domains.join(' ')}`)
     && !/dise[ñn]|arte|ux|ui/i.test(a.title));
@@ -74,9 +74,9 @@ test('cada entregable se lleva SU archivo, no el proyecto entero', () => {
   assert.equal(new Set(entregables.map((t) => t.target_file)).size, 2, 'no se le da el mismo archivo a dos personas');
 });
 
-// La causa de las tareas trabadas en FASA: al QA y al de talento se les daba un
-// archivo que escribir, y agotaban los pasos buscando qué escribir.
-test('el QA y el de talento no reciben un archivo para escribir', () => {
+// The cause of stuck tasks at FASA: QA and talent were given a file
+// to write, and they burned all steps looking for what to write.
+test('QA and talent do not receive a file to write', () => {
   const { store, project, session } = enProyecto();
   const qa = session.sessionAgents.find((a) => /qa|calidad|testing/i.test(`${a.title} ${a.domains.join(' ')}`));
   const talento = session.sessionAgents.find((a) => a.role === 'contratista');
@@ -94,7 +94,7 @@ test('el QA y el de talento no reciben un archivo para escribir', () => {
   }
 });
 
-test('el aviso de que alguien se llevó una tarea llega al cliente', () => {
+test('the notice that someone picked up a task reaches the client', () => {
   const { session, enviados } = enProyecto();
   const alguien = session.sessionAgents.find((a) => a.role === 'worker');
 
@@ -104,7 +104,7 @@ test('el aviso de que alguien se llevó una tarea llega al cliente', () => {
   assert.equal(aviso.agentName, alguien.name);
 });
 
-test('la misma tarea repartida dos veces no se encola dos veces', () => {
+test('the same task handed out twice is not queued twice', () => {
   const { store, project, session } = enProyecto();
   const alguien = session.sessionAgents.find((a) => a.role === 'worker');
 
@@ -113,14 +113,14 @@ test('la misma tarea repartida dos veces no se encola dos veces', () => {
   assert.equal(store.tasksForGoal(project.id).length, 1);
 });
 
-test('la inferencia respeta un archivo que ya existe en el proyecto', () => {
+test('inference respects a file that already exists in the project', () => {
   assert.equal(
     inferirArchivo('mejorar el contraste en src/theme.js', 'movil-rn', ['src/theme.js', 'App.jsx']),
     'src/theme.js'
   );
 });
 
-test('la inferencia nunca devuelve vacío para una tarea con texto', () => {
+test('inference never returns empty for a task with text', () => {
   for (const stack of ['web', 'automatizacion', 'movil-rn', 'android']) {
     const r = inferirArchivo('hacer una cosa rara sin palabras clave', stack, []);
     assert.ok(r && r.length > 0, `${stack} tiene que devolver algo, no null`);

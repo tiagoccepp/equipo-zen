@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Harness E2E del turno de voz: sintetiza audio (Piper) o usa un beep
-// sintético (DEGRADED), lo manda por WS como frames audio_chunk y valida
-// el loop completo: STT → turno → respuesta del agente → TTS.
+// E2E harness for the voice turn: synthesizes audio (Piper) or uses a synthetic
+// beep (DEGRADED), sends it over WS as audio_chunk frames and validates
+// the full loop: STT → turn → agent reply → TTS.
 //
-// Uso:
+// Usage:
 //   node scripts/voice-smoke.mjs [PORT] [caso]
-//   PORT: puerto del backend (default: autodetecta desde server.log)
+//   PORT: backend port (default: autodetected from server.log)
 //   caso: en | es | both (default: both)
 //
-// Exit: 0 = todo PASS, 1 = algún FAIL, 2 = infra DOWN (app o red caída).
+// Exit: 0 = all PASS, 1 = some FAIL, 2 = infra DOWN (app or network down).
 //
-// Todo localhost: no pasa por proxy (regla Tito 08/11 N/A acá).
+// All localhost: doesn't go through the proxy (Tito rule 08/11 N/A here).
 
 import WebSocket from 'ws';
 import { execFileSync } from 'node:child_process';
@@ -18,34 +18,34 @@ import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-// Todo localhost (backend + Piper en 127.0.0.1): no_proxy='*' para que el
-// proxy del entorno no rompa los fetch. OJO: borrar HTTP_PROXY en runtime
-// NO sirve (undici lo lee al arrancar); no_proxy sí se evalúa por request.
+// All localhost (backend + Piper on 127.0.0.1): no_proxy='*' so the
+// environment proxy doesn't break fetches. NOTE: deleting HTTP_PROXY at runtime
+// does NOT work (undici reads it at startup); no_proxy is evaluated per request.
 process.env.no_proxy = '*';
 process.env.NO_PROXY = '*';
 
-// --- Casos de prueba: texto a sintetizar + keywords para el fuzzy-match ---
+// --- Test cases: text to synthesize + keywords for the fuzzy match ---
 export const CASOS = {
   en: {
     texto: 'The quick brown fox jumps over the lazy dog.',
-    vozPiper: 'lessac', // inglés, masculina
+    vozPiper: 'lessac', // English, masculine
     keywords: ['quick', 'brown', 'fox', 'jumps', 'lazy', 'dog'],
   },
   es: {
     texto: 'Hola Pablo, ¿cuánto es dos más dos?',
-    vozPiper: 'sharvard', // español, masculina
+    vozPiper: 'sharvard', // Spanish, masculine
     keywords: ['hola', 'pablo', 'cuanto', 'dos', 'mas'],
   },
 };
 
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:7791';
-// Parakeet hace ITN ("dos" → "2"): el fuzzy expande dígitos a palabras ES+EN.
+// Parakeet does ITN ("dos" → "2"): the fuzzy match expands digits to ES+EN words.
 const DIGITO_ES = { 0: 'cero', 1: 'uno', 2: 'dos', 3: 'tres', 4: 'cuatro', 5: 'cinco', 6: 'seis', 7: 'siete', 8: 'ocho', 9: 'nueve' };
 const DIGITO_EN = { 0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine' };
-const FRAME_SAMPLES = 480; // 30 ms @ 16k, igual que el worklet del cliente
+const FRAME_SAMPLES = 480; // 30 ms @ 16k, same as the client worklet
 const COLECTA_MS = 30_000;
 
-// --- Puerto: arg > server.log del desktop ---
+// --- Port: arg > desktop server.log ---
 export function detectPort(arg) {
   if (arg && /^\d+$/.test(arg)) return Number(arg);
   const logPath = join(homedir(), '.local/share/com.tiagoccepp.equipo/server.log');
@@ -57,7 +57,7 @@ export function detectPort(arg) {
   return null;
 }
 
-// --- WAV: parseo mínimo RIFF (pcm Int16 mono + rate) ---
+// --- WAV: minimal RIFF parsing (pcm Int16 mono + rate) ---
 function wavToPcm(buffer) {
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   if (view.getUint32(0, false) !== 0x52494646) throw new Error('no es WAV');
@@ -76,7 +76,7 @@ function wavToPcm(buffer) {
   throw new Error('WAV sin chunk data');
 }
 
-// --- Resample lineal a 16k mono ---
+// --- Linear resample to 16k mono ---
 function resample16k(pcm, rate) {
   if (rate === 16000) return Int16Array.from(pcm);
   const ratio = rate / 16000;
@@ -93,7 +93,7 @@ function resample16k(pcm, rate) {
   return out;
 }
 
-// --- Audio de prueba: Piper primero, beep sintético si está DOWN ---
+// --- Test audio: Piper first, synthetic beep if DOWN ---
 export async function synthesizeCase(caso) {
   const def = CASOS[caso];
   try {
@@ -107,8 +107,8 @@ export async function synthesizeCase(caso) {
     const { pcm, rate } = wavToPcm(Buffer.from(await r.arrayBuffer()));
     return { pcm16k: resample16k(pcm, rate), degraded: false, fuente: `piper:${def.vozPiper}@${rate}Hz` };
   } catch (err) {
-    // DEGRADED: beep 440Hz 0.5s + silencio 0.5s + beep 0.5s. Solo valida
-    // plumbing (el STT va a devolver vacío/ruido, y está bien).
+    // DEGRADED: 440Hz beep 0.5s + silence 0.5s + beep 0.5s. Only validates
+    // plumbing (the STT will return empty/noise, and that's fine).
     const beep = (s) => {
       const n = Math.floor(16000 * s);
       const o = new Int16Array(n);
@@ -138,7 +138,7 @@ function normalizar(s) {
     .replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// --- Un caso E2E completo contra el backend vivo ---
+// --- One full E2E case against the live backend ---
 export async function runVoiceCase(base, caso) {
   const def = CASOS[caso];
   const resultado = { caso, asserts: [], timings: {}, transcript: '', degraded: false, fuente: '' };
@@ -146,13 +146,13 @@ export async function runVoiceCase(base, caso) {
     resultado.asserts.push({ nombre, pass, detalle });
   };
 
-  // 1) Audio de prueba.
+  // 1) Test audio.
   const { pcm16k, degraded, fuente } = await synthesizeCase(caso);
   resultado.degraded = degraded;
   resultado.fuente = fuente;
   const frames = pcmToFrames(pcm16k);
 
-  // 2) Empresa + proyecto de prueba (igual que charla-e2e.mjs).
+  // 2) Test company + project (same as charla-e2e.mjs).
   const api = async (ruta, opciones = {}) => {
     const r = await fetch(`${base}${ruta}`, {
       ...opciones,
@@ -168,8 +168,8 @@ export async function runVoiceCase(base, caso) {
     method: 'POST', body: JSON.stringify({ title: `voice-smoke-${caso}-${Date.now()}` }),
   });
 
-  // 3) WS: hello + set_voice + frames + audio_end (sin transcriptHint: se
-  // prueba el STT real, no el atajo del navegador).
+  // 3) WS: hello + set_voice + frames + audio_end (no transcriptHint: the
+  // real STT is tested, not the browser shortcut).
   const ws = new WebSocket(base.replace('http', 'ws') + '/meeting');
   const mensajes = [];
   let tAudioEnd = 0;
@@ -177,10 +177,10 @@ export async function runVoiceCase(base, caso) {
   await new Promise((resolve, reject) => {
     const fin = setTimeout(resolve, COLECTA_MS);
     const terminar = () => { clearTimeout(fin); resolve(); };
-    // Salida temprana: turno de voz resuelto (respondió o vacío) + gracia.
-    // El TTS llega DESPUÉS del texto: si aún no hay audio, se esperan hasta
-    // 10s (antes 2s fijos cortaban la colecta y audio-tts flakeaba); cuando
-    // el audio llega, la gracia vuelve a 2s para juntar rezagados.
+    // Early exit: voice turn resolved (answered or empty) + grace.
+    // TTS arrives AFTER the text: if there's no audio yet, wait up to
+    // 10s (the old fixed 2s cut collection short and made audio-tts flaky); when
+    // the audio arrives, the grace goes back to 2s to gather stragglers.
     let graceTimer = null;
     const finTurno = () => {
       if (!graceTimer) graceTimer = setTimeout(terminar, t.agenteAudio === undefined ? 10000 : 2000);
@@ -200,7 +200,7 @@ export async function runVoiceCase(base, caso) {
           ws.send(JSON.stringify({ type: 'audio_start' }));
           for (const f of frames) {
             ws.send(JSON.stringify({ type: 'audio_chunk', data: f, mimeType: 'audio/pcm;rate=16000' }));
-            await new Promise((r) => setTimeout(r, 10)); // ~3x tiempo real
+            await new Promise((r) => setTimeout(r, 10)); // ~3x realtime
           }
           tAudioEnd = Date.now();
           ws.send(JSON.stringify({ type: 'audio_end' }));
@@ -210,7 +210,7 @@ export async function runVoiceCase(base, caso) {
         t.transcript = ahora - tAudioEnd;
         resultado.transcript = m.text;
       }
-      // En DEGRADED no hay transcript: se mide hasta el vacío (el STT igual corrió).
+      // In DEGRADED there's no transcript: measure until the empty one (the STT ran anyway).
       if (m.type === 'audio_transcription_empty' && t.vacio === undefined) {
         t.vacio = ahora - tAudioEnd;
       }
@@ -224,7 +224,7 @@ export async function runVoiceCase(base, caso) {
       if ((m.type === 'agent_audio_chunk' || m.type === 'agent_audio_mp3' || m.type === 'agent_audio_start')
         && t.agenteAudio === undefined) {
         t.agenteAudio = ahora - tAudioEnd;
-        // El audio llegó y el turno ya se resolvió: basta 2s más.
+        // The audio arrived and the turn is already resolved: 2s more is enough.
         if (graceTimer) {
           clearTimeout(graceTimer);
           graceTimer = setTimeout(terminar, 2000);
@@ -235,7 +235,7 @@ export async function runVoiceCase(base, caso) {
   });
   ws.close();
   resultado.timings = {
-    finAudioMs: pcm16k.length / 16, // duración del audio mandado
+    finAudioMs: pcm16k.length / 16, // duration of the audio sent
     finAudioATranscriptMs: t.transcript ?? null,
     finAudioAVacioMs: t.vacio ?? null,
     finAudioAPrimerTextoMs: t.agenteTexto ?? null,
@@ -249,7 +249,7 @@ export async function runVoiceCase(base, caso) {
   const errores = mensajes.filter((m) => m.type === 'error');
 
   if (degraded) {
-    // Solo plumbing: el pipeline respondió algo (final o vacío) sin errores.
+    // Plumbing only: the pipeline answered something (final or empty) with no errors.
     assert('pipeline-respondio', finales.length + vacios.length >= 1,
       `finales=${finales.length} vacios=${vacios.length}`);
   } else {
@@ -265,7 +265,7 @@ export async function runVoiceCase(base, caso) {
     assert('audio-tts', null, 'SKIP (DEGRADED: sin turno no hay TTS)');
   } else {
     let norm = ` ${normalizar(resultado.transcript)} `;
-    // Parakeet emite dígitos (ITN): «2» debe matchear keyword «dos».
+    // Parakeet emits digits (ITN): «2» must match keyword «dos».
     norm = norm.replace(/\b(\d)\b/g, (m, d) => `${m} ${DIGITO_ES[d] || ''} ${DIGITO_EN[d] || ''}`);
     const hits = def.keywords.filter((k) => norm.includes(` ${k} `) || norm.includes(` ${k}`) || norm.includes(`${k} `));
     const ratio = def.keywords.length ? hits.length / def.keywords.length : 0;
@@ -284,10 +284,10 @@ export async function runVoiceCase(base, caso) {
   return resultado;
 }
 
-// Mejor de N intentos (default 2): los backends no son determinísticos
-// (el LLM a veces declina por protocolo; Deepgram a veces devuelve vacío
-// con audio ES y language=en forzado). Cada intento usa company fresca.
-// Los asserts siguen estrictos: si el mejor intento falla, el caso falla.
+// Best of N attempts (default 2): backends aren't deterministic
+// (the LLM sometimes declines by protocol; Deepgram sometimes returns empty
+// with ES audio and forced language=en). Each attempt uses a fresh company.
+// Asserts stay strict: if the best attempt fails, the case fails.
 export async function runVoiceCaseWithRetry(base, caso, intentos = 2) {
   let best = null;
   let bestFails = Infinity;
@@ -322,7 +322,7 @@ if (esMain) {
     process.exit(2);
   }
   const base = `http://127.0.0.1:${port}`;
-  // Chequeo rápido de que la app responde antes de gastar TTS.
+  // Quick check that the app answers before spending TTS.
   try {
     const r = await fetch(`${base}/api/companies`, { signal: AbortSignal.timeout(5000) });
     if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);

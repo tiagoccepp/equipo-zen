@@ -1,21 +1,21 @@
-"""Servidor TTS local: Piper (español + inglés) persistente. Misma idea que
+"""Local TTS server: persistent Piper (Spanish + English). Same idea as
 parakeet_server.py:
   GET  /health  → {"ok": true, "voices": [...], "loaded": [...]}
   POST /v1/tts   → WAV bytes. body: {"text": "...", "voice": "daniela"|"sharvard"|"carlfm"|"lessac"|"jenny"}
 
-Voces ES (medido en CPU 2026-11-08, ver .audit/piper/PIPER-EVAL.md):
-  daniela  F rioplatense, high,   ~300ms  (default agentes F)
-  sharvard M español,    medium,  ~50ms   (default agentes M)
-  carlfm   M español,    x_low,   ~25ms   (ultra-rápida)
-mls_10246-low descartada (genera 9s de basura por frase).
+ES voices (measured on CPU 2026-11-08, see .audit/piper/PIPER-EVAL.md):
+  daniela  F rioplatense, high,   ~300ms  (default F agents)
+  sharvard M peninsular, medium,  ~50ms   (default M agents)
+  carlfm   M peninsular, x_low,   ~25ms   (ultra-fast)
+mls_10246-low discarded (generates 9s of garbage per sentence).
 
-Voces EN (medium, ~50-100ms estimados en CPU, mismo orden que sharvard):
-  lessac   M inglés EEUU, medium (default agentes M en inglés)
-  jenny    F inglés EEUU, medium (default agentes F en inglés)
-Con voces EN, Piper va primero en ambos idiomas: cada oración en inglés
-evita los ~2.4s de espera a la nube Deepgram.
+EN voices (medium, ~50-100ms estimated on CPU, same order as sharvard):
+  lessac   M US English, medium (default M agents in English)
+  jenny    F US English, medium (default F agents in English)
+With EN voices, Piper goes first in both languages: every English sentence
+avoids the ~2.4s wait for the Deepgram cloud.
 
-Lanzar: python3 server/tts/piper_server.py  (puerto 7791, PIPER_PORT=...)
+Run: python3 server/tts/piper_server.py  (port 7791, PIPER_PORT=...)
 """
 
 import io
@@ -75,11 +75,11 @@ def tts(req: TtsRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    # Precarga + warmup de síntesis de las voces default ES (F+M) y EN
-    # (F+M): ningún primer turno paga load (1.4s) ni el primer sintetizado
-    # (~2s ONNX). Cada voz con warmup tolerante: si su .onnx falta o está
-    # corrupto, se avisa y el servidor igual arranca (esa voz fallará bajo
-    # demanda y la cadena cae al siguiente TTS, pero el español no muere).
+    # Preload + synthesis warmup of the default ES (F+M) and EN
+    # (F+M) voices: no first turn pays the load (1.4s) nor the first synthesis
+    # (~2s ONNX). Each voice with tolerant warmup: if its .onnx is missing or
+    # corrupt, warn and the server still starts (that voice will fail on
+    # demand and the chain falls to the next TTS, but Spanish doesn't die).
     _warmup = [
         ("daniela", "Hola."),
         (DEFAULT_VOICE, "Hola."),

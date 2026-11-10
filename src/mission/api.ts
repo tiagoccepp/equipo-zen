@@ -1,5 +1,5 @@
-// Mission Control — fetch por tarjeta. Cada getter devuelve `null` en fallo
-// (endpoint caído, HTTP !ok, JSON roto): la tarjeta muestra "—", el resto vive.
+// Mission Control — per-card fetch. Each getter returns `null` on failure
+// (down endpoint, HTTP !ok, broken JSON): the card shows "—", the rest lives.
 
 import type {
   AudioDevices,
@@ -18,8 +18,8 @@ import { pickCompany } from './format.ts';
 
 async function getJson<T>(path: string): Promise<T | null> {
   try {
-    // apiBase() dinámico por llamada: en app empaquetada el backend vive en
-    // puerto efímero (sin esto todo fetch iba a tauri:// y cada tarjeta era —).
+    // Dynamic apiBase() per call: in the packaged app the backend lives on an
+    // ephemeral port (without this every fetch went to tauri:// and each card was —).
     const res = await fetch(apiBase() + path, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       return null;
@@ -93,7 +93,7 @@ export async function fetchSidecars(): Promise<SidecarState[] | null> {
   return data.sidecars;
 }
 
-/** Monitor de conectividad (TC 09/11): snapshot del sondeo 30s del server. */
+/** Connectivity monitor (TC 09/11): snapshot of the server's 30s probe. */
 export async function fetchConnectivity(): Promise<ConnectivityStatus | null> {
   const data = await getJson<ConnectivityStatus>('/api/connectivity');
   if (!data || !Array.isArray(data.checks)) {
@@ -179,7 +179,7 @@ export interface LocalDevices {
   outputs: number;
 }
 
-/** Counts locales (labels vacíos sin permiso); null si la API no existe. */
+/** Local counts (empty labels without permission); null if the API is missing. */
 export async function fetchLocalDevices(): Promise<LocalDevices | null> {
   try {
     if (!navigator.mediaDevices?.enumerateDevices) {

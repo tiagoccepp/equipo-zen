@@ -1,7 +1,7 @@
 export class MeetingMemory {
-  // Con store+meetingId cada turno se persiste (WAL); la RAM mantiene el
-  // cap de 80 turnos solo para armar prompts. Sin store se comporta como
-  // la memoria volátil original (tests, usos sueltos).
+  // With store+meetingId every turn is persisted (WAL); RAM keeps the
+  // 80-turn cap only for building prompts. Without a store it behaves like
+  // the original volatile memory (tests, one-off uses).
   constructor({ store = null, meetingId = null } = {}) {
     this.turns = [];
     this.store = store;
@@ -75,8 +75,8 @@ export class MeetingMemory {
     return null;
   }
 
-  // Consumido por la rehidratación de reuniones (workstream de persistencia)
-  // y por el seed de sesiones Live por agente.
+  // Consumed by meeting rehydration (persistence workstream)
+  // and by the per-agent Live session seed.
   seedTurnsFor(agent) {
     if (this.turns.length === 0) {
       return [];

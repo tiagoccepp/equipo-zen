@@ -168,6 +168,7 @@ test('fluidez pipeline: synth caído saltea la oración sin romper el turno', as
 // ── 3. Persona de llamada (bilingüe, gateada por voice) ──────────────────
 
 test('fluidez persona: en llamada ES manda oído + manejo humano', () => {
+  db.set('tts.language', 'es');
   const sys = buildSystemInstruction(AGENTE, { voice: true });
   assert.ok(sys.includes('§VOICE'), 'bloque voz');
   assert.ok(sys.includes('LLAMADA DE VOZ'), 'consciente de la llamada');
@@ -196,6 +197,7 @@ test('fluidez persona: en llamada EN todo el bloque queda en inglés', () => {
 });
 
 test('fluidez persona: fuera de llamada el estilo-hablado NO rige', () => {
+  db.set('tts.language', 'es');
   const sys = buildSystemInstruction(AGENTE, { voice: false });
   assert.ok(sys.includes('§CHAT'), 'bloque chat');
   assert.ok(!sys.includes('LLAMADA DE VOZ'), 'sin persona de llamada');

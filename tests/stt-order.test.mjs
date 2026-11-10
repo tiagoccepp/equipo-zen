@@ -20,8 +20,8 @@ import {
 } from '../server/lib/transcriber.js';
 import { telemetry } from '../server/lib/telemetry.js';
 
-// Store stub mutable: initSettings vive a nivel módulo (cada archivo de
-// test corre en su propio proceso, no contamina a otros).
+// Mutable store stub: initSettings lives at module level (each test file
+// runs in its own process, does not contaminate others).
 const db = new Map();
 initSettings(
   {
@@ -38,7 +38,7 @@ const okConf = (text, confidence) => async () => ({ text, confidence });
 const boom = async () => {
   throw new Error('x');
 };
-const shortWav = 'A'.repeat(4000); // ~3KB → turno corto (<10s)
+const shortWav = 'A'.repeat(4000); // ~3KB → short turn (<10s)
 
 const savedPartial = { ...PARTIAL_CONFIG };
 afterEach(() => {
@@ -66,30 +66,30 @@ const flush = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
 // ── parseSttOrder / getSttOrder ────────────────────────────────────────
 
-test('order: default sin store es parakeet,groq,deepgram', () => {
+test('order: default without store is parakeet,groq,deepgram', () => {
   assert.equal(DEFAULT_STT_ORDER, 'parakeet,groq,deepgram');
   assert.deepEqual(getSttOrder(), ['parakeet', 'groq', 'deepgram']);
   assert.equal(isSttOrderSet(), false);
 });
 
-test('order: parse filtra desconocidos, minúsculas, dedupea', () => {
+test('order: parse filters unknowns, lowercase, dedupes', () => {
   assert.deepEqual(parseSttOrder('Groq, PARakeet, groq, xxx, deepgram'), ['groq', 'parakeet', 'deepgram']);
   assert.deepEqual(parseSttOrder('  , ,'), []);
   assert.deepEqual(parseSttOrder(''), []);
 });
 
-test('order: alias legacy local = parakeet+whisper', () => {
+test('order: legacy alias local = parakeet+whisper', () => {
   assert.deepEqual(parseSttOrder('local,groq'), ['parakeet', 'whisper', 'groq']);
 });
 
-test('order: DB manda cuando está seteada', () => {
+test('order: DB rules when set', () => {
   db.set('stt.order', 'deepgram,groq');
   db.set('stt.provider', 'local');
   assert.equal(isSttOrderSet(), true);
   assert.deepEqual(getSttOrder(), ['deepgram', 'groq']);
 });
 
-test('order: sin override respeta legacy stt.provider', () => {
+test('order: without override respects legacy stt.provider', () => {
   db.set('stt.provider', 'groq');
   assert.deepEqual(getSttOrder(), ['groq', 'deepgram']);
   db.set('stt.provider', 'deepgram');
@@ -100,14 +100,14 @@ test('order: sin override respeta legacy stt.provider', () => {
   assert.deepEqual(getSttOrder(), ['parakeet', 'groq', 'deepgram']);
 });
 
-test('order: override inválido cae al default del provider', () => {
+test('order: invalid override falls to the provider default', () => {
   db.set('stt.order', 'xxx,yyy');
   assert.deepEqual(getSttOrder(), ['parakeet', 'groq', 'deepgram']);
 });
 
-// ── transcribeWithFallback con order ───────────────────────────────────
+// ── transcribeWithFallback with order ───────────────────────────────────
 
-test('order: respeta la secuencia y frena en el primer éxito', async () => {
+test('order: respects the sequence and stops at the first success', async () => {
   const calls = [];
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', groqKey: 'g', deepgramKey: 'd',
@@ -118,7 +118,7 @@ test('order: respeta la secuencia y frena en el primer éxito', async () => {
   assert.deepEqual(calls, ['groq', 'parakeet']);
 });
 
-test('order: vacío en un motor pasa al siguiente', async () => {
+test('order: empty from one engine moves to the next', async () => {
   const calls = [];
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', groqKey: 'g', deepgramKey: 'd',
@@ -129,7 +129,7 @@ test('order: vacío en un motor pasa al siguiente', async () => {
   assert.deepEqual(calls, ['parakeet', 'whisper']);
 });
 
-test('order: cloud sin key ni se intenta', async () => {
+test('order: cloud without key is not even tried', async () => {
   const calls = [];
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: 'h', groqKey: '', deepgramKey: '',
@@ -140,7 +140,7 @@ test('order: cloud sin key ni se intenta', async () => {
   assert.deepEqual(calls, ['parakeet']);
 });
 
-test('order: todo falla → hint → lanza el primer error', async () => {
+test('order: everything fails → hint → throws the first error', async () => {
   const calls = [];
   const args = {
     wavBase64: shortWav, groqKey: 'g', deepgramKey: 'd',
@@ -155,13 +155,13 @@ test('order: todo falla → hint → lanza el primer error', async () => {
   assert.deepEqual(calls, ['parakeet', 'groq', 'deepgram']);
 });
 
-test('order: [] → hint directo o lanza', async () => {
+test('order: [] → direct hint or throws', async () => {
   const r = await transcribeWithFallback({ wavBase64: shortWav, hint: 'h', order: [] });
   assert.deepEqual(r, { text: 'h', source: 'client' });
   await assert.rejects(() => transcribeWithFallback({ wavBase64: shortWav, hint: '', order: [] }));
 });
 
-test('order: motores desconocidos se ignoran', async () => {
+test('order: unknown engines are ignored', async () => {
   const calls = [];
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', groqKey: 'g',
@@ -172,7 +172,7 @@ test('order: motores desconocidos se ignoran', async () => {
   assert.deepEqual(calls, ['groq']);
 });
 
-test('order: retry baja confianza con deepgram fuera del order', async () => {
+test('order: low-confidence retry with deepgram outside the order', async () => {
   let dg = 0;
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', groqKey: '', deepgramKey: 'd',
@@ -184,7 +184,7 @@ test('order: retry baja confianza con deepgram fuera del order', async () => {
   assert.equal(dg, 1);
 });
 
-test('order: retry NO duplica deepgram si ya está en el order', async () => {
+test('order: retry does NOT duplicate deepgram if already in the order', async () => {
   let dg = 0;
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', groqKey: '', deepgramKey: 'd',
@@ -196,7 +196,7 @@ test('order: retry NO duplica deepgram si ya está en el order', async () => {
   assert.equal(dg, 1);
 });
 
-test('order: sin order usa legacy provider (compat)', async () => {
+test('order: without order uses legacy provider (compat)', async () => {
   const r = await transcribeWithFallback({
     wavBase64: shortWav, hint: '', provider: 'local', groqKey: '',
     localFn: ok('hola legacy'), groqFn: boom
@@ -206,7 +206,7 @@ test('order: sin order usa legacy provider (compat)', async () => {
 
 // ── transcribePartial ──────────────────────────────────────────────────
 
-test('partial: nunca tira (puertos cerrados → "")', async () => {
+test('partial: never throws (closed ports → "")', async () => {
   const r = await transcribePartial(shortWav, {
     parakeetUrl: 'http://127.0.0.1:1',
     whisperUrl: 'http://127.0.0.1:2'
@@ -220,7 +220,7 @@ test('partial: nunca tira (puertos cerrados → "")', async () => {
   assert.equal(w, '');
 });
 
-// ── Parciales en CaptureTranscriberRuntime ──────────────────────────────
+// ── Partials in CaptureTranscriberRuntime ──────────────────────────────
 
 function makeRuntime() {
   const emitted = [];
@@ -235,7 +235,7 @@ function bigChunk(bytes = 20000) {
   return Buffer.alloc(bytes).toString('base64');
 }
 
-test('partial: por bytes acumulados emite user_audio_transcript_delta', async () => {
+test('partial: by accumulated bytes emits user_audio_transcript_delta', async () => {
   const { rt, emitted } = makeRuntime();
   __setPartialFn(async () => 'hola mundo parcial');
   PARTIAL_CONFIG.minBytes = 10000;
@@ -247,7 +247,7 @@ test('partial: por bytes acumulados emite user_audio_transcript_delta', async ()
   assert.equal(deltas[0].text, 'hola mundo parcial');
 });
 
-test('partial: single-flight (un decode a la vez)', async () => {
+test('partial: single-flight (one decode at a time)', async () => {
   const { rt, emitted } = makeRuntime();
   let calls = 0;
   let release;
@@ -266,7 +266,7 @@ test('partial: single-flight (un decode a la vez)', async () => {
   assert.equal(deltas.length, 1);
 });
 
-test('partial: respeta intervalo mínimo', async () => {
+test('partial: respects minimum interval', async () => {
   const { rt, emitted } = makeRuntime();
   let calls = 0;
   __setPartialFn(async () => { calls++; return 't'; });
@@ -279,7 +279,7 @@ test('partial: respeta intervalo mínimo', async () => {
   assert.equal(calls, 1);
 });
 
-test('partial: junk y errores no emiten ni rompen', async () => {
+test('partial: junk and errors neither emit nor break', async () => {
   const { rt, emitted } = makeRuntime();
   PARTIAL_CONFIG.minBytes = 1000;
   PARTIAL_CONFIG.minIntervalMs = 0;
@@ -292,7 +292,7 @@ test('partial: junk y errores no emiten ni rompen', async () => {
   assert.deepEqual(emitted.filter((m) => m.type === 'user_audio_transcript_delta'), []);
 });
 
-test('partial: el finalize no se contamina con parciales', async () => {
+test('partial: finalize is not contaminated by partials', async () => {
   const { rt, emitted } = makeRuntime();
   __setPartialFn(async () => 'hola parcial');
   PARTIAL_CONFIG.minBytes = 1000;

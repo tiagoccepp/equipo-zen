@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════
-// fx/motion.ts — helpers mínimos para motion.css. Sin dependencias, con
-// cleanup. Todo es transform/opacity; con prefers-reduced-motion el CSS ya
-// anula las transiciones, acá solo se evita observar al pedo.
+// fx/motion.ts — minimal helpers for motion.css. No dependencies, with
+// cleanup. Everything is transform/opacity; with prefers-reduced-motion the
+// CSS already cancels transitions, here we just avoid observing pointlessly.
 // ═══════════════════════════════════════════════════════════════════════
 
 export type MotionHandle = {
@@ -14,8 +14,8 @@ function reducedMotion() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-// Marca [data-reveal] con .fx-in cuando entran al viewport (una sola vez).
-// Llamar después de cada render que agregue tarjetas; dispose() suelta todo.
+// Marks [data-reveal] with .fx-in when they enter the viewport (once only).
+// Call after every render that adds cards; dispose() releases everything.
 export function mountMotion(root: ParentNode = document): MotionHandle {
   const els = [...root.querySelectorAll<HTMLElement>('[data-reveal]:not(.fx-in)')];
   if (els.length === 0 || typeof IntersectionObserver === 'undefined' || reducedMotion()) {
@@ -34,13 +34,13 @@ export function mountMotion(root: ParentNode = document): MotionHandle {
   return { dispose: () => io.disconnect() };
 }
 
-// Glow de "está hablando" en la celda del agente (data-speaking="true").
+// "Speaking" glow on the agent cell (data-speaking="true").
 export function setSpeakingGlow(cell: HTMLElement | null, speaking: boolean) {
   if (!cell) return;
   cell.dataset.speaking = speaking ? 'true' : 'false';
 }
 
-// Transición entre vistas: la visible sale, la nueva entra. Dura ~200ms.
+// View transition: the visible one exits, the new one enters. Takes ~200ms.
 export function swapViews(hide: HTMLElement | null, show: HTMLElement | null) {
   if (reducedMotion()) {
     if (hide) hide.hidden = true;
@@ -60,7 +60,7 @@ export function swapViews(hide: HTMLElement | null, show: HTMLElement | null) {
   if (show) {
     show.hidden = false;
     show.classList.add('fx-enter');
-    // Dos frames para que el navegador pinte el estado inicial antes de animar.
+    // Two frames so the browser paints the initial state before animating.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       show.classList.add('fx-in');
       window.setTimeout(() => show.classList.remove('fx-enter', 'fx-in'), 240);

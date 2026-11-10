@@ -1,6 +1,6 @@
-// Tests track driver (flujo-driver): loop autónomo completo con FAKES siempre.
-// Cero modelo, cero disco salvo tmp. Session fake { runAgentJobTurn
-// programable, announceTeamEvent, roster }, fetchUrl fake.
+// Driver track tests (flujo-driver): full autonomous loop with ALWAYS FAKES.
+// Zero model, zero disk except tmp. Fake session { programmable
+// runAgentJobTurn, announceTeamEvent, roster }, fake fetchUrl.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -74,8 +74,8 @@ function fakeSession({ roster = ROSTER, onTurn, store = null } = {}) {
 
 const fetchUrlFake = async (q) => `hallazgo web para: ${String(q).slice(0, 60)}`;
 
-// Router de turnos configurable: fallaTesterEn = nros de turno tester (1-based)
-// que devuelven FAIL; el resto PASS. Entrega de dispatch con trigger opcional.
+// Configurable turn router: fallaTesterEn = tester turn numbers (1-based)
+// that return FAIL; the rest PASS. Dispatch delivery with optional trigger.
 function routerLoop({ fallaTesterEn = new Set(), entregaDispatch = 'Entrega: módulo terminado y verificado.' } = {}) {
   let nTester = 0;
   return (agentId, text) => {
@@ -112,11 +112,11 @@ function tiposEventos(calls) {
   return calls.events.map((e) => e.tipo);
 }
 
-// ── 1. Loop completo ───────────────────────────────────────────────────
-test('loop completo: plan→dispatch→review(rework)→tester-falla→rework→aprueba', async () => {
+// ── 1. Full loop ───────────────────────────────────────────────────
+test('full loop: plan→dispatch→review(rework)→tester-fails→rework→approves', async () => {
   __resetRegistry();
   const { inserted, store } = fakeStore();
-  // ': any' dispara el checklist frontend del revisor (1 rework de review).
+  // ': any' triggers the reviewer frontend checklist (1 review rework).
   const { session, calls } = fakeSession({
     store,
     onTurn: routerLoop({
@@ -131,7 +131,7 @@ test('loop completo: plan→dispatch→review(rework)→tester-falla→rework→
   assert.equal(final.progreso.fasesTotal, 1);
   assert.equal(final.resumen.tests.turnos, 12); // generico: 3 personas × 4 dims
   assert.equal(final.resumen.tests.mecanicas, 0);
-  assert.equal(final.resumen.tests.fallidas, 0); // última ronda limpia
+  assert.equal(final.resumen.tests.fallidas, 0); // last round clean
 
   const tipos = tiposEventos(calls);
   for (const t of ['plan_listo', 'dispatch', 'entrega', 'devolucion', 'aprobado']) {
@@ -139,21 +139,21 @@ test('loop completo: plan→dispatch→review(rework)→tester-falla→rework→
   }
   assert.ok(tipos.indexOf('plan_listo') < tipos.indexOf('aprobado'));
 
-  // Rework de review aplicado: la entrega quedó marcada y hubo turno PEER REVIEW.
+  // Review rework applied: the delivery was flagged and there was a PEER REVIEW turn.
   const entry = __getEntry(final.id);
   assert.equal(entry.entregas[0].rework, true);
   assert.ok(calls.turns.some((t) => t.text.includes('PEER REVIEW')));
-  // Rework de tester: 1 redispatch (1 fail) + re-test completo.
+  // Tester rework: 1 redispatch (1 fail) + full re-test.
   assert.ok(entry.entregas.some((e) => e.reworkTester));
-  // Learnings registrados.
+  // Learnings recorded.
   assert.ok(inserted.length > 0, 'registrarLearningsDeLaburo debió insertar');
-  // Vista pública: sin prompts internos, entregas truncadas.
+  // Public view: no internal prompts, truncated deliveries.
   assert.ok(final.resumen.entregas[0].resumen.length <= 300);
   assert.ok(!JSON.stringify(final).includes('Sos el TESTER'));
 });
 
-// ── 2. Preguntas short-circuit ───────────────────────────────────────────
-test('brief incompleto → preguntas, cero turnos', async () => {
+// ── 2. Questions short-circuit ───────────────────────────────────────────
+test('incomplete brief → questions, zero turns', async () => {
   __resetRegistry();
   let turnos = 0;
   const { session, calls } = fakeSession({ onTurn: () => { turnos += 1; return { text: 'x' }; } });
@@ -165,11 +165,11 @@ test('brief incompleto → preguntas, cero turnos', async () => {
   assert.equal(getJob(final.id).estado, 'preguntas');
 });
 
-// ── 3. FALTA resuelto + existente no-duplicado (spawner REAL) ─────────────
-// Nota: pedirRol pide caps base y TODO miembro las cubre, así que vía
-// planificar FALTA:* resuelve a existente (cero duplicados, correcto por
-// protocolo). Dueño directo sin miembro → fallback executor + nota.
-test('FALTA:backend existente no se duplica; dueño sin miembro lo corre fallback', async () => {
+// ── 3. FALTA resolved + existing non-duplicated (REAL spawner) ─────────────
+// Note: pedirRol asks for base caps and EVERY member covers them, so via
+// planificar FALTA:* resolves to existing (zero duplicates, correct per
+// protocol). Direct owner without member → fallback executor + note.
+test('FALTA:backend existing is not duplicated; owner without member runs fallback', async () => {
   __resetRegistry();
   __resetSpawnLog();
   const roster = [{ id: 'a-be', role: 'backend', name: 'Be' }];
@@ -189,20 +189,20 @@ test('FALTA:backend existente no se duplica; dueño sin miembro lo corre fallbac
   assert.equal(log[0].existing, 'backend');
   assert.equal(log[0].created, false);
 
-  // Orden dependencias: fase 1 (API) antes que fase 2 (Visual).
+  // Dependency order: phase 1 (API) before phase 2 (Visual).
   const dispatchTurns = calls.turns.filter((t) => t.text.startsWith('[laburo'));
   assert.equal(dispatchTurns.length, 2);
   assert.ok(dispatchTurns[0].text.includes('fase 1/2'));
   assert.ok(dispatchTurns[1].text.includes('fase 2/2'));
-  // Ambos los corrió el único miembro; el 2º con nota de fallback anunciada.
+  // Both were run by the only member; the 2nd with announced fallback note.
   assert.ok(dispatchTurns.every((t) => t.agentId === 'a-be'));
   const entry = __getEntry(final.id);
   assert.ok(entry.anuncios.some((a) => a.texto.includes('no tiene runtime en la llamada')),
     `anuncios: ${JSON.stringify(entry.anuncios)}`);
 });
 
-// ── 4. Timeout de turno → fallo limpio ───────────────────────────────────
-test('timeout de turno → fallo limpio con motivo, nunca cuelga', async () => {
+// ── 4. Turn timeout → clean failure ───────────────────────────────────
+test('turn timeout → clean failure with reason, never hangs', async () => {
   __resetRegistry();
   const { session, calls } = fakeSession({
     onTurn: () => { throw new Error('runAgentJobTurn timeout 120000ms (a-be)'); }
@@ -213,8 +213,8 @@ test('timeout de turno → fallo limpio con motivo, nunca cuelga', async () => {
   assert.ok(tiposEventos(calls).includes('fallo'));
 });
 
-// ── 5. Escalado por maxRondas ────────────────────────────────────────────
-test('tester siempre falla → escalado en maxRondas', async () => {
+// ── 5. Escalation on maxRondas ────────────────────────────────────────────
+test('tester always fails → escalation at maxRondas', async () => {
   __resetRegistry();
   const siempreFail = () => ({
     text: 'Roto.\nVEREDICTO: FAIL — todo mal | PASOS: abrir → mirar',
@@ -231,8 +231,8 @@ test('tester siempre falla → escalado en maxRondas', async () => {
   assert.equal(final.progreso.ronda, 2);
 });
 
-// ── 6a. Mecánicos directos marcados ──────────────────────────────────────
-test('mecánicos directos (url+archivo) vs turnos: origen marcado', async () => {
+// ── 6a. Marked direct mechanicals ──────────────────────────────────────
+test('direct mechanicals (url+file) vs turns: origin marked', async () => {
   __resetRegistry();
   const dir = mkdtempSync(join(tmpdir(), 'driver-'));
   const path = join(dir, 'entrega.txt');
@@ -253,8 +253,8 @@ test('mecánicos directos (url+archivo) vs turnos: origen marcado', async () => 
   assert.equal(r1.filter((r) => r.origen === 'turno').length, 12);
 });
 
-// ── 6b. Mecánico que falla alimenta el loop ──────────────────────────────
-test('mecánico fallido → devolución → escalado con maxRondas 1', async () => {
+// ── 6b. Failing mechanical feeds the loop ──────────────────────────────
+test('failed mechanical → rework request (devolucion) → escalation with maxRondas 1', async () => {
   __resetRegistry();
   const { session } = fakeSession({ onTurn: routerLoop() });
   const final = await runJob(session, briefBase({
@@ -269,7 +269,7 @@ test('mecánico fallido → devolución → escalado con maxRondas 1', async () 
 });
 
 // ── 7. Registry ──────────────────────────────────────────────────────────
-test('registry: getJob null si no existe; listJobs incluye corridos', async () => {
+test('registry: getJob null if missing; listJobs includes runs', async () => {
   __resetRegistry();
   assert.equal(getJob('job-inexistente'), null);
   const { session } = fakeSession({ onTurn: routerLoop() });
@@ -278,8 +278,8 @@ test('registry: getJob null si no existe; listJobs incluye corridos', async () =
   assert.ok(listJobs().some((j) => j.id === final.id));
 });
 
-// ── 8. Planning turn cuando el brief no trae fases ───────────────────────
-test('sin brief.fases → 1 planning turn con JSON', async () => {
+// ── 8. Planning turn when the brief brings no phases ───────────────────────
+test('without brief.fases → 1 planning turn with JSON', async () => {
   __resetRegistry();
   const { session, calls } = fakeSession({ onTurn: routerLoop() });
   const b = briefBase();
@@ -290,8 +290,8 @@ test('sin brief.fases → 1 planning turn con JSON', async () => {
   assert.equal(calls.turns.filter((t) => t.text.includes('Sos el ORQUESTADOR')).length, 1);
 });
 
-// ── 9. Planning ilegible → fase fallback, no frena ───────────────────────
-test('planning turn ilegible → fallback 1 fase', async () => {
+// ── 9. Illegible planning → fallback phase, does not stall ───────────────────────
+test('illegible planning turn → 1-phase fallback', async () => {
   __resetRegistry();
   const { session } = fakeSession({
     onTurn: (agentId, text) => {
@@ -307,7 +307,7 @@ test('planning turn ilegible → fallback 1 fase', async () => {
 });
 
 // ── 10. enqueueJob async ─────────────────────────────────────────────────
-test('enqueueJob: encolado + termina async sin colgar', async () => {
+test('enqueueJob: queued + finishes async without hanging', async () => {
   __resetRegistry();
   const { session } = fakeSession({ onTurn: routerLoop() });
   const { jobId, estado } = enqueueJob(session, briefBase({ fases: FASES_1 }), { fetchUrl: fetchUrlFake });
@@ -321,8 +321,8 @@ test('enqueueJob: encolado + termina async sin colgar', async () => {
   assert.equal(job.estado, 'aprobado');
 });
 
-// ── 11. Job timeout → fallo limpio ───────────────────────────────────────
-test('job timeout → fallo limpio', async () => {
+// ── 11. Job timeout → clean failure ───────────────────────────────────────
+test('job timeout → clean failure', async () => {
   __resetRegistry();
   const { session } = fakeSession({
     onTurn: async () => {
