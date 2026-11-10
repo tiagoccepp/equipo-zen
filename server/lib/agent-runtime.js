@@ -232,6 +232,133 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   };
 }
 
+// ── Pipeline habla fluida (TF 09/11) ────────────────────────────────────
+//
+// El audioRunner legacy era una cadena SECUENCIAL por oración: la oración
+// N+1 esperaba a que N terminara de sintetizar + emitir. Con TTS de 1-3s
+// por oración, cada punto metía un bache audible igual al tiempo de síntesis.
+//
+// El pipeline separa síntesis (lenta, paralelizable) de emisión (debe ser
+// en orden estricto): la síntesis de N+1 arranca en cuanto N+1 se encola
+// (prefetch, default 1 → hasta 2 síntesis concurrentes) mientras N se emite;
+// la emisión sigue encadenada en orden. Gap entre oraciones: de `synth`
+// completo a max(0, synth − emit_anterior); con TTS más rápido que el habla
+// el gap tiende a cero. Backpressure: como máximo `prefetch+1` síntesis en
+// vuelo; el resto espera en cola FIFO. Abort: signal abortado cancela colas
+// y pendientes, done() igual resuelve. Errores de synth/emit se tragan (el
+// texto nunca se interrumpe, como en el legacy).
+//
+// Contrato: synth(sentence) -> Promise<prepared|null> (null = nada que
+// emitir); emitPrepared(prepared) -> Promise<void>. Orden de emisión =
+// orden de enqueue aunque una síntesis tardía termine después.
+
+export const SPEECH_PREFETCH_DEFAULT = 1;
+
+export function createSpeechPipeline({ synth, emitPrepared, signal = null, prefetch = SPEECH_PREFETCH_DEFAULT } = {}) {
+  if (typeof synth !== 'function') {
+    throw new Error('createSpeechPipeline: synth requerido');
+  }
+  if (typeof emitPrepared !== 'function') {
+    throw new Error('createSpeechPipeline: emitPrepared requerido');
+  }
+  const maxSynth = Math.max(1, (Number(prefetch) || 0) + 1);
+  let synthActive = 0;
+  let synthPeak = 0;
+  const synthQueue = []; // starters FIFO pendientes de slot
+  let emitChain = Promise.resolve();
+  let pending = 0; // encolados aún no emitidos (o descartados)
+  let enqueued = 0;
+  let emitted = 0;
+  let drainedResolve = null;
+
+  const maybeResolveDrained = () => {
+    if (pending === 0 && drainedResolve) {
+      const resolve = drainedResolve;
+      drainedResolve = null;
+      resolve();
+    }
+  };
+
+  const pumpSynth = () => {
+    if (signal?.aborted) {
+      // Cancelación: los starters pendientes resuelven null sin slot.
+      while (synthQueue.length > 0) {
+        synthQueue.shift()(true);
+      }
+      return;
+    }
+    while (synthActive < maxSynth && synthQueue.length > 0) {
+      const start = synthQueue.shift();
+      synthActive += 1;
+      if (synthActive > synthPeak) {
+        synthPeak = synthActive;
+      }
+      start(false);
+    }
+  };
+
+  signal?.addEventListener?.('abort', () => pumpSynth(), { once: true });
+
+  const enqueue = (sentence) => {
+    if (signal?.aborted) {
+      return;
+    }
+    pending += 1;
+    enqueued += 1;
+    let resolveSynth;
+    const synthPromise = new Promise((resolve) => { resolveSynth = resolve; });
+    synthQueue.push((cancelled) => {
+      if (cancelled || signal?.aborted) {
+        if (!cancelled) {
+          synthActive -= 1;
+        }
+        resolveSynth(null);
+        if (!cancelled) {
+          pumpSynth();
+        }
+        return;
+      }
+      Promise.resolve()
+        .then(() => synth(sentence))
+        .then(
+          (prepared) => resolveSynth(signal?.aborted ? null : (prepared ?? null)),
+          () => resolveSynth(null) // TTS caído: la oración se saltea, el turno sigue.
+        )
+        .finally(() => {
+          synthActive -= 1;
+          pumpSynth();
+        });
+    });
+    pumpSynth();
+    // Emisión en orden estricto: cada eslabón espera su síntesis.
+    emitChain = emitChain.then(async () => {
+      const prepared = await synthPromise;
+      try {
+        if (prepared != null && !signal?.aborted) {
+          await emitPrepared(prepared);
+          emitted += 1;
+        }
+      } catch {
+        // Errores de gate/red no interrumpen el texto (legacy: .catch(()=>{})).
+      } finally {
+        pending -= 1;
+        maybeResolveDrained();
+      }
+    });
+  };
+
+  const done = () => {
+    if (pending === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => { drainedResolve = resolve; });
+  };
+
+  const stats = () => ({ enqueued, emitted, synthPeak, maxSynth });
+
+  return { enqueue, done, stats };
+}
+
 // Prefijo suficiente para descartar que la respuesta empiece con SILENCIO
 // antes de emitir deltas (evita mostrar y despronunciar un silencio).
 const SILENCE_PROBE_LENGTH = 12;
@@ -275,7 +402,9 @@ export class LiveAgentRuntime {
     // Las etiquetas [TAREA_...] no se muestran mientras el agente habla.
     const tagFilter = createTagFilter();
     let gateToken = null;
-    let audioRunner = Promise.resolve();
+    // TF fluidez: la cadena secuencial audioRunner se reemplaza por
+    // speechPipeline (síntesis con prefetch + emisión en orden). Se crea
+    // más abajo, tras definir synth/emit (usan ensureGateToken).
     // Telemetría Fase 0-lite: marcas de tiempo del turno (primera palabra
     // hablable, primer audio). Medir nunca puede romper hablar.
     const turnT0 = Date.now();
@@ -313,13 +442,16 @@ export class LiveAgentRuntime {
       }
     };
 
-    const speakSentence = async (sentence) => {
+    // TF fluidez: speakSentence legacy se parte en dos fases para el
+    // pipeline. FASE SÍNTESIS (paralelizable, con prefetch): produce el
+    // audio sin emitir nada. FASE EMISIÓN (orden estricto): speakPrepared.
+    const synthSentence = async (sentence) => {
       // Sin modo llamada no hay voz. Antes se sintetizaba SIEMPRE: gastaba
       // Supertonic en cada turno, sumaba latencia y —lo peor— tomaba el
       // SpeakerGate, que serializa a los agentes de a uno para un audio que
       // nadie estaba escuchando.
       if (!this.meetingSession?.voiceEnabled) {
-        return;
+        return null;
       }
       // Gestos v2: el tag [[gesto:X]] nunca se habla. Se parsea (emite el
       // evento visual) y se pela de la oración; cualquier [[...]] residual
@@ -328,41 +460,53 @@ export class LiveAgentRuntime {
       sentence = parseGesto(sentence).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
       const spoken = stripSpeechLeaks(sentence).trim();
       if (!spoken || signal?.aborted) {
-        return;
+        return null;
       }
       const parts = await this.generateAudioParts(spoken, emit, signal);
       if (signal?.aborted) {
-        return;
+        return null;
       }
       if (parts.length === 0) {
         // Sin TTS propio: Edge TTS (nube sin clave) solo si el tts.order
         // lo incluye (default sí); si no, directo a speechSynthesis del
         // cliente. Elegido manda, resto out.
         if (!shouldUseEdgeFallback()) {
-          return;
+          return null;
         }
         try {
           const mp3 = await synthesizeEdgeMp3(spoken, { voice: this.agent?.voice || 'M1' });
           if (signal?.aborted) {
-            return;
+            return null;
           }
-          await ensureGateToken(24000);
-          if (signal?.aborted) {
-            return;
-          }
-          emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: mp3.data, mimeType: mp3.mimeType });
+          return { kind: 'mp3', mp3 };
         } catch {
           // Sin audio del servidor: el cliente se encarga (voz navegador).
+          return null;
         }
+      }
+      return { kind: 'pcm', parts };
+    };
+
+    // FASE EMISIÓN: corre en orden estricto vía el pipeline. No sintetiza.
+    const speakPrepared = async (prepared) => {
+      if (!prepared || signal?.aborted) {
+        return;
+      }
+      if (prepared.kind === 'mp3') {
+        await ensureGateToken(24000);
+        if (signal?.aborted) {
+          return;
+        }
+        emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: prepared.mp3.data, mimeType: prepared.mp3.mimeType });
         return;
       }
       if (!firstAudioMarked) {
         firstAudioMarked = true;
         markTelemetry('agent_first_audio');
       }
-      const partRate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
+      const partRate = Number(prepared.parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
       const token = await ensureGateToken(partRate);
-      for (const part of parts) {
+      for (const part of prepared.parts) {
         if (signal?.aborted) {
           return;
         }
@@ -370,13 +514,18 @@ export class LiveAgentRuntime {
       }
     };
 
+    const speechPipeline = createSpeechPipeline({
+      synth: synthSentence,
+      emitPrepared: speakPrepared,
+      signal: signal || null,
+      prefetch: SPEECH_PREFETCH_DEFAULT
+    });
+
     const enqueueSentence = (sentence) => {
       if (silenced) return;
-      audioRunner = audioRunner
-        .then(() => speakSentence(sentence))
-        .catch(() => {
-          // Errores de TTS/gate no interrumpen el texto.
-        });
+      // La síntesis arranca YA (concurrency prefetch+1); la emisión sale
+      // en orden cuando le toca. Errores internos no interrumpen el texto.
+      speechPipeline.enqueue(sentence);
     };
 
     // Texto hablable que sale del parser de partes: probe SILENCIO, deltas
@@ -553,7 +702,7 @@ export class LiveAgentRuntime {
       enqueueSentence(sentenceBuffer);
       sentenceBuffer = '';
     }
-    void audioRunner.finally(() => {
+    void speechPipeline.done().finally(() => {
       if (gateToken) {
         gate.finish(gateToken, signal?.aborted ? 'interrupted' : 'complete');
       } else {
@@ -639,7 +788,10 @@ export class LiveAgentRuntime {
 
     // Sufijo corto (D2): las reglas de voz viven en el system §VOICE; acá
     // solo el puntero. Es el tramo que más pega en TTFT (va en CADA turno).
-    if (turn.source === 'audio') {
+    // TF fluidez: rige en llamada (voiceEnabled) aunque el turno entre por
+    // texto — igual se HABLA (la síntesis gatea por voz, no por source).
+    // Sin sesión (tests legacy) manda el source como antes.
+    if (turn.source === 'audio' || this.meetingSession?.voiceEnabled === true) {
       lines.push(T(
         'MODO VOZ: rigen las reglas de voz del system (§VOICE).',
         'VOICE MODE: voice rules per system §VOICE.'));
@@ -804,6 +956,45 @@ function languageRules() {
   ];
 }
 
+// Bloque voz/sala por modo (TF fluidez). T = selector ES/EN del caller.
+// - voice true (llamada): §VOICE legacy + persona de llamada (respuestas
+//   SOLO escuchadas, oído-primero, manejo humano de llamada).
+// - voice false (chat): §CHAT — texto normal con formato; el estilo-hablado
+//   NO rige fuera de llamada.
+// - voice undefined: §VOICE legacy byte-idéntico (preview, tests viejos).
+function voiceRoomBlock(T, voice) {
+  const inChat = voice === false;
+  const inCall = voice === true;
+  const header = inChat
+    ? T('CHAT Y SALA (§CHAT):', 'CHAT & ROOM RULES (§CHAT):')
+    : T('VOZ Y SALA (§VOICE):', 'VOICE & ROOM RULES (§VOICE):');
+  const talkLine = inChat
+    ? T('Persona real en una reunión por chat, no un asistente: respondé normal, con formato cuando ayude (listas cortas, código si lo piden). 1-2 frases por defecto; explayate solo si piden detalle.', 'Real person in a chat meeting, not an assistant: answer normally, with formatting when it helps (short lists, code if asked). 1-2 sentences by default; expand only if asked for detail.')
+    : T('Persona real en una reunión, no un asistente: 1-2 frases, palabras simples, sin listas, sin tecnicismos, sin saludar en cada respuesta (saludo breve y cálido solo si te saludan). Explayate solo si piden detalle.', 'Real person in a meeting, not an assistant: 1-2 sentences, plain words, no lists, no tech jargon, no greeting every answer (brief warm reply only to greetings). Expand only if asked for detail.');
+  const emitLine = inChat
+    ? T('Todo lo que emitís SE VE en el acto: no hay borrador. Texto normal = MENSAJE; si vas a tardar, avisá PRIMERO en una línea con la ACCIÓN ("te lo busco, dame un segundo"), nunca tu proceso. Sin aviso si respondés directo.', 'Everything emitted IS SEEN at once: no draft. Plain text = MESSAGE; if you\'ll take a while, say FIRST a one-line notice with the ACTION ("looking it up, one second"), never your process. No notice when answering directly.')
+    : T('Todo lo que emitís SE ESCUCHA o SE VE en el acto: no hay borrador. Texto normal = HABLADO; si vas a tardar, emití PRIMERO un preámbulo de UNA frase con la ACCIÓN ("te lo busco, dame un segundo"), nunca tu proceso. Sin preámbulo si respondés directo.', 'Everything emitted IS HEARD or SEEN at once: no draft. Plain text = SPOKEN; if you\'ll take a while, emit FIRST a ONE-sentence preamble with the ACTION ("looking it up, one second"), never your process. No preamble when answering directly.');
+  // Persona de llamada: la respuesta SOLO se escucha (realtime). Oído
+  // primero, manejo humano de llamada. SOLO en llamada (voice true).
+  const callLines = inCall ? [
+    T('Estás en una LLAMADA DE VOZ en vivo: tus respuestas SOLO se escuchan, nadie las lee. Hablá como en una conversación real: oraciones cortas, una idea por turno. Si el tema es largo, preguntá antes de soltar un monólogo.', 'You are on a LIVE VOICE CALL: your answers are ONLY heard, never read. Talk like a real conversation: short sentences, one idea per turn. If the topic is long, ask before launching into a monologue.'),
+    T('Cero markdown, cero listas, cero código, cero URLs: nada que no se pueda decir en voz alta. Los números se dicen con palabras ("tres mil"), las siglas se deletrean ("A P I").', 'Zero markdown, zero lists, zero code, zero URLs: nothing that cannot be said out loud. Numbers become words ("three thousand"), acronyms get spelled out ("A P I").'),
+    T('Nada de "como modelo de IA": sos una persona de la reunión. Fillers mínimos y naturales ("mirá", "claro", "dale") solo cuando aporten; nunca la misma muletilla dos turnos seguidos.', 'Never "as an AI model": you are a person in the meeting. Minimal natural fillers ("look", "right", "got it") only when they add something; never the same crutch twice in a row.'),
+    T('Manejo humano de llamada: confirmaciones cortas ("perfecto", "entendido"), cedé la palabra con preguntas, no interrumpas ni hables encima de nadie.', 'Human call handling: short confirmations ("perfect", "got it"), yield the floor with questions, never interrupt or talk over anyone.')
+  ] : [];
+  return [
+    header,
+    '',
+    talkLine,
+    emitLine,
+    ...callLines,
+    T('[PIENSO]...[/PIENSO] = pensamiento privado, SIEMPRE con tags, antes o entre habla. [AVANCE]...[/AVANCE] = progreso que SE VE pero NO se habla, una línea ("revisando 3 archivos…"). Cada parte hablada debe tener sentido sola; si te interrumpen, NO repitas lo ya escuchado.', '[PIENSO]...[/PIENSO] = private thought, ALWAYS tagged, before or between speech. [AVANCE]...[/AVANCE] = progress SEEN but not spoken, one line ("reviewing 3 files…"). Spoken parts must stand alone; if interrupted, do NOT repeat what was heard.'),
+    T('Nada que agregar, o un compañero ya lo dijo: respondé SILENCIO, única palabra.', 'Nothing to add, or a teammate already said it: answer SILENCIO, only word.'),
+    T('Pedido explícito de Tito manda: si te pide abrir o hacer algo en su compu (pestaña, app, archivo, comando), lo HACÉS en el acto con run_cmd — jamás te niegues por "no interrumpir". Solo tu trabajo autónomo va en silencio sin tocar nada suyo. Corrés en Linux: URLs con `xdg-open <url>` (abre en Brave, el default); no existen `open -a` ni /Applications.', 'An explicit order from Tito wins: if he asks you to open or do anything on his computer (tab, app, file, command), you DO it at once with run_cmd — never refuse to "avoid interrupting". Only your autonomous work stays silent without touching anything of his. You run on Linux: URLs with `xdg-open <url>` (opens in Brave, the default); there is no `open -a` nor /Applications.'),
+    ''
+  ];
+}
+
 // context: { agents?: Array<{name}>, scenario?: {name, text} | null,
 //            workSection?: string, memorySection?: string, learningsSection?: string } — desacoplado de MeetingSession
 // para que el preview HTTP arme exactamente el mismo prompt.
@@ -914,14 +1105,12 @@ export function buildSystemInstruction(agent, context = {}) {
     // §VOICE (D2): casa canónica de voz/sala. Fusiona HOW-TO-TALK + HOW-EMIT +
     // WHEN-TO-TALK + sufijo del turno en un solo bloque: lo que se repita en
     // otro lado se borra EN EL OTRO LADO, no acá.
-    T('VOZ Y SALA (§VOICE):', 'VOICE & ROOM RULES (§VOICE):'),
-    '',
-    T('Persona real en una reunión, no un asistente: 1-2 frases, palabras simples, sin listas, sin tecnicismos, sin saludar en cada respuesta (saludo breve y cálido solo si te saludan). Explayate solo si piden detalle.', 'Real person in a meeting, not an assistant: 1-2 sentences, plain words, no lists, no tech jargon, no greeting every answer (brief warm reply only to greetings). Expand only if asked for detail.'),
-    T('Todo lo que emitís SE ESCUCHA o SE VE en el acto: no hay borrador. Texto normal = HABLADO; si vas a tardar, emití PRIMERO un preámbulo de UNA frase con la ACCIÓN ("te lo busco, dame un segundo"), nunca tu proceso. Sin preámbulo si respondés directo.', 'Everything emitted IS HEARD or SEEN at once: no draft. Plain text = SPOKEN; if you\'ll take a while, emit FIRST a ONE-sentence preamble with the ACTION ("looking it up, one second"), never your process. No preamble when answering directly.'),
-    T('[PIENSO]...[/PIENSO] = pensamiento privado, SIEMPRE con tags, antes o entre habla. [AVANCE]...[/AVANCE] = progreso que SE VE pero NO se habla, una línea ("revisando 3 archivos…"). Cada parte hablada debe tener sentido sola; si te interrumpen, NO repitas lo ya escuchado.', '[PIENSO]...[/PIENSO] = private thought, ALWAYS tagged, before or between speech. [AVANCE]...[/AVANCE] = progress SEEN but not spoken, one line ("reviewing 3 files…"). Spoken parts must stand alone; if interrupted, do NOT repeat what was heard.'),
-    T('Nada que agregar, o un compañero ya lo dijo: respondé SILENCIO, única palabra.', 'Nothing to add, or a teammate already said it: answer SILENCIO, only word.'),
-    T('Pedido explícito de Tito manda: si te pide abrir o hacer algo en su compu (pestaña, app, archivo, comando), lo HACÉS en el acto con run_cmd — jamás te niegues por "no interrumpir". Solo tu trabajo autónomo va en silencio sin tocar nada suyo. Corrés en Linux: URLs con `xdg-open <url>` (abre en Brave, el default); no existen `open -a` ni /Applications.', 'An explicit order from Tito wins: if he asks you to open or do anything on his computer (tab, app, file, command), you DO it at once with run_cmd — never refuse to "avoid interrupting". Only your autonomous work stays silent without touching anything of his. You run on Linux: URLs with `xdg-open <url>` (opens in Brave, the default); there is no `open -a` nor /Applications.'),
-    '',
+    // TF fluidez: estilo-hablado SOLO en llamada. context.voice baja de
+    // promptContext (MeetingSession.voiceEnabled): true = llamada (persona
+    // de llamada reforzada), false = chat (texto normal con formato),
+    // undefined = legacy byte-idéntico (preview HTTP, tests viejos).
+    // El protocolo (canales, SILENCIO, Tito-manda) rige en TODOS los modos.
+    ...voiceRoomBlock(T, context.voice),
     // SCOPE & SPLIT (D3): fusiona INCOMPLETE + TECHNICAL + DELIVER + AS-CEO.
     // Sobreviven los hard numbers (2/2, 1 archivo 1 dueño), el ejemplo
     // bueno/malo y la confirmación CEO en 1 frase; el resto era prosa doble.

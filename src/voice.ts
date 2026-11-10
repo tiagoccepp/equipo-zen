@@ -23,6 +23,13 @@ export class VoiceOut {
   private frame: Float32Array<ArrayBuffer> | null = null;
   private active = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
+  // TF fluidez: cadena de reproducción en orden de llegada. Sin esto, dos
+  // MP3 seguidos se decodifican en paralelo y el más corto se agenda
+  // primero (orden roto + baches). Todo decode+schedule pasa por acá.
+  private playChain: Promise<void> = Promise.resolve();
+  // Época anti-stale: flush() (barge-in) la avanza y lo que ya estaba
+  // encolado/decodificando se descarta en vez de sonar tarde.
+  private epoch = 0;
 
   private ensure(): AudioContext {
     if (this.context && this.context.state !== 'closed') {
@@ -49,7 +56,17 @@ export class VoiceOut {
     }
   }
 
-  async enqueuePcm(base64: string, sampleRate: number): Promise<void> {
+  enqueuePcm(base64: string, sampleRate: number): Promise<void> {
+    const at = this.epoch;
+    this.playChain = this.playChain
+      .then(() => {
+        if (at === this.epoch) return this.enqueuePcmNow(base64, sampleRate, at);
+      })
+      .catch(() => {});
+    return this.playChain;
+  }
+
+  private async enqueuePcmNow(base64: string, sampleRate: number, at: number): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -61,10 +78,21 @@ export class VoiceOut {
     for (let i = 0; i < samples.length; i += 1) {
       channel[i] = Math.max(-1, Math.min(1, samples[i] / 32768));
     }
+    if (at !== this.epoch) return; // flush() en el medio: descartar.
     this.schedule(buffer);
   }
 
-  async playMp3(base64: string): Promise<void> {
+  playMp3(base64: string): Promise<void> {
+    const at = this.epoch;
+    this.playChain = this.playChain
+      .then(() => {
+        if (at === this.epoch) return this.playMp3Now(base64, at);
+      })
+      .catch(() => {});
+    return this.playChain;
+  }
+
+  private async playMp3Now(base64: string, at: number): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -73,6 +101,7 @@ export class VoiceOut {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     const buffer = await ctx.decodeAudioData(copy.buffer);
+    if (at !== this.epoch) return; // flush() en el medio: descartar.
     this.schedule(buffer);
   }
 
@@ -129,6 +158,7 @@ export class VoiceOut {
       }
     }
     this.active.clear();
+    this.epoch += 1; // lo encolado/decodificando queda stale y se descarta.
     if (this.context) {
       this.nextStart = this.context.currentTime;
     }

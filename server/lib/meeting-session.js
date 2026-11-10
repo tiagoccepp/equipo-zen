@@ -313,7 +313,10 @@ export class MeetingSession {
             this.company?.id || 'pablo',
             this.sessionAgents.find((a) => a.id === agentId) || { id: agentId }
           )
-        : ''
+        : '',
+      // TF fluidez: modo llamada para el prompt (estilo-hablado SOLO en
+      // llamada; fuera de llamada los agentes responden normal por chat).
+      voice: this.voiceEnabled
     };
   }
 
