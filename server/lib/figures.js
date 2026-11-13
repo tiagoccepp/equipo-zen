@@ -5,7 +5,7 @@
 export const FIGURE_MAX_CODE_CHARS = 20 * 1024;
 export const FIGURE_MAX_ITEMS = 30;
 export const FIGURE_MAX_TEXT_CHARS = 500;
-import { sanitizeWidgetHtml } from '../../src/lib/widget-sandbox.ts';
+import { sanitizeWidgetHtml } from './widget-sandbox.js';
 
 export const FIGURE_KINDS = ['diagram', 'progress', 'checklist', 'notice', 'glyph', 'chart', 'slide', 'widget'];
 // M-03: chart-spec declarativa (bar/line/pie). Cero codegen: solo números +

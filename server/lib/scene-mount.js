@@ -16,7 +16,7 @@ export function mountSceneRoutes(app, options = {}) {
     throw new Error('mountSceneRoutes: expected an Express-like app');
   }
   const store = options.store || createSceneStore(options.storeOptions || {});
-  registerSceneRoutes(app, store);
+  registerSceneRoutes(app, { store });
   return { store };
 }
 

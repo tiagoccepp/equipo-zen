@@ -15,10 +15,10 @@ const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
 
 // Only the visible label is in English; the keys are Rust protocol.
 const STATUS_LABEL: Record<string, string> = {
-  idle: 'Pablo',
-  escuchando: '● Listening',
-  hablando: '♪ Speaking',
-  pensando: '… Thinking'
+ idle: 'Pablo',
+ escuchando: '● Listening',
+ hablando: '(speaking) Speaking',
+ pensando: '… Thinking'
 };
 
 let level = 0;
@@ -26,47 +26,47 @@ let level = 0;
 // orb-morph.ts). The real level wins; the floor avoids a dead orb if
 // main reports an active state with level 0 (e.g. thinking with no audio).
 const VIB_FLOOR: Record<string, number> = {
-  idle: 0,
-  escuchando: 0.12,
-  hablando: 0.3,
-  pensando: 0.15,
-  trabajando: 0.1
+ idle: 0,
+ escuchando: 0.12,
+ hablando: 0.3,
+ pensando: 0.15,
+ trabajando: 0.1
 };
 const field = new OrbField(canvas, { energy: () => level });
 field.setTheme('dark');
 field.setAgents([{ id: 'pablo', name: 'Pablo', color: '#38D1FF' }]);
 
 function layout(): void {
-  const r = canvas.getBoundingClientRect();
-  const w = r.width || 148;
-  const h = r.height || 148;
-  field.resize(w, h);
-  field.setSlots([{ id: 'pablo', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 4 }]);
+ const r = canvas.getBoundingClientRect();
+ const w = r.width || 148;
+ const h = r.height || 148;
+ field.resize(w, h);
+ field.setSlots([{ id: 'pablo', cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2 - 4 }]);
 }
 window.addEventListener('resize', layout);
 layout();
 field.start();
 
 async function poll(): Promise<void> {
-  try {
-    const { estado, nivel } = await invoke<{ estado: string; nivel: number }>('orb_poll');
-    const floor = VIB_FLOOR[estado] ?? 0;
-    level = Math.max(0, Math.min(1, nivel || 0), floor);
-    field.setSpeaking(estado === 'idle' ? '' : 'pablo');
-    statusEl.textContent = STATUS_LABEL[estado] || 'Pablo';
-    micBtn.classList.toggle('live', estado === 'escuchando');
-  } catch {
-    // Core not ready yet.
-  }
+ try {
+ const { estado, nivel } = await invoke<{ estado: string; nivel: number }>('orb_poll');
+ const floor = VIB_FLOOR[estado] ?? 0;
+ level = Math.max(0, Math.min(1, nivel || 0), floor);
+ field.setSpeaking(estado === 'idle' ? '' : 'pablo');
+ statusEl.textContent = STATUS_LABEL[estado] || 'Pablo';
+ micBtn.classList.toggle('live', estado === 'escuchando');
+ } catch {
+ // Core not ready yet.
+ }
 }
 window.setInterval(() => void poll(), 250);
 void poll();
 
 micBtn.addEventListener('click', () => {
-  void invoke('orb_command', { cmd: 'toggle-mic' });
+ void invoke('orb_command', { cmd: 'toggle-mic' });
 });
 document.getElementById('expandBtn')?.addEventListener('click', () => {
-  void invoke('orb_command', { cmd: 'expand' });
+ void invoke('orb_command', { cmd: 'expand' });
 });
 
 // Arrastre desde cualquier punto de la tarjeta (fondo glass incluido);
@@ -74,22 +74,22 @@ document.getElementById('expandBtn')?.addEventListener('click', () => {
 let downAt: { x: number; y: number } | null = null;
 let dragging = false;
 card.addEventListener('pointerdown', (e) => {
-  if ((e.target as HTMLElement).closest('button')) return;
-  downAt = { x: e.clientX, y: e.clientY };
-  dragging = false;
+ if ((e.target as HTMLElement).closest('button')) return;
+ downAt = { x: e.clientX, y: e.clientY };
+ dragging = false;
 });
 window.addEventListener('pointermove', (e) => {
-  if (!downAt || dragging) return;
-  if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) {
-    dragging = true;
-    downAt = null;
-    void invoke('orb_drag');
-  }
+ if (!downAt || dragging) return;
+ if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) {
+ dragging = true;
+ downAt = null;
+ void invoke('orb_drag');
+ }
 });
 window.addEventListener('pointerup', (e) => {
-  if (downAt && !dragging && !(e.target as HTMLElement).closest?.('button')) {
-    void invoke('orb_command', { cmd: 'toggle-mic' });
-  }
-  downAt = null;
-  dragging = false;
+ if (downAt && !dragging && !(e.target as HTMLElement).closest?.('button')) {
+ void invoke('orb_command', { cmd: 'toggle-mic' });
+ }
+ downAt = null;
+ dragging = false;
 });

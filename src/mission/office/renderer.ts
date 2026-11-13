@@ -33,12 +33,15 @@ export class OfficeRenderer {
     if (!parent) return;
     const rect = parent.getBoundingClientRect();
     this.dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-    const w = Math.max(320, Math.floor(rect.width));
-    const h = Math.max(280, Math.floor(rect.height));
-    this.canvas.width = w * this.dpr;
-    this.canvas.height = h * this.dpr;
-    this.canvas.style.width = `${w}px`;
-    this.canvas.style.height = `${h}px`;
+    const w = Math.max(320, Math.floor(rect.width || 320));
+    const h = Math.max(280, Math.floor(rect.height || 280));
+    if (this.canvas.width !== w * this.dpr || this.canvas.height !== h * this.dpr) {
+      this.canvas.width = w * this.dpr;
+      this.canvas.height = h * this.dpr;
+    }
+    // Let CSS control layout size to avoid resize feedback loops.
+    this.canvas.style.width = '100%';
+    this.canvas.style.height = '100%';
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
   }
