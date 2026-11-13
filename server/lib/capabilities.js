@@ -153,14 +153,26 @@ export function toolsForRole(rol, { mcpTools = null } = {}) {
         needs.add(n);
       }
     }
+    let anyMcpNeed = false;
     for (const n of needs) {
       const m = /^mcp:(.+)$/.exec(n);
       if (!m) continue;
+      anyMcpNeed = true;
       const prefix = `mcp_${m[1]}_`;
       for (const name of registered) {
         if (name.startsWith(prefix) && !out.includes(name)) {
           out.push(name);
         }
+      }
+    }
+    // F-05 diferido: con needs mcp, el rol puede buscar + usar cualquiera
+    // que se registre on-demand (el loop valida 'mcp_*').
+    if (anyMcpNeed) {
+      if (!out.includes('mcp_search')) {
+        out.push('mcp_search');
+      }
+      if (!out.includes('mcp_*')) {
+        out.push('mcp_*');
       }
     }
   }

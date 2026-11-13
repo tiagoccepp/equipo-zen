@@ -1,6 +1,7 @@
 // Pablo client ↔ Equipo backend (HTTP + WebSocket). Thin: UI lives in app.ts.
 
 import { desktopApiBase } from './lib/tauri.ts';
+import { audioTagFromEvent, type AudioTag } from './lib/heard-text.ts';
 
 export interface Agent {
   id: string;
@@ -13,7 +14,7 @@ export interface Agent {
 export interface ClientEvents {
   onReady: (agents: Agent[], meetingId?: string) => void;
   // source tells normal text apart from system notices ('X has joined').
-  onUserText: (text: string, source?: string) => void;
+  onUserText: (text: string, source?: string, turnId?: string) => void;
   onRoute: (names: string[]) => void;
   onAgentStart: (agentId: string, turnId?: string) => void;
   onSpeakStart: (agentId: string) => void;
@@ -23,13 +24,14 @@ export interface ClientEvents {
   onToolDone: (agentId: string, tool: string, ok: boolean, ms: number, outputPreview: string, turnId?: string) => void;
   onDelta: (agentId: string, delta: string) => void;
   onAgentEnd: (agentId: string, text: string, turnId?: string) => void;
-  onMp3: (base64: string, turnId?: string) => void;
-  onPcm: (base64: string, rate: number, turnId?: string) => void;
+  onMp3: (base64: string, turnId?: string, tag?: AudioTag | null) => void;
+  onPcm: (base64: string, rate: number, turnId?: string, tag?: AudioTag | null) => void;
   onAudioStart: (turnId: string, agentId: string) => void;
   onAudioEnd: (turnId: string, agentId: string) => void;
   onAgentState: (agentId: string, state: string) => void;
   // Semantic gesture v2: the model asked to morph the orb into a glyph.
   onGesto: (agentId: string, gesto: string) => void;
+  onFigure: (agentId: string, figure: unknown, turnId?: string) => void;
   onInterrupted: (agentId: string, turnId?: string) => void;
   onWorkEvent: (kind: string, agentId: string, event: Record<string, unknown>) => void;
   onLiveTranscript: (text: string) => void;
@@ -128,8 +130,19 @@ export interface PublicSettings {
     deepseekKeyMasked: string;
     opencodeKeySet: boolean;
     opencodeKeyMasked: string;
+    groqKeySet: boolean;
+    groqKeyMasked: string;
     model: string;
     modelOptions: string[];
+    customModels: string;
+    failover: string;
+    failoverResolved: string[];
+  };
+  energy: { mode: string };
+  split: { mode: string; vps: string };
+  channels: {
+    telegram: { enabled: boolean; botTokenSet: boolean; botTokenMasked: string; titoId: string; mode: string; allow: string; autoRespond: string };
+    whatsapp: { enabled: boolean; tokenSet: boolean; tokenMasked: string; phoneId: string; titoId: string; mode: string; allow: string };
   };
   stt: {
     provider: string;
@@ -145,7 +158,7 @@ export interface PublicSettings {
     language: string;
     minConfidence: number;
   };
-  tts: { engine: string; engineOptions: string[]; order: string; orderDefault: string; language: string; url: string };
+  tts: { engine: string; engineOptions: string[]; order: string; orderDefault: string; language: string; url: string; speed: number; piperUrl: string };
   audio: { output: string; input: string; followDefault: boolean };
 }
 
@@ -270,7 +283,7 @@ export class Client {
           this.ev.onReady((m.agents || []) as Agent[]);
           break;
         case 'user_turn_received':
-          if (m.text) this.ev.onUserText(String(m.text), typeof m.source === 'string' ? m.source : undefined);
+          if (m.text) this.ev.onUserText(String(m.text), typeof m.source === 'string' ? m.source : undefined, optStr(m.turnId));
           break;
         case 'route_decision':
           this.ev.onRoute(((m.route?.targets || []) as Array<{ name?: string }>).map((t) => t.name || ''));
@@ -301,10 +314,10 @@ export class Client {
           this.ev.onDelta(String(m.agentId || ''), String(m.delta || ''));
           break;
         case 'agent_audio_chunk':
-          this.ev.onPcm(String(m.data || ''), parseRate(m.mimeType), optStr(m.turnId));
+          this.ev.onPcm(String(m.data || ''), parseRate(m.mimeType), optStr(m.turnId), audioTagFromEvent(m));
           break;
         case 'agent_audio_mp3':
-          this.ev.onMp3(String(m.data || ''), optStr(m.turnId));
+          this.ev.onMp3(String(m.data || ''), optStr(m.turnId), audioTagFromEvent(m));
           break;
         case 'agent_audio_start':
           this.ev.onAudioStart(String(m.turnId || ''), String(m.agentId || ''));
@@ -317,6 +330,9 @@ export class Client {
           break;
         case 'agent_gesto':
           if (m.gesto) this.ev.onGesto(String(m.agentId || ''), String(m.gesto));
+          break;
+        case 'agent_figure':
+          if (m.figure) this.ev.onFigure(String(m.agentId || ''), m.figure, optStr(m.turnId));
           break;
         case 'agent_interrupted':
         case 'turn_cancelled':
@@ -356,16 +372,27 @@ export class Client {
     ws.onclose = () => this.ev.onClose();
   }
 
-  sendText(text: string): void {
-    this.ws?.send(JSON.stringify({ type: 'user_turn', text }));
+  // M-05: turnId de cliente para eco optimista + steer explícito.
+  sendText(text: string, opts: { steer?: boolean } = {}): string {
+    const turnId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`).slice(0, 16);
+    this.ws?.send(JSON.stringify({
+      type: 'user_turn',
+      text,
+      turnId,
+      ...(opts.steer ? { steer: true } : {})
+    }));
+    return turnId;
   }
 
   setVoice(enabled: boolean): void {
     this.ws?.send(JSON.stringify({ type: 'set_voice', enabled }));
   }
 
-  audioPrepare(): void {
-    this.ws?.send(JSON.stringify({ type: 'audio_prepare' }));
+  // E-06: group=true = llamada grupal (el servidor convoca a todos).
+  audioPrepare(group = false): void {
+    this.ws?.send(JSON.stringify({ type: 'audio_prepare', ...(group ? { group: true } : {}) }));
   }
 
   audioStart(): void {
@@ -388,8 +415,9 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'audio_stop' }));
   }
 
-  interrupt(turnId?: string, agentId?: string): void {
-    this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId }));
+  // M-06: hint semántico opcional {cls, text} para telemetría del servidor.
+  interrupt(turnId?: string, agentId?: string, hint?: { cls: string; text: string }): void {
+    this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId, ...(hint ? { hint } : {}) }));
   }
 
   /** Client voice telemetry (VAD/barge per turn): for tuning

@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 
 import { parseClientMessage } from '../../shared/protocol.ts';
 import { MeetingSession } from './meeting-session.js';
+import { wsRegister, wsTouch, wsUnregister, wsUpdate } from './ws-registry.js';
 import { getErrorText } from './text.js';
 
 const MAX_WS_PAYLOAD_BYTES = 1024 * 1024;
@@ -32,12 +33,17 @@ export function attachMeetingServer(server, keyRing, store) {
     // meeting_ready se envía cuando el cliente manda `hello {meetingId?}`
     // (reanuda esa reunión o crea una nueva).
     const meeting = new MeetingSession(socket, keyRing, store);
+    socket._wsId = wsRegister();
     socket.isAlive = true;
     socket.on('pong', () => {
       socket.isAlive = true;
     });
 
     socket.on('message', async (raw) => {
+      wsTouch(socket._wsId);
+      if (meeting.company?.id || meeting.meeting?.id) {
+        wsUpdate(socket._wsId, { companyId: meeting.company?.id || null, meetingId: meeting.meeting?.id || null });
+      }
       const parsed = parseClientMessage(String(raw));
       if (!parsed.ok) {
         meeting.send({
@@ -58,7 +64,7 @@ export function attachMeetingServer(server, keyRing, store) {
       }
     });
 
-    socket.on('close', () => meeting.close());
+    socket.on('close', () => { wsUnregister(socket._wsId); meeting.close(); });
   });
 
   return wss;

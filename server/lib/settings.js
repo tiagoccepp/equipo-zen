@@ -48,7 +48,7 @@ export function initSettings(storeInstance, keyRingInstance) {
   keyRing.setKeys(getMinimaxKeys());
 }
 
-function dbValue(key) {
+export function dbValue(key) {
   return store?.getSetting(key) ?? null;
 }
 
@@ -78,13 +78,70 @@ export function getLlmKeys(providerId = getLlmProvider()) {
   return collectProviderKeys(providerId);
 }
 
-export function getLlmModels() {
-  const provider = getLlmProviderConfig();
+// E-14: modelos por proveedor (llm.models = CSV custom SOLO para el
+// activo; el resto usa su lista curada). "Todos sus modelos" = curados +
+// custom pegable.
+export function getLlmModelsFor(providerId) {
+  const provider = LLM_PROVIDERS[providerId];
+  if (!provider) {
+    return [];
+  }
+  if (providerId === getLlmProvider()) {
+    const custom = String(dbValue('llm.models') || '').split(',')
+      .map((m) => m.trim()).filter(Boolean);
+    if (custom.length > 0) {
+      return uniqueModelList(custom);
+    }
+  }
   const chosen = dbValue('llm.model');
-  // El modelo elegido solo vale si es de este proveedor: al cambiar de
-  // proveedor no se arrastra un nombre que el otro no conoce.
   const valido = chosen && provider.models.includes(chosen) ? chosen : provider.defaultModel;
   return uniqueModelList([valido, ...provider.models]);
+}
+
+export function getLlmModels() {
+  return getLlmModelsFor(getLlmProvider());
+}
+
+// A-10: tiers por complejidad — strong (lead, default primero) y fast
+// (workers chicos: saludos, router, acks; default último).
+export function getStrongModel() {
+  const custom = String(dbValue('llm.strong') || '').trim();
+  if (custom) {
+    return custom;
+  }
+  return getLlmModels()[0];
+}
+
+export function getFastModel() {
+  const custom = String(dbValue('llm.fast') || '').trim();
+  if (custom) {
+    return custom;
+  }
+  const list = getLlmModels();
+  return list[list.length - 1];
+}
+
+export function modelsForTier(tier) {
+  const all = getLlmModels();
+  if (tier === 'fast') {
+    return [getFastModel(), ...all.filter((m) => m !== getFastModel())];
+  }
+  if (tier === 'strong') {
+    return [getStrongModel(), ...all.filter((m) => m !== getStrongModel())];
+  }
+  return all;
+}
+
+// E-14: orden de failover — activo primero, luego llm.failover (válidos con
+// llaves), luego el resto con llaves. Sin llaves = fuera.
+export function getFailoverOrder() {
+  const active = getLlmProvider();
+  const wanted = String(dbValue('llm.failover') || '').split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter((p) => p && p !== active && LLM_PROVIDERS[p] && getLlmKeys(p).length > 0);
+  const rest = Object.keys(LLM_PROVIDERS)
+    .filter((p) => p !== active && !wanted.includes(p) && getLlmKeys(p).length > 0);
+  return [active, ...wanted, ...rest];
 }
 
 // Nombres viejos, para no romper lo que ya los usa.
@@ -244,7 +301,96 @@ export function parseTtsOrder(csv) {
 }
 
 export function getTtsUrl() {
-  return dbValue('tts.url') || SUPERTONIC_URL;
+  const explicit = dbValue('tts.url') || null;
+  if (explicit) {
+    return explicit;
+  }
+  if (getSplitMode() === 'split' && getSplitVps()) {
+    return `${getSplitVps()}:7788`;
+  }
+  return SUPERTONIC_URL;
+}
+
+// E-16: velocidad de habla 0.5..2.0 (default 1.0). Aplica en motores que la
+// soportan (Supertonic hoy; resto la ignora).
+export function getTtsSpeed() {
+  const raw = dbValue('tts.speed');
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return 1.0;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    return 1.0;
+  }
+  return Math.min(2.0, Math.max(0.5, n));
+}
+
+export function getPiperUrl() {
+  const explicit = dbValue('tts.piperUrl') || process.env.PIPER_URL || null;
+  if (explicit) {
+    return explicit;
+  }
+  if (getSplitMode() === 'split' && getSplitVps()) {
+    return `${getSplitVps()}:7791`;
+  }
+  return 'http://127.0.0.1:7791';
+}
+
+export function getParakeetUrl() {
+  const explicit = process.env.PARAKEET_URL || null;
+  if (explicit) {
+    return explicit;
+  }
+  if (getSplitMode() === 'split' && getSplitVps()) {
+    return `${getSplitVps()}:7790`;
+  }
+  return 'http://127.0.0.1:7790';
+}
+
+export function getWhisperUrl() {
+  const explicit = process.env.WHISPER_URL || null;
+  if (explicit) {
+    return explicit;
+  }
+  if (getSplitMode() === 'split' && getSplitVps()) {
+    return `${getSplitVps()}:7789`;
+  }
+  return WHISPER_URL;
+}
+
+// E-20: split local+VPS.
+export function getSplitMode() {
+  const v = String(dbValue('split.mode') || '').trim().toLowerCase();
+  return v === 'split' ? 'split' : 'local';
+}
+
+export function getSplitVps() {
+  return String(dbValue('split.vps') || process.env.SPLIT_VPS || '').trim().replace(/\/+$/, '');
+}
+
+// E-18: canal de notificaciones (telegram|whatsapp|none) + voz + destino.
+export function getNotifyChannel() {
+  const v = String(dbValue('notify.channel') || '').trim().toLowerCase();
+  return ['telegram', 'whatsapp'].includes(v) ? v : 'none';
+}
+
+export function getNotifyVoice() {
+  const v = String(dbValue('notify.voice') ?? 'true').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(v);
+}
+
+export function getNotifyTo() {
+  return String(dbValue('notify.to') || '').trim();
+}
+
+// E-17: modo de energía (env EQUIPO_ENERGY_MODE gana si vino del autostart).
+export function getEnergyMode() {
+  const fromEnv = String(process.env.EQUIPO_ENERGY_MODE || '').trim().toLowerCase();
+  if (['always-on', 'gate', 'manual'].includes(fromEnv)) {
+    return fromEnv;
+  }
+  const v = String(dbValue('energy.mode') || '').trim().toLowerCase();
+  return ['always-on', 'gate', 'manual'].includes(v) ? v : 'manual';
 }
 
 // ── Manos (tools en vivo, two-phase) ─────────────────────────────────────
@@ -385,6 +531,22 @@ const EDITABLE_KEYS = new Set([
   'llm.opencodeKey',
   'llm.groqKey',
   'llm.model',
+  'llm.models',
+  'llm.failover',
+  'llm.strong',
+  'llm.fast',
+  'channels.telegram.enabled',
+  'channels.telegram.botToken',
+  'channels.telegram.titoId',
+  'channels.telegram.mode',
+  'channels.telegram.allow',
+  'channels.telegram.autoRespond',
+  'channels.whatsapp.enabled',
+  'channels.whatsapp.token',
+  'channels.whatsapp.phoneId',
+  'channels.whatsapp.titoId',
+  'channels.whatsapp.mode',
+  'channels.whatsapp.allow',
   'stt.provider',
   'stt.order',
   'stt.whisperModel',
@@ -395,6 +557,8 @@ const EDITABLE_KEYS = new Set([
   'tts.language',
   'tts.engine',
   'tts.order',
+  'tts.speed',
+  'tts.piperUrl',
   'manos.enabled',
   'manos.maxTurns',
   'sala.v1',
@@ -405,10 +569,16 @@ const EDITABLE_KEYS = new Set([
   'sala.groupchat',
   'audio.output',
   'audio.input',
-  'audio.followDefault'
+  'audio.followDefault',
+  'energy.mode',
+  'notify.channel',
+  'notify.voice',
+  'notify.to',
+  'split.mode',
+  'split.vps'
 ]);
 
-const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey']);
+const SECRET_KEYS = new Set(['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'stt.groqKey', 'stt.deepgramKey', 'channels.telegram.botToken', 'channels.whatsapp.token']);
 
 function mask(value) {
   if (!value) {
@@ -431,8 +601,13 @@ export function publicSettings() {
       deepseekKeyMasked: mask(getLlmKeys('deepseek')[0] || ''),
       opencodeKeySet: getLlmKeys('opencode').length > 0,
       opencodeKeyMasked: mask(getLlmKeys('opencode')[0] || ''),
+      groqKeySet: getLlmKeys('groq').length > 0,
+      groqKeyMasked: mask(getLlmKeys('groq')[0] || ''),
       model: getLlmModels()[0],
-      modelOptions: LLM_MODEL_OPTIONS[getLlmProvider()] || MINIMAX_MODEL_OPTIONS
+      modelOptions: LLM_MODEL_OPTIONS[getLlmProvider()] || MINIMAX_MODEL_OPTIONS,
+      customModels: dbValue('llm.models') || '',
+      failover: dbValue('llm.failover') || '',
+      failoverResolved: getFailoverOrder()
     },
     stt: {
       provider: getSttProvider(),
@@ -454,7 +629,41 @@ export function publicSettings() {
       order: getTtsOrder().join(','),
       orderDefault: defaultTtsOrder().join(','),
       language: getTtsLanguage(),
-      url: getTtsUrl()
+      url: getTtsUrl(),
+      speed: getTtsSpeed(),
+      piperUrl: getPiperUrl()
+    },
+    channels: {
+      telegram: {
+        enabled: String(dbValue('channels.telegram.enabled') || '').toLowerCase() === 'true',
+        botTokenSet: Boolean(dbValue('channels.telegram.botToken')),
+        botTokenMasked: mask(dbValue('channels.telegram.botToken') || ''),
+        titoId: dbValue('channels.telegram.titoId') || '',
+        mode: dbValue('channels.telegram.mode') || 'tito-only',
+        allow: dbValue('channels.telegram.allow') || '',
+        autoRespond: dbValue('channels.telegram.autoRespond') || ''
+      },
+      whatsapp: {
+        enabled: String(dbValue('channels.whatsapp.enabled') || '').toLowerCase() === 'true',
+        tokenSet: Boolean(dbValue('channels.whatsapp.token')),
+        tokenMasked: mask(dbValue('channels.whatsapp.token') || ''),
+        phoneId: dbValue('channels.whatsapp.phoneId') || '',
+        titoId: dbValue('channels.whatsapp.titoId') || '',
+        mode: dbValue('channels.whatsapp.mode') || 'tito-only',
+        allow: dbValue('channels.whatsapp.allow') || ''
+      }
+    },
+    energy: {
+      mode: getEnergyMode()
+    },
+    notify: {
+      channel: getNotifyChannel(),
+      voice: getNotifyVoice(),
+      to: getNotifyTo()
+    },
+    split: {
+      mode: getSplitMode(),
+      vps: getSplitVps()
     },
     manos: {
       enabled: getManosEnabled(),
@@ -494,6 +703,24 @@ export function applySettings(patch) {
     if (key === 'llm.provider' && value && !LLM_PROVIDERS[value]) {
       continue;
     }
+    // E-14: failover = CSV de proveedores conocidos (se filtran rarezas);
+    // models = CSV no vacío (nombres libres, el proveedor valida).
+    if (key === 'llm.failover' && value) {
+      const clean = value.split(',').map((p) => p.trim().toLowerCase()).filter((p) => LLM_PROVIDERS[p]);
+      if (clean.length === 0) {
+        continue;
+      }
+    }
+    if (key === 'llm.models' && value && value.split(',').map((m) => m.trim()).filter(Boolean).length === 0) {
+      continue;
+    }
+    // E-15: modes tito-only|allowlist; enabled/autoRespond booleanos.
+    if ((key === 'channels.telegram.mode' || key === 'channels.whatsapp.mode') && value && !['tito-only', 'allowlist'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (['channels.telegram.enabled', 'channels.telegram.autoRespond', 'channels.whatsapp.enabled'].includes(key) && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
     if (key === 'stt.provider' && value && !STT_PROVIDERS.includes(value)) {
       continue;
     }
@@ -507,6 +734,30 @@ export function applySettings(patch) {
       continue;
     }
     if (key === 'tts.order' && value && parseTtsOrder(value).length === 0) {
+      continue;
+    }
+    if (key === 'tts.speed' && value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0.5 || n > 2.0) {
+        continue;
+      }
+    }
+    if (key === 'tts.piperUrl' && value && !/^https?:\/\/.+/.test(value)) {
+      continue;
+    }
+    if (key === 'energy.mode' && value && !['always-on', 'gate', 'manual'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'notify.channel' && value && !['telegram', 'whatsapp', 'none'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'notify.voice' && value && !['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'split.mode' && value && !['local', 'split'].includes(value.toLowerCase())) {
+      continue;
+    }
+    if (key === 'split.vps' && value && !/^https?:\/\/.+/.test(value)) {
       continue;
     }
     if (key === 'stt.minConfidence' && value) {
@@ -575,7 +826,7 @@ export function applySettings(patch) {
     }
   }
 
-  if (applied.some((key) => key === 'llm.apiKey' || key === 'llm.deepseekKey' || key === 'llm.opencodeKey' || key === 'llm.provider')) {
+  if (applied.some((key) => ['llm.apiKey', 'llm.deepseekKey', 'llm.opencodeKey', 'llm.groqKey', 'llm.provider'].includes(key))) {
     keyRing.setKeys(getMinimaxKeys());
   }
   return applied;

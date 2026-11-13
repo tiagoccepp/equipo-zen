@@ -128,6 +128,184 @@ async function dropClient(serverName) {
   await slot.client.close().catch(() => {});
 }
 
+// F-05: catálogo ESTÁTICO de servers conocidos (conocimiento curado, no
+// spawn). El search no prende ningún proceso; ensure() prende SOLO el
+// server con matches. needsKey = figura igual (el search avisa).
+export const MCP_STATIC_CATALOG = [
+  { server: 'fs', needsKey: false, tools: [
+    ['read_text_file', 'Lee un archivo de texto (root permitido)'],
+    ['read_media_file', 'Lee imagen/audio como base64'],
+    ['read_multiple_files', 'Lee varios archivos de una vez'],
+    ['write_file', 'Escribe un archivo (root permitido)'],
+    ['append_file', 'Agrega al final de un archivo'],
+    ['list_directory', 'Lista un directorio'],
+    ['search_files', 'Busca archivos por patrón'],
+    ['get_file_info', 'Metadata de un archivo']
+  ] },
+  { server: 'fetch', needsKey: false, tools: [
+    ['fetch', 'Trae una URL como markdown limpio']
+  ] },
+  { server: 'git', needsKey: false, tools: [
+    ['git_status', 'Estado del repo'],
+    ['git_diff', 'Diff de cambios'],
+    ['git_log', 'Historial de commits'],
+    ['git_add', 'Agrega archivos al stage'],
+    ['git_commit', 'Crea un commit'],
+    ['git_branch', 'Ramas: listar/crear']
+  ] },
+  { server: 'hora', needsKey: false, tools: [
+    ['get_current_time', 'Hora actual por zona'],
+    ['convert_time', 'Convierte entre zonas horarias'],
+    ['get_time_ago', 'Hace cuánto fue un timestamp']
+  ] },
+  { server: 'sqlite', needsKey: false, tools: [
+    ['read_query', 'SELECT sobre el .db'],
+    ['write_query', 'Escritura SQL (cuidado)'],
+    ['list_tables', 'Tablas del .db']
+  ] },
+  { server: 'memoria', needsKey: false, tools: [
+    ['create_entities', 'Crea nodos de memoria'],
+    ['search_nodes', 'Busca en el grafo'],
+    ['add_observations', 'Agrega observaciones'],
+    ['create_relations', 'Relaciona nodos']
+  ] },
+  { server: 'pensar', needsKey: false, tools: [
+    ['sequentialthinking', 'Razonamiento paso a paso encadenado']
+  ] },
+  { server: 'brave', needsKey: true, tools: [
+    ['brave_web_search', 'Búsqueda web'],
+    ['brave_image_search', 'Búsqueda de imágenes'],
+    ['brave_news_search', 'Noticias'],
+    ['brave_video_search', 'Videos']
+  ] },
+  { server: 'tavily', needsKey: true, tools: [
+    ['tavily_search', 'Búsqueda web con IA'],
+    ['tavily_extract', 'Extrae contenido de URLs'],
+    ['tavily_crawl', 'Crawlea un sitio']
+  ] },
+  { server: 'docs', needsKey: true, tools: [
+    ['resolve-library-id', 'Resuelve id de librería'],
+    ['get-library-docs', 'Docs actualizadas de una lib']
+  ] },
+  { server: 'scrape', needsKey: true, tools: [
+    ['scrape', 'Scrapea una URL (JS incluido)'],
+    ['crawl', 'Crawlea + scrapea'],
+    ['extract', 'Extrae datos con esquema']
+  ] },
+  { server: 'github', needsKey: true, tools: [
+    ['search_repositories', 'Busca repos'],
+    ['get_file_contents', 'Lee archivos de un repo'],
+    ['create_issue', 'Crea un issue'],
+    ['list_issues', 'Lista issues']
+  ] },
+  { server: 'slack', needsKey: true, tools: [
+    ['list_channels', 'Canales del workspace'],
+    ['post_message', 'Publica un mensaje'],
+    ['read_messages', 'Lee mensajes']
+  ] }
+];
+
+// Búsqueda pura sobre el catálogo (cero procesos). Solo servers
+// CONFIGURADOS (los demás ni se mencionan: no existen acá).
+export function searchMcpCatalog(query, { configured = null, max = 5 } = {}) {
+  const words = String(query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ' ')
+    .split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  if (words.length === 0) {
+    return [];
+  }
+  const only = configured ? new Set(configured) : null;
+  const scored = [];
+  for (const entry of MCP_STATIC_CATALOG) {
+    if (only && !only.has(entry.server)) {
+      continue;
+    }
+    for (const [tool, desc] of entry.tools) {
+      const hay = `${tool} ${desc} ${entry.server}`.toLowerCase();
+      let score = 0;
+      for (const w of words) {
+        if (hay.includes(w)) {
+          score += w.length > 5 ? 2 : 1;
+        }
+      }
+      if (score > 0) {
+        scored.push({ server: entry.server, tool, name: `mcp_${entry.server}_${tool}`, description: desc, needsKey: entry.needsKey, score });
+      }
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, max);
+}
+
+// Prende (si hace falta) + lista + registra las tools pedidas. Solo toca
+// los servers involucrados — el resto ni se entera (diferido real).
+export async function ensureMcpTools(names) {
+  const wanted = [...new Set((names || []).filter((n) => typeof n === 'string' && n.startsWith('mcp_')))];
+  if (wanted.length === 0) {
+    return [];
+  }
+  const entries = new Map(readMcpConfig().map((e) => [e.name, e]));
+  const byServer = new Map();
+  for (const full of wanted) {
+    const rest = full.slice(4);
+    // server = prefijo más largo que matchee un server configurado.
+    let found = null;
+    for (const server of entries.keys()) {
+      if (rest === server || rest.startsWith(`${server}_`)) {
+        if (!found || server.length > found.length) {
+          found = server;
+        }
+      }
+    }
+    if (found) {
+      if (!byServer.has(found)) {
+        byServer.set(found, []);
+      }
+      byServer.get(found).push(full);
+    }
+  }
+  const registered = [];
+  const { registerTool } = await import('./manos.js');
+  for (const [server, tools] of byServer) {
+    let client;
+    try {
+      client = await getClient(entries.get(server));
+    } catch {
+      continue;
+    }
+    let live;
+    try {
+      live = await client.listTools();
+    } catch {
+      await dropClient(server);
+      continue;
+    }
+    const liveByName = new Map((live || []).map((x) => [x?.name, x]));
+    for (const full of tools) {
+      const short = full.slice(4 + server.length + 1);
+      const def = liveByName.get(short);
+      if (!def) {
+        continue;
+      }
+      try {
+        registerTool({
+          name: full,
+          description: typeof def.description === 'string' && def.description
+            ? def.description
+            : `Tool MCP ${short} (server ${server})`,
+          parameters: def.inputSchema && typeof def.inputSchema === 'object'
+            ? def.inputSchema
+            : { type: 'object', properties: {} },
+          execute: (args) => callMcpTool(full, args || {})
+        });
+        registered.push(full);
+      } catch {
+        // Ya registrada o inválida: seguir.
+      }
+    }
+  }
+  return registered;
+}
+
 // CONTRATO: lista aplanada de todas las tools de todos los servers.
 // Nombres `mcp_<server>_<tool>`. Un server caído se saltea, no rompe el resto.
 export async function getMcpTools() {

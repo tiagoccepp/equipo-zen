@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync , chmodSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -396,14 +396,119 @@ const MIGRATIONS = [
   WHERE name = 'Tomasa' AND company_id IN (SELECT id FROM companies WHERE name = 'Pablo');
   UPDATE goals SET description = 'Meetings and work from before project organization.'
   WHERE slug = 'general' AND description = 'Reuniones y trabajo anteriores a la organización por proyecto.';
+  `,
+  // E-02: learnings por proyecto (NULL = toda la empresa).
+  `
+  ALTER TABLE learnings ADD COLUMN goal_id TEXT;
+  CREATE INDEX idx_learnings_goal ON learnings(goal_id, status);
+  `,
+  // E-03: roster por proyecto (agent_id NULL = rol querido sin cubrir).
+  `
+  CREATE TABLE project_roster (
+    goal_id     TEXT NOT NULL,
+    agent_id    TEXT,
+    role_wanted TEXT NOT NULL,
+    origin      TEXT NOT NULL DEFAULT 'seed',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX idx_project_roster_goal ON project_roster(goal_id, enabled);
+  `,
+  // F-09: resumen rolling de compactación por reunión.
+  `
+  ALTER TABLE meetings ADD COLUMN compacted_summary TEXT;
+  ALTER TABLE meetings ADD COLUMN compacted_turns INTEGER NOT NULL DEFAULT 0;
+  `,
+  // E-09: gustos de Tito (global + por proyecto).
+  `
+  CREATE TABLE tastes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL DEFAULT 'global',
+    goal_id     TEXT,
+    taste_key   TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    confidence  REAL NOT NULL DEFAULT 0.7,
+    source      TEXT NOT NULL DEFAULT 'manual',
+    updated_at  TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX idx_tastes_scope_key ON tastes(scope, goal_id, taste_key);
+  CREATE INDEX idx_tastes_goal ON tastes(goal_id);
+  `,
+  // E-12: origen de asignación (assign|self|tito) para auto-aplicación+veto.
+  `
+  ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'assign';
+  `,
+  // E-13: jobs programados.
+  `
+  CREATE TABLE sched_jobs (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    spec_json   TEXT NOT NULL DEFAULT '{}',
+    action_json TEXT NOT NULL DEFAULT '{}',
+    goal_id     TEXT,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    last_run    INTEGER,
+    next_run    INTEGER,
+    runs        INTEGER NOT NULL DEFAULT 0,
+    last_result TEXT,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX idx_sched_enabled ON sched_jobs(enabled, next_run);
+  `,
+  // E-21: ledger de uso (cuenta hoy 'local'; multi-cuenta mañana).
+  `
+  CREATE TABLE usage_ledger (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT 'local',
+    kind       TEXT NOT NULL,
+    provider   TEXT,
+    model      TEXT,
+    scope      TEXT,
+    tokens     INTEGER,
+    cost       REAL
+  );
+  CREATE INDEX idx_usage_at ON usage_ledger(at, account_id);
+  `,
+  // E-22: nivel de acceso por proyecto + lista prohibida.
+  `
+  ALTER TABLE goals ADD COLUMN access_level TEXT NOT NULL DEFAULT 'auto';
+  CREATE TABLE prohibitions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT NOT NULL DEFAULT 'global',
+    goal_id    TEXT,
+    kind       TEXT NOT NULL,
+    pattern    TEXT NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_prohib_goal ON prohibitions(scope, goal_id);
+  `,
+  // E-27: topes por proyecto (NULL = sin tope, default).
+  `
+  ALTER TABLE goals ADD COLUMN cap_tokens INTEGER;
+  ALTER TABLE goals ADD COLUMN cap_ram_mb INTEGER;
+  ALTER TABLE goals ADD COLUMN cap_time_min INTEGER;
   `
 ];
 
 export function openDatabase(dbPath) {
   if (dbPath !== ':memory:') {
     mkdirSync(path.dirname(dbPath), { recursive: true });
+    // E-23: la DB guarda claves de API → solo el dueño la lee.
+    try {
+      chmodSync(dbPath, 0o600);
+    } catch {
+      // Se crea abajo; se ajusta tras abrir.
+    }
   }
   const db = new DatabaseSync(dbPath);
+  if (dbPath !== ':memory:') {
+    try {
+      chmodSync(dbPath, 0o600);
+    } catch { /* best-effort */ }
+  }
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec('PRAGMA foreign_keys = ON;');

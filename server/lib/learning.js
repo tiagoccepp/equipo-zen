@@ -52,13 +52,13 @@ export class LearningObserver {
   }
 
   // Fire-and-forget desde meeting-session; nunca lanza.
-  observeCycle(meetingId, memory, agents, userText, onStored) {
+  observeCycle(meetingId, memory, agents, userText, onStored, goalId = null) {
     if (this.inFlight || !this.shouldObserve(userText)) {
       return;
     }
     this.inFlight = true;
     this.userTurnsSinceSweep = 0;
-    void this.run(meetingId, memory, agents)
+    void this.run(meetingId, memory, agents, goalId)
       .then((affected) => {
         if (affected && affected.length > 0) {
           onStored?.(affected);
@@ -72,7 +72,7 @@ export class LearningObserver {
       });
   }
 
-  async run(meetingId, memory, agents) {
+  async run(meetingId, memory, agents, goalId = null) {
     const recentTurns = memory.turns.slice(-10);
     if (recentTurns.length === 0) {
       return;
@@ -148,7 +148,7 @@ export class LearningObserver {
       if (targetAgent && targetAgent.learningEnabled === false) {
         continue;
       }
-      const duplicate = this.findSimilar(content, agentId);
+      const duplicate = this.findSimilar(content, agentId, goalId);
       if (duplicate) {
         this.store.reinforceLearning(duplicate.id, confidence);
         this.store.logChange('observer', 'learning', String(duplicate.id), 'update', { reinforced: content });
@@ -158,22 +158,32 @@ export class LearningObserver {
         const learningId = this.store.insertLearning({
           agentId,
           meetingId,
-          type,
+          goalId,
+          type: type,
           content,
           confidence,
           sourceTurnIds: [...userTurnIds]
         });
         this.store.logChange('observer', 'learning', String(learningId), 'create', { type, content, agentId });
         telemetry.add({ type: 'learning_created', payload: { learningId, type, content, agentId } });
+        // E-09: preferencia fuerte → gusto (sin preguntar).
+        if (type === 'user_preference') {
+          try {
+            const { promoteLearningToTaste } = await import('./tastes.js');
+            promoteLearningToTaste(this.store, { id: learningId, type, content, confidence, goalId });
+          } catch {
+            // Promoción caída: el learning igual quedó.
+          }
+        }
         affectedAgentIds.push(agentId);
       }
     }
     return affectedAgentIds;
   }
 
-  findSimilar(content, agentId) {
+  findSimilar(content, agentId, goalId = null) {
     const target = tokenSet(content);
-    for (const learning of this.store.activeLearnings(agentId || undefined)) {
+    for (const learning of this.store.activeLearnings(agentId || undefined, goalId || undefined)) {
       if (jaccard(target, tokenSet(learning.content)) > DEDUP_JACCARD) {
         return learning;
       }
@@ -201,7 +211,116 @@ function jaccard(a, b) {
 
 // Sección MEMORIA APRENDIDA para el system prompt: top-K por
 // confianza × recencia × refuerzos, con presupuesto duro de caracteres.
-export function renderLearningsSection(store, agentId) {
+// E-11: métrica de mejora — ningún error se repite dos veces igual.
+// Un [error] reforzado 3+ veces = REINCIDENTE = bug del loop: se propone
+// fix (skill) a Tito en vez de seguir aprendiendo en vano.
+export const REINCIDENT_THRESHOLD = 3;
+
+export function reincidentErrors(store, goalId = null) {
+  try {
+    const rows = store._prepare(`
+      SELECT * FROM learnings
+      WHERE status = 'active' AND type = 'skill_note' AND content LIKE '[error]%'
+        AND times_reinforced >= ?
+        ${goalId ? 'AND (goal_id IS NULL OR goal_id = ?)' : ''}
+      ORDER BY times_reinforced DESC LIMIT 20
+    `).all(...(goalId ? [REINCIDENT_THRESHOLD, goalId] : [REINCIDENT_THRESHOLD]));
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+export function learningHealth(store, goalId = null) {
+  try {
+    const scope = goalId ? 'AND (goal_id IS NULL OR goal_id = ?)' : '';
+    const params = goalId ? [goalId] : [];
+    const total = store._prepare(
+      `SELECT COUNT(*) AS n FROM learnings WHERE status = 'active' AND type = 'skill_note' AND content LIKE '[error]%' ${scope}`
+    ).get(...params)?.n || 0;
+    const reinforced = store._prepare(
+      `SELECT COUNT(*) AS n FROM learnings WHERE status = 'active' AND type = 'skill_note' AND content LIKE '[error]%' AND times_reinforced > 1 ${scope}`
+    ).get(...params)?.n || 0;
+    const reincident = reincidentErrors(store, goalId).length;
+    return {
+      errorLearnings: total,
+      repeatedOnce: reinforced,
+      reincident,
+      // Tasa de reincidencia: 0 = ningún error llegó a 3 (meta).
+      reincidentRate: total > 0 ? Math.round((reincident / total) * 100) / 100 : 0
+    };
+  } catch {
+    return { errorLearnings: 0, repeatedOnce: 0, reincident: 0, reincidentRate: 0 };
+  }
+}
+
+// Propone fix (skill) por cada reincidente sin propuesta pendiente previa.
+export function proposeFixesForReincidents(store, goalId = null) {
+  const proposed = [];
+  try {
+    for (const row of reincidentErrors(store, goalId)) {
+      const tool = (String(row.content).match(/\[error\] (\S+) falló/) || [])[1] || 'tool';
+      const dup = store._prepare(`
+        SELECT id FROM tasks WHERE kind = 'proposal' AND status = 'pending'
+          AND text LIKE ? LIMIT 1
+      `).get(`%reincidente:${tool}%`);
+      if (dup) {
+        continue;
+      }
+      const err = String(row.content).slice(0, 180);
+      const task = store.proposeChange(row.goal_id || goalId, null, {
+        kind: 'skill',
+        action: 'create',
+        payload: {
+          name: `evitar-fallo-${tool}`.slice(0, 61),
+          description: `Evitar el fallo reincidente de ${tool}.`,
+          keywords: [tool, 'error', 'fallo'],
+          scope: 'chat',
+          body: `La tool ${tool} falló ${row.times_reinforced} veces con: ${err}. ANTES de usarla: verificar precondiciones (rutas, formato, tamaño). SI falla igual: NO reintentar idéntico — partir el trabajo, usar otra tool o pedir ayuda. Reportar el fallo en criollo.`
+        },
+        reason: `reincidente:${tool} falló ${row.times_reinforced} veces; el loop no lo corrigió solo`,
+        risk: 'medium'
+      });
+      proposed.push(task.id);
+    }
+  } catch {
+    // Proponer nunca rompe el ciclo.
+  }
+  return proposed;
+}
+
+// E-08: puente error→aprendizaje. Cada fallo de tool deja una skill_note
+// accionable (o refuerza la existente): el error no se repite igual dos
+// veces (E-11). Determinístico, sin LLM: plantilla + dedup.
+export function recordErrorLearning(store, { agentId = null, meetingId = null, goalId = null, tool, error }) {
+  if (!store || !tool) {
+    return null;
+  }
+  const err = String(error || 'sin motivo').slice(0, 200);
+  const content = `[error] ${tool} falló: ${err}. Si se repite, cambiar de estrategia (partir el trabajo, otra tool, pedir ayuda) en vez de reintentar igual.`;
+  try {
+    const existing = store.activeLearnings(agentId || undefined, goalId || undefined)
+      .find((l) => l.type === 'skill_note' && l.content.includes(`[error] ${tool} falló:`));
+    if (existing) {
+      store.reinforceLearning(existing.id, 0.8);
+      return { id: existing.id, reinforced: true };
+    }
+    const id = store.insertLearning({
+      agentId,
+      meetingId,
+      goalId,
+      type: 'skill_note',
+      content: content.slice(0, 500),
+      confidence: 0.8,
+      sourceTurnIds: []
+    });
+    return { id, reinforced: false };
+  } catch {
+    return null;
+  }
+}
+
+export function renderLearningsSection(store, agentId, goalId = null) {
   if (!LEARNING_ENABLED) {
     return '';
   }
@@ -211,7 +330,7 @@ export function renderLearningsSection(store, agentId) {
   if (agent && agent.learningEnabled === false) {
     return '';
   }
-  const learnings = store.activeLearnings(agentId);
+  const learnings = store.activeLearnings(agentId, goalId || undefined);
   if (learnings.length === 0) {
     return '';
   }

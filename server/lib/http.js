@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -21,7 +22,7 @@ import { buildLiveSnapshot } from './mission.js';
 import { renderMemorySection } from './pablo-memory.js';
 import { applySuggestion } from './reflection.js';
 import { deleteLogEntries, listLogDays, logDirectory, readLog } from './session-log.js';
-import { applySettings, getLlmKeys, getLlmModels, getLlmProvider, getLlmProviderConfig, publicSettings } from './settings.js';
+import { applySettings, getEnergyMode, getLlmKeys, getLlmModels, getLlmProvider, getLlmProviderConfig, publicSettings } from './settings.js';
 import { getSidecarStatus } from './sidecars.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
@@ -440,6 +441,315 @@ export function createApp({ store }) {
     res.json({ ok: true });
   });
 
+  // F-03: dreaming manual (determinístico: purga+decaimiento; la
+  // consolidación LLM la corre el scheduler con keyRing).
+  app.post('/api/dreaming/run', async (req, res) => {
+    try {
+      const { dreamCycle } = await import('./dreaming.js');
+      const report = await dreamCycle({ store, dryRun: req.body?.dryRun === true });
+      res.json({ ok: true, report });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // E-12: auto-aplicaciones + veto de Tito.
+  app.get('/api/claims', (req, res) => {
+    res.json({ claims: store.selfAssignedTasks(req.query.goalId || null, 24 * 60).map((t) => ({
+      id: t.id, text: t.text, agentId: t.agent_id, status: t.status, goalId: t.goal_id
+    })) });
+  });
+
+  app.post('/api/claims/:id/veto', (req, res) => {
+    const r = store.vetoTask(req.params.id, 'tito-ui');
+    if (!r.ok) {
+      return res.status(400).json({ error: r.error });
+    }
+    res.json({ ok: true });
+  });
+
+  // E-10: propuestas de auto-mejora (aprobar/rechazar).
+  app.get('/api/proposals', (req, res) => {
+    res.json({ proposals: store.pendingProposals(req.query.goalId || null).map((r) => {
+      let d = {};
+      try { d = JSON.parse(r.text); } catch { /* legado */ }
+      return { id: r.id, goalId: r.goal_id, agentId: r.agent_id, createdAt: r.created_at, ...d };
+    }) });
+  });
+
+  app.post('/api/proposals/:id/resolve', async (req, res) => {
+    const row = store.getTask(req.params.id);
+    if (!row || row.kind !== 'proposal' || row.status !== 'pending') {
+      return res.status(404).json({ error: 'proposal inexistente o resuelta' });
+    }
+    if (req.body?.approve === false) {
+      store.finishTask(row.id, { status: 'rejected', summary: 'Rechazada por Tito.' });
+      return res.json({ ok: true, approved: false });
+    }
+    try {
+      const si = await import('./self-improve.js');
+      const d = JSON.parse(row.text);
+      const risk = si.classifyRisk(d);
+      if (risk === 'high') {
+        // High necesita confirmación explícita doble (irreversible/sensible).
+        if (req.body?.confirm !== 'sí-aplico') {
+          return res.status(409).json({ error: 'alto riesgo: reenviar con confirm="sí-aplico"', risk });
+        }
+      }
+      const r = await si.applyLowRisk({ store, goalId: row.goal_id, proposal: d });
+      // applyLowRisk cubre skill-create/taste/prompt-note; tier-ask va directo:
+      let detail = r.detail;
+      let applied = r.applied;
+      if (!applied && d.kind === 'tier' && d.action === 'ask') {
+        const { setTier } = await import('./permissions.js');
+        applied = setTier(d.payload?.tool, 'ask');
+        detail = applied ? `tier ${d.payload?.tool} → ask` : 'tier falló';
+      }
+      store.finishTask(row.id, { status: applied ? 'approved' : 'rejected', summary: detail });
+      store.logChange('tito', 'proposal', row.id, applied ? 'approved' : 'approve-failed', { detail });
+      res.json({ ok: true, approved: applied, detail });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // E-15: channels (inbox inbound + envío manual + webhook WhatsApp).
+  app.get('/api/channels/inbox', (_req, res) => {
+    import('./channel-runtime.js').then(({ channelInbox }) => res.json({ inbox: channelInbox() }))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/channels/send', async (req, res) => {
+    try {
+      const rt = await import('./channel-runtime.js');
+      const kind = req.body?.channel || 'telegram';
+      const fn = kind === 'whatsapp' ? rt.sendWhatsapp : rt.sendTelegram;
+      const result = await fn({ to: req.body?.to, text: req.body?.text });
+      res.json({ ok: true, result });
+    } catch (error) {
+      res.status(400).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // Webhook WhatsApp: verificación GET + inbound POST (esqueleto funcional).
+  app.get('/api/channels/whatsapp/webhook', (req, res) => {
+    const verify = process.env.WHATSAPP_VERIFY || 'pablo-hook';
+    if (req.query['hub.verify_token'] === verify) {
+      return res.send(req.query['hub.challenge'] || '');
+    }
+    res.sendStatus(403);
+  });
+
+  app.post('/api/channels/whatsapp/webhook', async (req, res) => {
+    try {
+      const { waParseWebhook } = await import('./channels.js');
+      const parsed = waParseWebhook(req.body);
+      if (parsed) {
+        const { channelConfigs } = await import('./channel-runtime.js');
+        const ch = channelConfigs().find((c) => c.kind === 'whatsapp-meta');
+        if (ch) {
+          const { channelMayInteract } = await import('./channels.js');
+          const gate = channelMayInteract(ch, { fromId: parsed.fromId });
+          if (!gate.ok) {
+            return res.json({ ok: true, allowed: false });
+          }
+        }
+        res.json({ ok: true, allowed: true });
+      } else {
+        res.json({ ok: true, allowed: false });
+      }
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 200) });
+    }
+  });
+
+  // E-17: energía (modo + autostart).
+  app.get('/api/energy', (_req, res) => {
+    import('./energy.js').then(({ readAutostartMode }) => {
+      res.json({ mode: getEnergyMode(), autostart: readAutostartMode() });
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/energy/mode', (req, res) => {
+    const mode = String(req.body?.mode || '').toLowerCase();
+    if (!['always-on', 'gate', 'manual'].includes(mode)) {
+      return res.status(400).json({ error: 'modo inválido (always-on|gate|manual)' });
+    }
+    store.setSetting('energy.mode', mode);
+    import('./energy.js').then(({ applyEnergyMode }) => {
+      res.json({ ok: true, ...applyEnergyMode(mode) });
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  // E-18: notificaciones (log + detalle + disparo manual).
+  app.get('/api/notifications', (_req, res) => {
+    import('./notifications.js').then(({ notificationLog }) => res.json({ notifications: notificationLog({}) }))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.get('/api/notifications/:id', (req, res) => {
+    import('./notifications.js').then(({ notificationGet }) => {
+      const n = notificationGet(req.params.id);
+      if (!n) {
+        return res.status(404).json({ error: 'notificación inexistente' });
+      }
+      res.json({ notification: n });
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/notifications/send', async (req, res) => {
+    try {
+      const { dispatchNotification, settingsAnnounce } = await import('./notifications.js');
+      const n = await dispatchNotification({
+        title: req.body?.title,
+        detail: req.body?.detail || '',
+        goalId: req.body?.goalId || null,
+        short: req.body?.short || null,
+        announce: settingsAnnounce
+      });
+      if (!n) {
+        return res.status(400).json({ error: 'título requerido' });
+      }
+      res.json({ ok: true, notification: n });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  // E-13: scheduler (CRUD + correr ya + outbox).
+  app.get('/api/scheduler/jobs', (req, res) => {
+    res.json({ jobs: store.listSchedJobs(req.query.goalId || null) });
+  });
+
+  app.post('/api/scheduler/jobs', (req, res) => {
+    const job = store.createSchedJob({
+      name: req.body?.name,
+      kind: req.body?.kind,
+      spec: req.body?.spec || {},
+      action: req.body?.action || {},
+      goalId: req.body?.goalId || null,
+      enabled: req.body?.enabled !== false
+    });
+    if (!job) {
+      return res.status(400).json({ error: 'job inválido (name + kind cron|interval|once|watcher)' });
+    }
+    res.status(201).json({ job });
+  });
+
+  app.post('/api/scheduler/jobs/:id/run', async (req, res) => {
+    try {
+      const { runDueJobs } = await import('./scheduler.js');
+      store._prepare('UPDATE sched_jobs SET next_run = 0 WHERE id = ?').run(req.params.id);
+      const ran = await runDueJobs({ store });
+      res.json({ ok: true, ran: ran.filter((r) => r.id === req.params.id) });
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
+    }
+  });
+
+  app.post('/api/scheduler/jobs/:id/toggle', (req, res) => {
+    const ok = store.setSchedJobEnabled(req.params.id, req.body?.enabled !== false);
+    if (!ok) {
+      return res.status(404).json({ error: 'job inexistente' });
+    }
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/scheduler/jobs/:id', (req, res) => {
+    if (!store.deleteSchedJob(req.params.id)) {
+      return res.status(404).json({ error: 'job inexistente' });
+    }
+    res.json({ ok: true });
+  });
+
+  app.get('/api/scheduler/outbox', (_req, res) => {
+    import('./scheduler.js').then(({ scheduledOutbox }) => res.json({ outbox: scheduledOutbox() }))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  // E-22: prohibiciones (global + por proyecto).
+  app.get('/api/prohibitions', (req, res) => {
+    res.json({ prohibitions: store.prohibitionsFor(req.query.goalId || null) });
+  });
+
+  app.post('/api/prohibitions', (req, res) => {
+    const row = store.addProhibition({
+      scope: req.body?.scope || 'global',
+      goalId: req.body?.goalId || null,
+      kind: req.body?.kind,
+      pattern: req.body?.pattern,
+      reason: req.body?.reason || ''
+    });
+    if (!row) {
+      return res.status(400).json({ error: 'prohibición inválida (kind tool|cmd|path|url + pattern)' });
+    }
+    res.status(201).json({ prohibition: row });
+  });
+
+  app.delete('/api/prohibitions/:id', (req, res) => {
+    if (!store.removeProhibition(req.params.id)) {
+      return res.status(404).json({ error: 'prohibición inexistente' });
+    }
+    res.json({ ok: true });
+  });
+
+  // A-06: grants guardados + policies hard-deny.
+  app.get('/api/approvals/grants', (_req, res) => {
+    import('./permissions.js').then(({ listGrants, listPolicies }) => res.json({ grants: listGrants(), policies: listPolicies() }))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.delete('/api/approvals/grants/:id', (req, res) => {
+    import('./permissions.js').then(({ revokeGrant }) => {
+      if (!revokeGrant(req.params.id)) {
+        return res.status(404).json({ error: 'grant inexistente' });
+      }
+      res.json({ ok: true });
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/policies/apply', (req, res) => {
+    import('./permissions.js').then(({ applyPolicy }) => {
+      const r = applyPolicy(req.body?.policy);
+      if (!r.ok) {
+        return res.status(400).json({ error: r.error });
+      }
+      res.json(r);
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/policies/clear', (_req, res) => {
+    import('./permissions.js').then(({ clearPolicies }) => {
+      clearPolicies();
+      res.json({ ok: true });
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  // F-10: introspección del gateway WS único.
+  app.get('/api/ws/stats', (_req, res) => {
+    import('./ws-registry.js').then(({ wsStats }) => res.json(wsStats()))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  // F-04: aprobaciones pendientes (UI) + grants.
+  app.get('/api/approvals/pending', (_req, res) => {
+    import('./permissions.js').then(({ listPending }) => res.json({ pending: listPending() }))
+      .catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
+  app.post('/api/approvals/:id/resolve', (req, res) => {
+    import('./permissions.js').then(({ resolveApproval }) => {
+      const r = resolveApproval(req.params.id, req.body?.approve !== false, {
+        scope: req.body?.scope || 'once',
+        uses: req.body?.uses
+      });
+      if (!r.ok) {
+        return res.status(404).json({ error: r.error });
+      }
+      res.json(r);
+    }).catch((e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) }));
+  });
+
   app.post('/api/agents/:id/forget', (req, res) => {
     const agent = store.getAgent(req.params.id);
     if (!agent) {
@@ -579,6 +889,9 @@ export function createApp({ store }) {
       company: company ? { id: company.id, name: company.name, emoji: company.emoji, color: company.color } : null,
       team: store.listAgents({ companyId: project.company_id })
         .map(({ id, name, title, color, role, managerId, domains }) => ({ id, name, title, color, role, managerId, domains })),
+      // E-03: equipo DEL PROYECTO (roles asignados + faltantes para spawner).
+      projectTeam: store.rosterForProject(project.id),
+      missingRoles: store.missingProjectRoles(project.id),
       meetings: store.meetingsForProject(project.id),
       tasks: store.tasksForGoal(project.id).map((task) => ({
         id: task.id,
@@ -618,6 +931,16 @@ export function createApp({ store }) {
     }
     if (typeof req.body?.stack === 'string') {
       patch.stack = req.body.stack.slice(0, 40);
+    }
+    if (typeof req.body?.access_level === 'string') {
+      patch.access_level = req.body.access_level;
+    }
+    if (req.body?.caps && typeof req.body.caps === 'object') {
+      store.setProjectCaps(req.params.goalId, {
+        tokens: req.body.caps.tokens ?? null,
+        ramMb: req.body.caps.ramMb ?? null,
+        timeMin: req.body.caps.timeMin ?? null
+      });
     }
     const project = store.updateProject(req.params.goalId, patch);
     if (!project) {
@@ -986,10 +1309,16 @@ export function createApp({ store }) {
     }
   });
 
-  if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(rootDir, 'dist')));
-    app.get('*splat', (_req, res) => {
-      res.sendFile(path.join(rootDir, 'dist', 'index.html'));
+  const distDir = path.join(rootDir, 'dist');
+  const distIndex = path.join(distDir, 'index.html');
+  if (existsSync(distIndex)) {
+    app.use(express.static(distDir));
+    // SPA fallback: let /api, /workspace and other existing routes win first.
+    app.get('*splat', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/workspace') || req.path.startsWith('/ws')) {
+        return next();
+      }
+      res.sendFile(distIndex);
     });
   }
 

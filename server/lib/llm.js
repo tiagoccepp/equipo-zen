@@ -2,7 +2,10 @@ import {
   RESPONSE_TIMEOUT_MS
 } from './config.js';
 import { logEvent } from './session-log.js';
-import { getLlmModels, getLlmProviderConfig } from './settings.js';
+import { getLlmModels, getLlmModelsFor, getLlmProvider, getLlmProviderConfig } from './settings.js';
+import { LLM_PROVIDERS } from './config.js';
+import { failoverRings } from './providers.js';
+import { emitUsage } from './billing.js';
 import { getErrorText, getShortError } from './text.js';
 
 // Cliente de razonamiento. MiniMax y DeepSeek exponen el mismo endpoint
@@ -14,12 +17,41 @@ import { getErrorText, getShortError } from './text.js';
 // - rotación clave×modelo con la misma semántica que tenía gemini.js:
 //   en streaming solo se re-rota si aún no se emitió ningún chunk.
 
+// QW-05: costo por turno. Go lane devuelve usage {cost, opencode:
+// {billing_source, allowance}} (verificado 10/11). Null si no hay nada util.
+export function parseUsage(body) {
+  const u = body?.usage;
+  if (!u || typeof u !== 'object') {
+    return body?.cost != null ? { tokens: null, cost: body.cost, billing: null, allowance: null } : null;
+  }
+  const oc = u.opencode && typeof u.opencode === 'object' ? u.opencode : {};
+  const out = {
+    tokens: u.total_tokens ?? null,
+    cost: u.cost ?? body?.cost ?? null,
+    billing: oc.billing_source ?? u.billing_source ?? null,
+    allowance: oc.allowance ?? u.allowance ?? null
+  };
+  return (out.tokens == null && out.cost == null && out.billing == null && out.allowance == null) ? null : out;
+}
+
+// E-14: proveedor efectivo (override en failover, si no el activo).
+function effectiveProvider(options) {
+  const pid = options?.providerId;
+  if (pid && LLM_PROVIDERS[pid]) {
+    return LLM_PROVIDERS[pid];
+  }
+  return getLlmProviderConfig();
+}
+
 function buildBody(options, stream) {
-  const provider = getLlmProviderConfig();
+  const provider = effectiveProvider(options);
   return JSON.stringify({
     model: options.model,
     messages: options.messages,
     stream,
+    // QW-05: usage al final del stream (solo lane opencode; otros providers
+    // ni lo conocen y podrian 400).
+    ...(provider.id === 'opencode' && stream ? { stream_options: { include_usage: true } } : {}),
     temperature: options.temperature ?? 0.7,
     // Cada proveedor llama distinto al tope de salida: MiniMax usa
     // max_completion_tokens y DeepSeek/Zen max_tokens (el otro lo ignora callado).
@@ -79,13 +111,18 @@ async function requestChat(key, options, stream) {
   options.signal?.addEventListener('abort', abortListener, { once: true });
 
   try {
-    const provider = getLlmProviderConfig();
+    const provider = effectiveProvider(options);
     const response = await fetch(provider.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${key.value}`,
-        ...(provider.extraHeaders || {})
+        ...(provider.extraHeaders || {}),
+        // QW-05: session por proyecto. Solo overridea si el provider ya
+        // declara el header (lane opencode); jamas se agrega a otros.
+        ...(provider.extraHeaders?.['x-opencode-session'] !== undefined && options.sessionId
+          ? { 'x-opencode-session': options.sessionId }
+          : {})
       },
       body: buildBody(options, stream),
       signal: controller.signal
@@ -165,14 +202,116 @@ async function* sseEventsWithTtft(response, ttftMs) {
 }
 
 // onDelta(texto, acumulado). Devuelve { text, model, aborted?, partial? }.
+// M-07: failover 2 etapas + sticky.
+// Etapa 1 = reintento mismo modelo (transitorio: timeout/5xx/vacío).
+// Etapa 2 = failover a otro modelo (con evento api_stage explícito).
+// Sticky: el modelo que funcionó va primero por scope (TTL 10min).
+export const STICKY_MODEL_TTL_MS = 10 * 60 * 1000;
+const stickyByScope = new Map();
+
+export function markStickyModel(scope, model) {
+  if (scope && model) {
+    stickyByScope.set(String(scope), { model: String(model), at: Date.now() });
+  }
+}
+
+export function stickyModelFor(scope, models) {
+  const entry = stickyByScope.get(String(scope));
+  if (!entry || Date.now() - entry.at > STICKY_MODEL_TTL_MS) {
+    if (entry) {
+      stickyByScope.delete(String(scope));
+    }
+    return null;
+  }
+  return (models || []).includes(entry.model) ? entry.model : null;
+}
+
+export function orderModelsSticky(models, scope) {
+  const list = [...(models || [])];
+  const sticky = stickyModelFor(scope, list);
+  if (sticky) {
+    return [sticky, ...list.filter((m) => m !== sticky)];
+  }
+  return list;
+}
+
+export function __resetSticky() {
+  stickyByScope.clear();
+}
+
+function emitStage(options, payload) {
+  try {
+    options?.emit?.({ type: 'api_stage', scope: options?.scope, ...payload });
+  } catch {
+    // Telemetría caída no interrumpe el turno.
+  }
+}
+
+// E-14: failover entre proveedores — si el activo se agota (todas sus
+// keys/modelos), se sigue con el siguiente con llaves (orden llm.failover).
+// Cada proveedor usa SUS modelos. options.noFailover lo desactiva (tests).
+async function withProviderFailover(kind, keyRing, options, single, onDelta) {
+  const activeId = getLlmProvider();
+  const chain = [{ providerId: activeId, ring: keyRing, models: options.models || getLlmModels() }];
+  if (!options.noFailover) {
+    for (const link of failoverRings()) {
+      if (link.providerId === activeId) {
+        continue;
+      }
+      chain.push({ providerId: link.providerId, ring: link.ring, models: getLlmModelsFor(link.providerId) });
+    }
+  }
+  const usable = chain.filter((link) => link.models.length > 0 && link.ring?.hasKeys?.());
+  if (usable.length === 0) {
+    // Z-01: contrato histórico (tests + callers esperan este mensaje).
+    throw new Error(`No ${getLlmProviderConfig().label} keys configured for ${options.scope}.`);
+  }
+  let lastError = null;
+  for (const [i, link] of chain.entries()) {
+    if (link.models.length === 0 || !link.ring?.hasKeys?.()) {
+      continue;
+    }
+    if (i > 0) {
+      emitStage(options, {
+        stage: 2, provider: link.providerId, fromProvider: chain[i - 1].providerId,
+        reason: lastError ? String(lastError.message || lastError).slice(0, 160) : 'failover de proveedor'
+      });
+    }
+    try {
+      const opts = { ...options, providerId: link.providerId, models: link.models };
+      if (kind === 'stream') {
+        return await single(link.ring, opts, onDelta);
+      }
+      return await single(link.ring, opts);
+    } catch (error) {
+      lastError = error;
+      if (options.signal?.aborted) {
+        throw error;
+      }
+    }
+  }
+  throw lastError || new Error('sin proveedores disponibles');
+}
+
 export async function streamChat(keyRing, options, onDelta) {
+  return withProviderFailover('stream', keyRing, options || {}, streamChatSingle, onDelta);
+}
+
+export async function completeChat(keyRing, options) {
+  return withProviderFailover('complete', keyRing, options || {}, completeChatSingle);
+}
+
+async function streamChatSingle(keyRing, options, onDelta) {
   if (!keyRing.hasKeys()) {
     throw new Error(`No ${getLlmProviderConfig().label} keys configured for ${options.scope}.`);
   }
-  const models = options.models || getLlmModels();
+  const models = orderModelsSticky(options.models || getLlmModels(), options.scope);
   let lastError = null;
 
-  for (const model of models) {
+  for (const [modelIdx, model] of models.entries()) {
+    if (modelIdx > 0) {
+      emitStage(options, { stage: 2, model, from: models[modelIdx - 1], reason: lastError ? String(lastError.message || lastError).slice(0, 160) : 'rotación' });
+    }
     if (options.signal?.aborted) {
       // Barge-in: el usuario ya cortó. No se gasta una llamada ni se reporta
       // como falla (antes salía "stream vacío" y un toast de error).
@@ -187,6 +326,7 @@ export async function streamChat(keyRing, options, onDelta) {
       const startTime = Date.now();
       let emitted = '';
       const filter = createThinkFilter();
+      let streamUsage = null;
       try {
         const response = await requestChat(key, { ...options, model }, true);
         const ttftMs = Number(options.ttftMs || 0);
@@ -194,6 +334,9 @@ export async function streamChat(keyRing, options, onDelta) {
         for await (const event of events) {
           if (options.signal?.aborted) {
             break;
+          }
+          if (event?.usage && typeof event.usage === 'object') {
+            streamUsage = event.usage; // QW-05: el ultimo chunk trae usage
           }
           const rawDelta = event?.choices?.[0]?.delta?.content || '';
           if (!rawDelta) {
@@ -215,17 +358,25 @@ export async function streamChat(keyRing, options, onDelta) {
           // reintenta y luego se prueba el siguiente modelo.
           lastError = new Error(`${getLlmProviderConfig().label} ${model} devolvió stream vacío.`);
           keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
+          emitStage(options, { stage: 1, model, reason: 'stream vacío, reintento mismo modelo' });
           continue;
         }
         keyRing.reportSuccess(key);
+        markStickyModel(options.scope, model);
+        // E-21: metering (tokens/costo QW-05 → ledger vía sink).
+        try {
+          const _u = parseUsage({ usage: streamUsage });
+          emitUsage({ kind: 'llm', provider: options.providerId || null, model, scope: options.scope, tokens: _u?.tokens ?? null, cost: _u?.cost ?? null });
+        } catch { /* metering caído */ }
         keyRing.logKey('api_call_success', {
           scope: options.scope,
           model,
           keyId: key.id,
           elapsedMs: Date.now() - startTime,
-          streamed: true
+          streamed: true,
+          ...(parseUsage({ usage: streamUsage }) ? { usage: parseUsage({ usage: streamUsage }) } : {})
         });
-        return { text: emitted, model };
+        return { text: emitted, model, usage: parseUsage({ usage: streamUsage }) };
       } catch (error) {
         lastError = error;
         if (options.signal?.aborted) {
@@ -276,14 +427,17 @@ export async function streamChat(keyRing, options, onDelta) {
 }
 
 // Llamada no-streaming (router/observador/reflexión). Devuelve texto limpio.
-export async function completeChat(keyRing, options) {
+async function completeChatSingle(keyRing, options) {
   if (!keyRing.hasKeys()) {
     throw new Error(`No ${getLlmProviderConfig().label} keys configured for ${options.scope}.`);
   }
-  const models = options.models || getLlmModels();
+  const models = orderModelsSticky(options.models || getLlmModels(), options.scope);
   let lastError = null;
 
-  for (const model of models) {
+  for (const [modelIdx, model] of models.entries()) {
+    if (modelIdx > 0) {
+      emitStage(options, { stage: 2, model, from: models[modelIdx - 1], reason: lastError ? String(lastError.message || lastError).slice(0, 160) : 'rotación' });
+    }
     for (let attempt = 0; attempt < Math.max(2, keyRing.size()); attempt += 1) {
       const key = keyRing.acquire();
       if (!key) {
@@ -302,17 +456,24 @@ export async function completeChat(keyRing, options) {
         if (!text) {
           lastError = new Error(`${getLlmProviderConfig().label} ${model} devolvió respuesta vacía.`);
           keyRing.logKey('api_call_empty_response', { scope: options.scope, model, keyId: key.id });
+          emitStage(options, { stage: 1, model, reason: 'respuesta vacía, reintento mismo modelo' });
           continue;
         }
         keyRing.reportSuccess(key);
+        markStickyModel(options.scope, model);
+        try {
+          const _u = parseUsage(body);
+          emitUsage({ kind: 'llm', provider: options.providerId || null, model, scope: options.scope, tokens: _u?.tokens ?? null, cost: _u?.cost ?? null });
+        } catch { /* metering caído */ }
         keyRing.logKey('api_call_success', {
           scope: options.scope,
           model,
           keyId: key.id,
           elapsedMs: Date.now() - startTime,
-          tokens: body?.usage?.total_tokens || null
+          tokens: body?.usage?.total_tokens || null,
+          ...(parseUsage(body) ? { usage: parseUsage(body) } : {})
         });
-        return { text, model };
+        return { text, model, usage: parseUsage(body) };
       } catch (error) {
         lastError = error;
         if (!isOwnTimeout(error)) {

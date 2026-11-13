@@ -1,5 +1,6 @@
 import 'dotenv/config';
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import agentConfig from '../agents.config.json' with { type: 'json' };
@@ -37,18 +38,18 @@ export const MINIMAX_MODELS = uniqueModelList([
 // Los dos hablan el formato de OpenAI (mismo /chat/completions, mismo Bearer,
 // misma forma del parámetro `thinking`), así que el cliente es uno solo y lo
 // único que cambia es a dónde apunta, con qué clave y con qué modelos.
-export const OPENCODE_API_URL = process.env.OPENCODE_API_URL || 'https://opencode.ai/zen/go/v1/chat/completions';
-// Pool de rotación Zen (costo 0). Orden por TTFT 2026-11-08 15:00
-// (beam = elección de Tito + 1.4s; deepseek 1.36s; minimax 1.9s).
+export const OPENCODE_API_URL = process.env.OPENCODE_API_URL || 'https://opencode.ai/inference/go/openai/v1/chat/completions';
+// Pool de rotación Go (QW-01 2026-11-10): pagos primero por TTFT/latencia
+// (deepseek 1.36s, qwen ~1.5s); free al final, fuera del camino crítico.
 // OJO: varios modelos se suicidan con max chico (length@0 con 30,
 // crouton también con 220): el tope de voz es 1000, no 220.
 export const OPENCODE_CATALOG = [
-  'beam-free',
   'deepseek-v4.1-flash',
-  'minimax-m3.1-flash',
   'qwen3.8-flash',
-  'iceman-contributor-free',
+  'minimax-m3.1-flash',
   'glm-5.3-flash',
+  'iceman-contributor-free',
+  'beam-free',
   'crouton-alpha-free'
 ];
 export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || OPENCODE_CATALOG[0];
@@ -107,7 +108,7 @@ export const LLM_PROVIDERS = {
   },
   opencode: {
     id: 'opencode',
-    label: 'opencode Zen',
+    label: 'opencode Go',
     url: OPENCODE_API_URL,
     envKey: 'OPENCODE_API_KEY',
     settingKey: 'llm.opencodeKey',
@@ -171,6 +172,20 @@ export function collectApiKeys() {
   const single = (process.env.MINIMAX_API_KEY || '').trim();
 
   return [...new Set(single ? [...fromList, single] : fromList)];
+}
+
+// QW-05: session estable por proyecto (Go pide session ID estable
+// para ruteo + prompt-cache; acá la unidad es el PROYECTO, E-07). Determinístico (UUIDv5 sobre
+// company/slug): estable entre restarts, distinto entre proyectos, sin storage.
+const SESSION_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
+export function projectSessionId(companyId, slug) {
+  const name = `equipo:${companyId || 'local'}:${slug || 'general'}`;
+  const ns = Buffer.from(SESSION_NAMESPACE.replace(/-/g, ''), 'hex');
+  const hash = createHash('sha1').update(Buffer.concat([ns, Buffer.from(name, 'utf8')])).digest();
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 export function uniqueModelList(models) {

@@ -1,4 +1,4 @@
-import { GROQ_STT_MODEL, WHISPER_URL, getDeepgramKey, getGroqKey, getSttLanguage, getSttMinConfidence, getSttOrder, getSttProvider, getWhisperModel, isSttOrderSet } from './settings.js';
+import { GROQ_STT_MODEL, WHISPER_URL, getDeepgramKey, getGroqKey, getParakeetUrl, getSttLanguage, getSttMinConfidence, getSttOrder, getSttProvider, getWhisperModel, getWhisperUrl, isSttOrderSet } from './settings.js';
 import { transcribeDeepgram } from './deepgram.js';
 import { telemetry } from './telemetry.js';
 
@@ -57,7 +57,7 @@ export function buildWavBase64FromPcmChunks(chunks, sampleRate = 16000) {
 
 export async function whisperHealthy() {
   try {
-    const response = await fetch(`${WHISPER_URL}/health`, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(`${getWhisperUrl()}/health`, { signal: AbortSignal.timeout(1500) });
     return response.ok;
   } catch {
     return false;
@@ -102,7 +102,8 @@ export function __resetParakeetHealth() {
   parakeetDownAt = 0;
 }
 
-export async function isParakeetAvailable(baseUrl = PARAKEET_URL) {
+export async function isParakeetAvailable(baseUrl = null) {
+  baseUrl = baseUrl || getParakeetUrl();
   if (parakeetDownAt && Date.now() - parakeetDownAt < PARAKEET_HEALTH_TTL_MS) {
     return false;
   }
@@ -144,7 +145,8 @@ export async function postTranscribe(url, wavBase64, { withModel = false, timeou
 
 // Motores locales por separado (direccionables por stt.order). Parakeet:
 // si el health dice caído se skipea sin pagar el intento.
-export async function transcribeParakeet(wavBase64, { parakeetUrl = PARAKEET_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS } = {}) {
+export async function transcribeParakeet(wavBase64, { parakeetUrl = null, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS } = {}) {
+  parakeetUrl = parakeetUrl || getParakeetUrl();
   if (!(await isParakeetAvailable(parakeetUrl))) {
     throw new Error('Parakeet down (health).');
   }
@@ -154,11 +156,12 @@ export async function transcribeParakeet(wavBase64, { parakeetUrl = PARAKEET_URL
 // Whisper-tiny-lazy: respaldo local (:7789, venv dedicado, ~53M en idle).
 // Si está caído, el puerto cerrado rechaza en ~1ms SIN reintentos ni
 // sleeps — el skip es gratis.
-export async function transcribeWhisper(wavBase64, { whisperUrl = WHISPER_URL, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
+export async function transcribeWhisper(wavBase64, { whisperUrl = null, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
+  whisperUrl = whisperUrl || getWhisperUrl();
   return postTranscribe(whisperUrl, wavBase64, { withModel: true, timeoutMs: whisperTimeoutMs });
 }
 
-export async function transcribeLocal(wavBase64, { parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
+export async function transcribeLocal(wavBase64, { parakeetUrl = null, whisperUrl = null, parakeetTimeoutMs = PARAKEET_TIMEOUT_MS, whisperTimeoutMs = STT_TIMEOUT_MS } = {}) {
   // Wrapper legacy: Parakeet → Whisper. Los tests viejos y el path sin
   // order lo siguen usando; el path order llama a cada motor directo.
   try {
@@ -175,7 +178,7 @@ export async function transcribeLocal(wavBase64, { parakeetUrl = PARAKEET_URL, w
 // Parcial de streaming (transcriber.js): SOLO motor local rápido, NUNCA
 // tira — cualquier error o vacío devuelve ''. Los parciales son best-
 // effort: el turno final no los espera ni depende de ellos.
-export async function transcribePartial(wavBase64, { engine = null, parakeetUrl = PARAKEET_URL, whisperUrl = WHISPER_URL } = {}) {
+export async function transcribePartial(wavBase64, { engine = null, parakeetUrl = null, whisperUrl = null } = {}) {
   try {
     const want = engine || firstLocalEngine();
     const res = want === 'whisper'

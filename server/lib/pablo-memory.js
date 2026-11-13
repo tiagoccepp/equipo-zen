@@ -44,6 +44,20 @@ export function memoryDirFor(companySlug) {
   return join(baseRoot(), slug, 'memoria');
 }
 
+// E-02: capa por proyecto — <base>/<empresa>/<proyecto>/memoria. La empresa
+// trae identidad/base; el proyecto suma overlay (PROJECT MEMORY/USER).
+export function projectMemoryDirFor(companySlug, projectSlug) {
+  const company = String(companySlug || '').trim();
+  const project = String(projectSlug || '').trim();
+  if (!company || company.includes('/') || company.includes('\\') || company.includes('..')) {
+    throw new Error(`Empresa inválida: ${companySlug}`);
+  }
+  if (!project || project.includes('/') || project.includes('\\') || project.includes('..')) {
+    throw new Error(`Proyecto inválido: ${projectSlug}`);
+  }
+  return join(baseRoot(), company, project, 'memoria');
+}
+
 function cacheGet(key) {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
@@ -71,21 +85,32 @@ function readFileCached(absPath) {
 
 // Reads one memory file. Off-allowlist names or missing files
 // return null, never throw.
-export function readMemoryFile(companySlug, name) {
+export function readMemoryFile(companySlug, name, projectSlug = null) {
   const clean = String(name || '').trim();
   if (!ALLOWLIST.has(clean)) {
     return null;
+  }
+  // Overlay: el proyecto gana; si no tiene el archivo, cae a empresa.
+  if (projectSlug) {
+    try {
+      const scoped = readFileCached(join(projectMemoryDirFor(companySlug, projectSlug), clean));
+      if (scoped !== null && scoped !== undefined) {
+        return scoped;
+      }
+    } catch {
+      // Slug raro: se ignora el overlay, vale empresa.
+    }
   }
   return readFileCached(join(memoryDirFor(companySlug), clean));
 }
 
 // Writes one memory file (creates the dir). Invalid name throws.
-export function writeMemoryFile(companySlug, name, content) {
+export function writeMemoryFile(companySlug, name, content, projectSlug = null) {
   const clean = String(name || '').trim();
   if (!ALLOWLIST.has(clean) || clean.includes('/') || clean.includes('..')) {
     throw new Error(`Nombre de memoria inválido: ${name}`);
   }
-  const dir = memoryDirFor(companySlug);
+  const dir = projectSlug ? projectMemoryDirFor(companySlug, projectSlug) : memoryDirFor(companySlug);
   mkdirSync(dir, { recursive: true });
   const abs = join(dir, clean);
   writeFileSync(abs, String(content ?? ''), 'utf-8');
@@ -127,7 +152,7 @@ export function readDaily(companySlug, stamp = todayStamp()) {
 // PER-PART trimming (D1), back to front: the daily drops first
 // (also capped to the DAILY_TAIL_MAX_CHARS tail), SOUL identity
 // last. Never a blind slice that beheads what matters.
-export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUDGET } = {}) {
+export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUDGET, projectSlug = null } = {}) {
   const budget = Math.max(0, Number(maxChars) || 0);
   if (budget <= 0) {
     return '';
@@ -136,6 +161,10 @@ export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUD
   const user = readMemoryFile(companySlug, 'USER.md') || '';
   const memory = readMemoryFile(companySlug, 'MEMORY.md') || '';
   const daily = readDaily(companySlug) || '';
+  // E-02: overlay del proyecto (aislado por proyecto, no se mezcla).
+  const pUser = projectSlug ? readMemoryFile(companySlug, 'USER.md', projectSlug) : null;
+  const pMemory = projectSlug ? readMemoryFile(companySlug, 'MEMORY.md', projectSlug) : null;
+  const projectScoped = (v) => v !== null && v !== undefined;
   const blocks = [];
   if (soul.trim()) {
     blocks.push({ head: 'PABLO SOUL (who I am, how I talk):', body: soul.trim() });
@@ -148,6 +177,13 @@ export function renderMemorySection(companySlug, { maxChars = DEFAULT_RENDER_BUD
   }
   if (daily.trim()) {
     blocks.push({ head: `PABLO TODAY (${todayStamp()}, daily log):`, body: daily.trim().slice(-DAILY_TAIL_MAX_CHARS) });
+  }
+  // Overlay: solo si el proyecto tiene archivo PROPIO (distinto de empresa).
+  if (projectScoped(pUser) && pUser !== user && pUser.trim()) {
+    blocks.push({ head: `PROJECT USER (${projectSlug}, este proyecto):`, body: pUser.trim() });
+  }
+  if (projectScoped(pMemory) && pMemory !== memory && pMemory.trim()) {
+    blocks.push({ head: `PROJECT MEMORY (${projectSlug}, este proyecto):`, body: pMemory.trim() });
   }
   if (blocks.length === 0) {
     return '';

@@ -17,6 +17,7 @@
 // Si ves `host_swap_pressure` seguido: cerrá Browsers/gateway pesado o
 // agregá RAM — ningún keepalive compensa un box sin memoria libre.
 import { spawn } from 'node:child_process';
+import { getSplitMode, getSplitVps } from './settings.js';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,8 +33,15 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 // python3 del sistema (ahí solo viven parakeet/piper). Paths con homedir,
 // sin hardcodear /home/tito.
 const EQUIPO_SHARE = path.join(os.homedir(), '.local', 'share', 'equipo');
-const SUPERTONIC_BIN = path.join(EQUIPO_SHARE, 'supertonic-venv', 'bin', 'supertonic');
-const WHISPER_PYTHON = path.join(EQUIPO_SHARE, 'whisper-venv', 'bin', 'python');
+// E-25: rutas por plataforma (venv Windows = Scripts/*.exe).
+const IS_WIN = process.platform === 'win32';
+const SUPERTONIC_BIN = IS_WIN
+  ? path.join(EQUIPO_SHARE, 'supertonic-venv', 'Scripts', 'supertonic.exe')
+  : path.join(EQUIPO_SHARE, 'supertonic-venv', 'bin', 'supertonic');
+const WHISPER_PYTHON = IS_WIN
+  ? path.join(EQUIPO_SHARE, 'whisper-venv', 'Scripts', 'python.exe')
+  : path.join(EQUIPO_SHARE, 'whisper-venv', 'bin', 'python');
+const SYSTEM_PYTHON = IS_WIN ? 'python' : 'python3';
 
 export const SIDECARS = [
   {
@@ -41,14 +49,14 @@ export const SIDECARS = [
     health: process.env.PARAKEET_URL
       ? `${process.env.PARAKEET_URL}/health`
       : 'http://127.0.0.1:7790/health',
-    spawn: { cmd: 'python3', args: ['server/stt/parakeet_server.py'] }
+    spawn: { cmd: SYSTEM_PYTHON, args: ['server/stt/parakeet_server.py'] }
   },
   {
     name: 'piper',
     health: process.env.PIPER_URL
       ? `${process.env.PIPER_URL}/health`
       : 'http://127.0.0.1:7791/health',
-    spawn: { cmd: 'python3', args: ['server/tts/piper_server.py'] }
+    spawn: { cmd: SYSTEM_PYTHON, args: ['server/tts/piper_server.py'] }
   },
   {
     // Respaldo STT local (venv dedicado, lazy: WHISPER_PRELOAD=0). Espeja
@@ -78,6 +86,29 @@ export const SIDECARS = [
     }
   }
 ];
+
+// E-20: specs efectivas — en split, health apunta al VPS y NO hay spawn
+// (remotos, solo monitoreo). Lazy requires: sidecars.js no depende de
+// settings en import (tests sin store).
+export function sidecarSpecs() {
+  let split = false;
+  let vps = '';
+  try {
+    split = getSplitMode() === 'split';
+    vps = getSplitVps();
+  } catch {
+    split = false;
+  }
+  if (!split || !vps) {
+    return SIDECARS;
+  }
+  const ports = { parakeet: 7790, piper: 7791, whisper: 7789, supertonic: 7788 };
+  return SIDECARS.map((s) => ({
+    ...s,
+    health: `${vps}:${ports[s.name] || 80}/health`,
+    spawn: null
+  }));
+}
 
 export const HEALTH_TIMEOUT_MS = 1500;
 export const DOWN_STRIKES = 2;
@@ -440,7 +471,7 @@ function stopOwnChild(spec, handle, killFn, onTelemetry) {
 
 export function startSidecarWatchdog({
   intervalMs = 20000,
-  specs = SIDECARS,
+  specs = null,
   check = defaultCheck,
   spawnFn = defaultSpawnFn,
   // TV2 selectivo: getElected devuelve los nombres elegidos (default =
@@ -456,7 +487,8 @@ export function startSidecarWatchdog({
   // Aviso de swap 1 vez/hora si supera 80%. `false` lo apaga.
   swapWarn = true
 } = {}) {
-  const entries = specs.map((spec) => ({
+  const effective = specs || sidecarSpecs();
+  const entries = effective.map((spec) => ({
     spec,
     state: { status: 'unknown', downs: 0, restarts: [], lastSpawnAt: 0, consecutiveSpawns: 0 }
   }));
@@ -467,7 +499,7 @@ export function startSidecarWatchdog({
 
   const kaOpts = keepalive === false ? null
     : { intervalMs: KEEPALIVE_INTERVAL_MS, timeoutMs: KEEPALIVE_TIMEOUT_MS, ...(keepalive === true ? {} : keepalive) };
-  const parakeetSpec = kaOpts ? specs.find((s) => s.name === 'parakeet') : null;
+  const parakeetSpec = kaOpts ? effective.find((s) => s.name === 'parakeet') : null;
   const kaState = {
     lastAt: 0,
     failures: 0,

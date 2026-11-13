@@ -17,6 +17,13 @@ import { mountMotion, setSpeakingGlow } from './fx/motion.ts';
 import { mountPalette } from './fx/palette.ts';
 import { mountMesh } from './fx/mesh.ts';
 import { isTauri, tinvoke } from './lib/tauri.ts';
+import { renderRichMessage } from './lib/mermaid-inline.ts';
+import { HeardTurn, type AudioTag } from './lib/heard-text.ts';
+import { activeWord, buildCues } from './lib/karaoke.ts';
+import { defaultFigureQueue, upsertFigure, type Figure } from './lib/figures-view.ts';
+import { loadMermaidReal } from './lib/mermaid-inline.ts';
+import { WorkingEarcon } from './lib/working-earcon.ts';
+import { classifyInterruption, shouldCut } from './lib/turn-taking.ts';
 import {
   Client,
   apiJson,
@@ -144,6 +151,13 @@ function initViews(): void {
   });
   const hash = window.location.hash.replace(/^#\/?/, '') as ViewName;
   switchView(VIEW_ORDER.includes(hash) ? hash : 'console');
+  // Acciones del rail ("Manage"): navegan como si fueran tabs.
+  document.querySelectorAll<HTMLElement>('[data-goto]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const target = el.dataset.goto as ViewName;
+      if (VIEW_ORDER.includes(target)) switchView(target);
+    });
+  });
 }
 
 function addMsg(who: string, text: string, cls = '', title = ''): void {
@@ -155,13 +169,188 @@ function addMsg(who: string, text: string, cls = '', title = ''): void {
   const b = document.createElement('b');
   b.textContent = who;
   div.appendChild(b);
-  div.appendChild(document.createTextNode(text));
+  // QW-06: bloques ```mermaid se dibujan inline; sin fence, texto plano igual que antes.
+  renderRichMessage(div, text);
   streamEl.appendChild(div);
   while (streamEl.childElementCount > 80) {
     streamEl.firstElementChild?.remove();
   }
   streamEl.scrollTop = streamEl.scrollHeight;
 }
+
+// QW-07: heard-text progresivo — el texto se revela al ritmo del audio.
+// Clave por turno (el gate serializa el audio: un turno suena a la vez).
+const HEARD_GRACE_MS = 1500;
+const heardTurns = new Map<string, HeardTurn>();
+const heardBubbles = new Map<string, HTMLElement>();
+const heardFull = new Map<string, string>();
+const heardAgent = new Map<string, string>();
+const heardGrace = new Map<string, number>();
+const heardRevealed = new Map<string, number>();
+const heardDone = new Set<string>();
+const heardKey = (turnId: string | undefined, agentId: string): string =>
+  turnId || `agent:${agentId}`;
+
+function trimStream(): void {
+  while (streamEl.childElementCount > 80) {
+    streamEl.firstElementChild?.remove();
+  }
+  streamEl.scrollTop = streamEl.scrollHeight;
+}
+
+// M-10: carril efímero — zona viva sobre el stream (máx 3 nodos, rota).
+function ephemeralHost(): HTMLElement {
+  let zone = document.getElementById('ephemeral');
+  if (!zone) {
+    zone = document.createElement('div');
+    zone.id = 'ephemeral';
+    zone.className = 'ephemeral';
+    zone.setAttribute('aria-label', 'Actividad en vivo');
+    streamEl.parentElement?.insertBefore(zone, streamEl);
+  }
+  while (zone.childElementCount >= 3) {
+    zone.firstElementChild?.remove();
+  }
+  return zone as HTMLElement;
+}
+
+function heardShell(key: string, agentId: string): HTMLElement {
+  let div = heardBubbles.get(key);
+  if (div) return div;
+  document.getElementById('stream-empty')?.remove();
+  div = document.createElement('div');
+  div.className = 'msg';
+  const b = document.createElement('b');
+  b.textContent = agentName(agentId).toLowerCase();
+  div.appendChild(b);
+  streamEl.appendChild(div);
+  while (streamEl.childElementCount > 80) {
+    streamEl.firstElementChild?.remove();
+  }
+  streamEl.scrollTop = streamEl.scrollHeight;
+  heardBubbles.set(key, div);
+  return div;
+}
+
+function heardFinalize(key: string): void {
+  stopKaraoke(key);
+  const timer = heardGrace.get(key);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    heardGrace.delete(key);
+  }
+  const agentId = heardAgent.get(key) || '';
+  const full = stripGestoTags(heardFull.get(key) || turnText.get(agentId) || '');
+  const turn = heardTurns.get(key);
+  turn?.finalize(full);
+  const div = heardBubbles.get(key);
+  if (div) {
+    if (full.trim()) {
+      // Re-render final: reemplaza el revelado parcial (los diagramas
+      // mermaid aparecen acá, no a mitad de una oración).
+      div.innerHTML = '';
+      const b = document.createElement('b');
+      b.textContent = agentName(agentId).toLowerCase();
+      div.appendChild(b);
+      renderRichMessage(div, full);
+    } else {
+      div.remove();
+    }
+  } else if (full.trim()) {
+    // Sin audio: texto completo de una vez, igual que antes.
+    addMsg(agentName(agentId).toLowerCase(), full);
+  }
+  heardTurns.delete(key);
+  heardBubbles.delete(key);
+  heardFull.delete(key);
+  heardAgent.delete(key);
+  heardRevealed.delete(key);
+  heardDone.add(key);
+  if (agentId) turnText.delete(agentId);
+}
+
+// F-08: karaoke — timer por turno (uno vivo a la vez).
+const heardKaraoke = new Map<string, number>();
+function stopKaraoke(key: string): void {
+  const timer = heardKaraoke.get(key);
+  if (timer !== undefined) {
+    window.clearInterval(timer);
+    heardKaraoke.delete(key);
+  }
+  const div = heardBubbles.get(key);
+  div?.querySelectorAll('.k-on').forEach((el) => el.classList.remove('k-on'));
+}
+
+function heardChunkStarted(tag: unknown): void {
+  const t = tag as AudioTag | null;
+  if (!t || !Number.isFinite(t.sIdx)) return;
+  const key = heardKey(t.turnId || undefined, t.agentId);
+  let turn = heardTurns.get(key);
+  if (!turn || turn.isEnded) return;
+  workingEarcon.cancel(t.agentId); // Sonó voz: fuera el pendiente.
+  const fresh = turn.observe(t);
+  if (fresh.length === 0) return;
+  const div = heardShell(key, t.agentId);
+  let n = heardRevealed.get(key) || 0;
+  const karaokeable = typeof t.sDurMs === 'number' && t.sDurMs > 0;
+  for (const sentence of fresh) {
+    const isCurrent = karaokeable && sentence === fresh[fresh.length - 1];
+    if (isCurrent) {
+      startKaraoke(key, div, sentence, { sDurMs: t.sDurMs as number, sTimes: t.sText && t.sTimes?.length === sentence.split(/\s+/).length ? t.sTimes : undefined }, n > 0);
+    } else {
+      div.appendChild(document.createTextNode(n > 0 ? ` ${sentence}` : sentence));
+    }
+    n += 1;
+  }
+  heardRevealed.set(key, n);
+  streamEl.scrollTop = streamEl.scrollHeight;
+}
+
+function startKaraoke(key: string, div: HTMLElement, sentence: string, tag: { sDurMs: number; sTimes?: number[] }, leadSpace: boolean): void {
+  stopKaraoke(key);
+  const cue = buildCues(sentence, { durMs: tag.sDurMs, sTimes: tag.sTimes });
+  if (cue.words.length === 0) {
+    div.appendChild(document.createTextNode(leadSpace ? ` ${sentence}` : sentence));
+    return;
+  }
+  const wrap = document.createElement('span');
+  wrap.className = 'k-cue';
+  const spans: HTMLElement[] = cue.words.map((w) => {
+    const s = document.createElement('span');
+    s.className = 'k-w';
+    s.textContent = w;
+    wrap.appendChild(s);
+    const gap = document.createTextNode(' ');
+    wrap.appendChild(gap);
+    return s;
+  });
+  if (leadSpace) div.appendChild(document.createTextNode(' '));
+  div.appendChild(wrap);
+  const t0 = performance.now();
+  let last = -2;
+  const timer = window.setInterval(() => {
+    const idx = activeWord(cue, performance.now() - t0);
+    if (idx !== last) {
+      last = idx;
+      spans.forEach((s, i) => s.classList.toggle('k-on', i === idx));
+    }
+    if (idx === -1 && performance.now() - t0 > cue.durMs + 600) {
+      stopKaraoke(key);
+    }
+  }, 100);
+  heardKaraoke.set(key, timer);
+}
+
+// QW-09: earcon "trabajando" si en ~1s no hubo voz (solo con voz prendida).
+const workingEarcon = new WorkingEarcon(
+  (fn, ms) => window.setTimeout(fn, ms),
+  (h) => window.clearTimeout(h as number),
+  () => {
+    if (voiceOn) {
+      voiceOut.playWorkingEarcon();
+    }
+  }
+);
 
 // ── Voz: salida + entrada continua ───────────────────────────────────
 const voiceOut = new VoiceOut();
@@ -275,15 +464,22 @@ function cancelPendingCut(): void {
 }
 
 /** Corte dirigido: audio en vuelo + turnos pensando. Una vez por turno. */
+// M-06: hint semántico del corte (qué dijo el usuario al cortar).
+function cutHint(): { cls: string; text: string } {
+  const text = browserSpeech.latestUtterance().slice(0, 120);
+  return { cls: classifyInterruption(text), text };
+}
+
 function cutAgent(): void {
   if (interruptSentForTurn) return;
   pruneActiveTurns();
   if (!agentSpeaking() && activeTurns.size === 0) return;
+  const hint = cutHint();
   const targets = interruptTargets();
   if (targets.length === 0) {
-    client.interrupt(undefined, undefined);
+    client.interrupt(undefined, undefined, hint);
   } else {
-    for (const t of targets) client.interrupt(t.turnId, t.agentId);
+    for (const t of targets) client.interrupt(t.turnId, t.agentId, hint);
   }
   noteLocalInterrupt();
   interruptSentForTurn = true;
@@ -297,6 +493,8 @@ function cutAgent(): void {
 
 function maybePlaybackComplete(): void {
   if (audioSegment?.endReceived && !voiceOut.isPlaying) {
+    // QW-07: terminó de sonar → re-render final con el texto completo.
+    heardFinalize(heardKey(audioSegment.turnId, audioSegment.agentId));
     client.playbackComplete(audioSegment.turnId, audioSegment.agentId);
     if (speakingAgent === audioSegment.agentId) {
       speakingAgent = '';
@@ -309,6 +507,11 @@ function maybePlaybackComplete(): void {
 
 voiceOut.onDrained = () => {
   maybePlaybackComplete();
+};
+
+// QW-07: cada chunk agendado revela su oración en la burbuja del turno.
+voiceOut.onChunkStart = (tag: unknown) => {
+  heardChunkStarted(tag);
 };
 
 const liveMic = new LiveMic({
@@ -349,15 +552,46 @@ const liveMic = new LiveMic({
       cutAgent();
       return;
     }
-    if (ms >= CUT_OVER_AUDIO_MS) {
+    // M-06: turn-taking semántico. Backchannel (mm, sí, dale) = NO cortar:
+    // el agente sigue y el turno del usuario fluye normal. Contenido o stop
+    // = cortar. Incierto = esperar texto hasta 600ms (fail-closed: corta).
+    const clsNow = classifyInterruption(browserSpeech.latestUtterance());
+    if (clsNow === 'backchannel') {
+      return;
+    }
+    if (shouldCut(clsNow) && ms >= CUT_OVER_AUDIO_MS) {
       cutAgent();
       return;
     }
+    if (shouldCut(clsNow)) {
+      cancelPendingCut();
+      pendingCutTimer = window.setTimeout(() => {
+        pendingCutTimer = null;
+        if (liveMic.userSpeaking) cutAgent();
+      }, CUT_OVER_AUDIO_MS - ms);
+      return;
+    }
     cancelPendingCut();
-    pendingCutTimer = window.setTimeout(() => {
-      pendingCutTimer = null;
-      if (liveMic.userSpeaking) cutAgent();
-    }, CUT_OVER_AUDIO_MS - ms);
+    let waits = 0;
+    const waitSemantic = (): void => {
+      if (interruptSentForTurn || !liveMic.userSpeaking) {
+        pendingCutTimer = null;
+        return;
+      }
+      const cls = classifyInterruption(browserSpeech.latestUtterance());
+      if (cls === 'backchannel') {
+        pendingCutTimer = null;
+        return; // era filler: no se corta.
+      }
+      waits += 1;
+      if (shouldCut(cls) || waits >= 4 || ms + waits * 150 >= CUT_OVER_AUDIO_MS) {
+        pendingCutTimer = null;
+        cutAgent();
+        return;
+      }
+      pendingCutTimer = window.setTimeout(waitSemantic, 150);
+    };
+    pendingCutTimer = window.setTimeout(waitSemantic, 150);
   },
   onTurnStats: (stats) => {
     // §3a: se guardan; salen al resolver la gracia (con reopened + hintEnd).
@@ -416,15 +650,20 @@ const liveMic = new LiveMic({
     // que interrumpir "no funcionaba". Si la confirmación ya cortó,
     // no duplicar.
     if (interruptSentForTurn) return;
+    // M-06: si ya se escucha un backchannel claro, no cortar.
+    if (classifyInterruption(browserSpeech.latestUtterance()) === 'backchannel') {
+      return;
+    }
     cancelPendingCut();
     interruptSentForTurn = true;
     turnHadInterrupt = true;
     pruneActiveTurns();
     const targets = interruptTargets();
+    const hint2 = cutHint();
     if (targets.length === 0) {
-      client.interrupt(audioSegment?.turnId, audioSegment?.agentId);
+      client.interrupt(audioSegment?.turnId, audioSegment?.agentId, hint2);
     } else {
-      for (const t of targets) client.interrupt(t.turnId, t.agentId);
+      for (const t of targets) client.interrupt(t.turnId, t.agentId, hint2);
     }
     noteLocalInterrupt();
     voiceOut.flush();
@@ -478,6 +717,77 @@ const visualStates = new Map<string, AgentVisualState>();
 const agents = new Map<string, Agent>();
 const working = new Set<string>();
 
+// ── Rail de sesión: roster y estado por agente (chrome denso) ─────────
+// El rail es la fuente de "quién está en la sala y qué hace"; el orbe sigue
+// siendo la presencia. Si el rail no existe (HTML viejo), todo esto no-op.
+const RAIL_STATE: Record<AgentVisualState, string> = {
+  idle: 'idle',
+  escuchando: 'listening',
+  pensando: 'thinking',
+  trabajando: 'working',
+  hablando: 'speaking'
+};
+
+function railState(agentId: string, state: AgentVisualState): void {
+  const row = document.querySelector(`#rail-people [data-agent-id="${agentId}"]`) as HTMLElement | null;
+  if (!row) return;
+  const label = RAIL_STATE[state] || 'idle';
+  row.dataset.state = label;
+  const st = row.querySelector('.st');
+  if (st) st.textContent = label;
+}
+
+function refreshRuntime(): void {
+  const ctxWorking = document.getElementById('ctx-working');
+  if (ctxWorking) ctxWorking.textContent = String(working.size);
+}
+
+function setCtxMode(mode: string): void {
+  const el = document.getElementById('ctx-mode');
+  if (el) el.textContent = mode;
+}
+
+// Estado visible de un control del rail. Nunca toca textContent del botón
+// (eso borraba label/estado en el chrome viejo).
+function ctlState(btn: HTMLElement | null | undefined, label: string): void {
+  const st = btn?.querySelector('.ctl-state');
+  if (st) st.textContent = label;
+  btn?.setAttribute('data-value', label);
+}
+
+function renderRail(): void {
+  const host = document.getElementById('rail-people');
+  if (!host) return;
+  const list = [...agents.values()].slice(0, 8);
+  const count = document.getElementById('rail-count');
+  if (count) count.textContent = String(agents.size);
+  const ctxAgents = document.getElementById('ctx-agents');
+  if (ctxAgents) ctxAgents.textContent = String(agents.size);
+  host.innerHTML = '';
+  for (const a of list) {
+    const state = RAIL_STATE[visualStates.get(a.id) || 'idle'];
+    const row = document.createElement('div');
+    row.className = 'rail-row';
+    row.dataset.agentId = a.id;
+    row.dataset.state = state;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const who = document.createElement('div');
+    who.className = 'who';
+    const name = document.createElement('b');
+    name.textContent = a.name;
+    const role = document.createElement('span');
+    role.textContent = a.role || 'agent';
+    who.append(name, role);
+    const st = document.createElement('span');
+    st.className = 'st';
+    st.textContent = state;
+    row.append(dot, who, st);
+    host.append(row);
+  }
+  refreshRuntime();
+}
+
 function restState(agentId: string): AgentVisualState {
   if (working.has(agentId)) return 'trabajando';
   if (voiceSession) return 'escuchando';
@@ -488,6 +798,7 @@ function setVisual(agentId: string, state: AgentVisualState): void {
   // V3: el estado solo modula vibración/energía sutil, NUNCA la figura.
   visualStates.set(agentId, state);
   field.setAgentState(agentId, state);
+  railState(agentId, state);
 }
 // Debug V3 (auditoría visual, espejo de window.__pablo): permite forzar
 // estados desde consola/e2e para verificar orbe-siempre-orbe.
@@ -547,6 +858,7 @@ function layoutOrbs(): void {
   field.setAgents(orbAgents);
   field.setSlots(slots);
   field.start();
+  renderRail();
 }
 
 window.addEventListener('resize', layoutOrbs);
@@ -605,11 +917,21 @@ const client = new Client({
     setConn('live');
     layoutOrbs();
   },
-  onUserText: (text, source) => {
+  onUserText: (text, source, turnId) => {
     // Los avisos del sistema (ej. spawn_agent) llegaban como burbuja YOU:
     // se pintan como sys sin tocar el estado de trabajo.
     if (source === 'system') {
       addMsg('system', text, 'sys');
+      return;
+    }
+    // Eco del turno optimista: ya está pintado, no duplicar.
+    if (turnId && optimisticTurns.has(turnId)) {
+      optimisticTurns.delete(turnId);
+      markUserTurnRendered(turnId);
+      return;
+    }
+    // Dedupe defensivo ante ecos/entregas repetidas del mismo turnId.
+    if (markUserTurnRendered(turnId)) {
       return;
     }
     addMsg('you', text, 'me');
@@ -621,6 +943,11 @@ const client = new Client({
   },
   onAgentStart: (agentId, turnId) => {
     turnText.set(agentId, '');
+    // QW-07: estado de revelado por turno (muere en heardFinalize).
+    const hkey = heardKey(turnId, agentId);
+    heardDone.delete(hkey);
+    heardTurns.set(hkey, new HeardTurn());
+    workingEarcon.arm(agentId);
     if (turnId) activeTurns.set(turnId, { agentId, at: Date.now() });
     // Pensamiento silencioso: vibración leve. Cuando rompa a hablar,
     // setSpeaking sube la vibración (orbe siempre orbe, V3).
@@ -642,12 +969,14 @@ const client = new Client({
   // Actividad de tools: 1 línea compacta por evento en el feed (sys),
   // nunca en el chat principal. El preview completo va en title.
   onToolCall: (_agentId, tool, argsPreview) => {
+    // Baches de trabajo a mitad de turno: si no suena nada, avisar.
+    if (!voiceOut.playing) workingEarcon.arm(_agentId);
     const args = argsPreview ? ` ${argsPreview.slice(0, 120)}` : '';
-    addMsg('tools', `🔧 ${tool}${args}`, 'sys', argsPreview || tool);
+    addMsg('tools', `→ ${tool}${args}`, 'sys', argsPreview || tool);
   },
   onToolDone: (_agentId, tool, ok, ms, outputPreview) => {
     const out = outputPreview ? `: ${outputPreview.slice(0, 120)}` : '';
-    const line = ok ? `✅ ${tool} done in ${Math.round(ms)}ms${out}` : `❌ ${tool} failed${out}`;
+    const line = ok ? `ok ${tool} ${Math.round(ms)}ms${out}` : `fail ${tool}${out}`;
     addMsg('tools', line, 'sys', outputPreview || tool);
   },
   onDelta: (agentId, delta) => {
@@ -655,13 +984,28 @@ const client = new Client({
   },
   onAgentEnd: (agentId, text, turnId) => {
     if (turnId) activeTurns.delete(turnId);
-    // Cinturón + tirantes: el backend pela los tags, pero si alguno llega
-    // (mock, replay viejo), no se muestra literal en el chat.
-    const full = stripGestoTags(text || turnText.get(agentId) || '');
-    turnText.delete(agentId);
-    if (full.trim()) {
-      addMsg(agentName(agentId).toLowerCase(), full);
+    // QW-07: el texto completo se guarda; se muestra ahora solo si no hay
+    // audio en juego (modo texto). Con audio, el revelado lo maneja el
+    // playback y el final llega en maybePlaybackComplete / onInterrupted.
+    const key = heardKey(turnId, agentId);
+    // Ya finalizado (p.ej. se interrumpió antes del fin): no duplicar.
+    if (!heardDone.has(key)) {
+      heardFull.set(key, text || turnText.get(agentId) || '');
+      heardAgent.set(key, agentId);
+      if (!heardTurns.has(key)) heardTurns.set(key, new HeardTurn());
+      const turn = heardTurns.get(key) as HeardTurn;
+      if (turn.progressive || audioSegment) {
+        // Audio en curso o ya revelando: el finalize lo hace el playback.
+      } else if (!heardGrace.has(key)) {
+        // Sin audio a la vista: gracia corta por si el TTS viene lento
+        // (si el audio arranca dentro de la gracia, cancela y progresa).
+        heardGrace.set(key, window.setTimeout(() => {
+          heardGrace.delete(key);
+          if (!heardTurns.get(key)?.progressive) heardFinalize(key);
+        }, HEARD_GRACE_MS));
+      }
     }
+    workingEarcon.cancel(agentId);
     // El subtítulo sigue al AUDIO, no al texto: si suena, no se limpia acá.
     if (!audioSegment && speakingAgent === agentId) {
       speakingAgent = '';
@@ -672,15 +1016,30 @@ const client = new Client({
     // (baja la vibración de "pensando" que puso onAgentStart).
     if (agentId !== speakingAgent) setVisual(agentId, restState(agentId));
   },
-  onMp3: (b64, turnId) => {
+  onMp3: (b64, turnId, tag) => {
     if (!voiceOn || isInterruptedTurn(turnId)) return;
-    void voiceOut.unlock().then(() => voiceOut.playMp3(b64));
+    void voiceOut.unlock().then(() => voiceOut.playMp3(b64, tag ?? null));
   },
-  onPcm: (b64, rate, turnId) => {
+  onPcm: (b64, rate, turnId, tag) => {
     if (!voiceOn || isInterruptedTurn(turnId)) return;
-    void voiceOut.unlock().then(() => voiceOut.enqueuePcm(b64, rate));
+    void voiceOut.unlock().then(() => voiceOut.enqueuePcm(b64, rate, tag ?? null));
   },
   onAudioStart: (turnId, agentId) => {
+    // QW-07: llegó audio → cancela la gracia de texto-inmediato.
+    const key = heardKey(turnId, agentId);
+    const timer = heardGrace.get(key);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      heardGrace.delete(key);
+    }
+    // Bug de mensajes dobles: si el texto ya se finalizó (el TTS llegó
+    // después de la gracia), el audio se reproduce igual pero NO se
+    // reconstruye la burbuja ni se reabre el revelado.
+    if (!heardDone.has(key)) {
+      if (!heardTurns.has(key)) heardTurns.set(key, new HeardTurn());
+      heardAgent.set(key, agentId);
+    }
+    workingEarcon.cancel(agentId);
     audioSegment = { turnId, agentId, endReceived: false };
     speakingAgent = agentId;
     setSpeaking(agentId);
@@ -710,6 +1069,24 @@ const client = new Client({
       console.warn('[gesto] setGlyph falló:', err);
     }
   },
+  // M-02/M-10: figuras tipadas. Efímeras → zona viva (se reemplazan);
+  // persistentes → stream. Key estable = upsert, no append.
+  onFigure: (agentId, figure) => {
+    try {
+      const fig = figure as Figure;
+      const host = fig?.ephemeral === true ? ephemeralHost() : streamEl;
+      const ok = upsertFigure(host, fig, {
+        loadMermaid: loadMermaidReal,
+        setGlyph: (name) => field.setGlyph(agentId, name),
+        deferHeavy: defaultFigureQueue.deferHeavy
+      });
+      if (ok && host === streamEl) {
+        trimStream();
+      }
+    } catch (err) {
+      console.warn('[figura] render falló:', err);
+    }
+  },
   onInterrupted: (agentId, turnId) => {
     if (turnId) {
       activeTurns.delete(turnId);
@@ -717,12 +1094,16 @@ const client = new Client({
     }
     voiceOut.flush();
     voiceOut.restoreGain();
+    workingEarcon.cancel();
+    for (const k of [...heardKaraoke.keys()]) stopKaraoke(k);
     audioSegment = null;
     if (!agentId || speakingAgent === agentId) {
       speakingAgent = '';
       setSpeaking('');
     }
     if (agentId) setVisual(agentId, restState(agentId));
+    // QW-07: al interrumpir se muestra todo (leer el resto es un feature).
+    heardFinalize(heardKey(turnId, agentId || ''));
     setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onWorkEvent: (kind, agentId, event) => {
@@ -739,19 +1120,20 @@ const client = new Client({
       }
     }
     field.setWorking([...working]);
+    refreshRuntime();
     // Feed de actividad: que SE VEA que laburan.
     const who = String(event.agentName || agentName(agentId) || 'equipo');
     const str = (k: string): string => String(event[k] || '');
     if (kind === 'comando' && str('cmd')) {
-      addMsg('tools', `⚙️ ${who} runs: ${str('cmd').slice(0, 120)}`, 'sys');
+      addMsg('tools', `${who} runs: ${str('cmd').slice(0, 120)}`, 'sys');
     } else if (kind === 'file_written' && str('path')) {
-      addMsg('tools', `📝 ${who} ${event.edited ? 'edited' : 'wrote'}: ${str('path')}`, 'sys');
+      addMsg('tools', `${who} ${event.edited ? 'edited' : 'wrote'}: ${str('path')}`, 'sys');
     } else if (kind === 'web' && str('url')) {
-      addMsg('tools', `🌐 ${who} read: ${str('url').slice(0, 100)}`, 'sys');
+      addMsg('tools', `${who} read: ${str('url').slice(0, 100)}`, 'sys');
     } else if (kind === 'task_started' && str('text')) {
-      addMsg('tools', `▶️ ${who}: ${str('text').slice(0, 140)}`, 'sys');
+      addMsg('tools', `${who}: ${str('text').slice(0, 140)}`, 'sys');
     } else if (kind === 'task_done') {
-      addMsg('tools', `✅ ${who} finished${str('summary') ? `: ${str('summary').slice(0, 160)}` : ''}`, 'sys');
+      addMsg('tools', `${who} finished${str('summary') ? `: ${str('summary').slice(0, 160)}` : ''}`, 'sys');
     } else if (kind === 'task_blocked') {
       addMsg('tools', `⛔ ${who} blocked: ${str('reason').slice(0, 140)}`, 'sys');
     } else if (kind === 'build_ok') {
@@ -778,7 +1160,9 @@ const client = new Client({
     setStatus(voiceSession ? 'Listening…' : 'Ready');
   },
   onVoiceTranscript: (text, source) => {
-    addMsg('you · voice', `${text}  [${source}]`, 'me');
+    // El source (mic/system) es metadata de debug: no va en la burbuja.
+    void source;
+    addMsg('you · voice', text, 'me');
     setStatus('Working on it…');
   },
   onTranscribeEmpty: () => {
@@ -813,6 +1197,12 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
     voiceGroup = false;
     micBtn.classList.remove('live');
     callBtn.classList.remove('live');
+    ctlState(micBtn, 'off');
+    ctlState(callBtn, 'idle');
+    voiceBtn.classList.add('off');
+    voiceBtn.classList.remove('on');
+    ctlState(voiceBtn, 'muted');
+    setCtxMode('chat');
     // Los que solo escuchaban vuelven a idle (los busy conservan su vibración).
     for (const [id, state] of visualStates) {
       if (state === 'escuchando') setVisual(id, 'idle');
@@ -822,7 +1212,7 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   }
   voiceOut.flush();
   await voiceOut.unlock();
-  client.audioPrepare();
+  client.audioPrepare(group);
   const ok = await liveMic.start();
   if (!ok) {
     addMsg('system', "Couldn't open the microphone.", 'sys');
@@ -842,6 +1232,9 @@ async function setVoiceSession(on: boolean, group: boolean): Promise<void> {
   voiceGroup = group;
   micBtn.classList.toggle('live', !group);
   callBtn.classList.toggle('live', group);
+  ctlState(micBtn, group ? 'room' : 'open');
+  ctlState(callBtn, group ? 'live' : 'ready');
+  setCtxMode(group ? 'call' : 'voice');
   // Mic abierto: vibración de escucha en los libres (hablando/trabajando conservan la suya).
   const ids = agents.size > 0 ? [...agents.keys()] : ['pablo'];
   for (const id of ids) {
@@ -858,22 +1251,75 @@ callBtn.addEventListener('click', () => {
 });
 
 // ── Texto (corta el audio en vuelo, como upstream) ──────────────────
-function submitPrompt(): void {
+// M-05: typing inmediato — la burbuja propia sale SIN esperar al servidor;
+// el eco posterior con el mismo turnId se descarta (sin duplicados).
+const optimisticTurns = new Set<string>();
+// Dedupe defensivo: mismo turnId de usuario no se pinta dos veces
+// (eco repetido, reentrega o correlación optimista fallida).
+const renderedUserTurns = new Set<string>();
+const MAX_RENDERED_USER_TURNS = 300;
+function markUserTurnRendered(turnId: string | undefined): boolean {
+  if (!turnId) return false;
+  if (renderedUserTurns.has(turnId)) return true;
+  renderedUserTurns.add(turnId);
+  while (renderedUserTurns.size > MAX_RENDERED_USER_TURNS) {
+    const oldest = renderedUserTurns.values().next().value;
+    if (oldest === undefined) break;
+    renderedUserTurns.delete(oldest);
+  }
+  return false;
+}
+function submitPrompt(steer = false): void {
   const text = promptEl.value.trim();
   if (!text) return;
   promptEl.value = '';
   promptEl.style.height = 'auto';
   voiceOut.flush();
   void voiceOut.unlock();
-  client.sendText(text);
+  const turnId = client.sendText(text, { steer });
+  optimisticTurns.add(turnId);
+  markUserTurnRendered(turnId);
+  addMsg('you', text, 'me');
+  setStatus(steer ? 'Redirecting…' : 'Working on it…');
 }
 
-sendBtn.addEventListener('click', submitPrompt);
+sendBtn.addEventListener('click', () => submitPrompt());
+
+// QW-08: atajos globales de teclado (a11y: todo lo central sin mouse).
+// '/' enfoca el compositor, 'Escape' interrumpe el habla, 'Alt+M' alterna mic.
+document.addEventListener('keydown', (e) => {
+  const target = e.target as HTMLElement | null;
+  const inField = !!target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable);
+  if (e.key === 'Escape') {
+    // Corta audio local + avisa al servidor (igual que barge-in).
+    voiceOut.flush();
+    client.interrupt(audioSegment?.turnId, speakingAgent || undefined);
+    if (inField) (target as HTMLElement).blur();
+    return;
+  }
+  if (inField || e.metaKey || e.ctrlKey) return;
+  if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+    e.preventDefault();
+    micBtn.click();
+    return;
+  }
+  if (e.key === '/') {
+    e.preventDefault();
+    promptEl.focus();
+  }
+});
 promptEl.addEventListener('input', () => {
   promptEl.style.height = 'auto';
   promptEl.style.height = `${Math.min(promptEl.scrollHeight, 160)}px`;
 });
 promptEl.addEventListener('keydown', (e) => {
+  // M-05: Ctrl/Cmd+Enter = steer (redirigir a mitad de turno).
+  // Shift+Enter sigue siendo salto de línea (estándar).
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    submitPrompt(true);
+    return;
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     submitPrompt();
@@ -886,7 +1332,11 @@ document.querySelectorAll('.chip[data-say]').forEach((chip) => {
     if (!text) return;
     voiceOut.flush();
     void voiceOut.unlock();
-    client.sendText(text);
+    const turnId = client.sendText(text);
+    optimisticTurns.add(turnId);
+    markUserTurnRendered(turnId);
+    addMsg('you', text, 'me');
+    setStatus('Working on it…');
   });
 });
 
@@ -895,7 +1345,7 @@ voiceBtn.addEventListener('click', () => {
   client.setVoice(voiceOn);
   voiceBtn.classList.toggle('on', voiceOn);
   voiceBtn.classList.toggle('off', !voiceOn);
-  voiceBtn.textContent = voiceOn ? '🔊 Voice' : '🔇 Muted';
+  ctlState(voiceBtn, voiceOn ? 'on' : 'muted');
   voiceBtn.setAttribute('aria-pressed', String(voiceOn));
   if (!voiceOn) {
     voiceOut.flush();
@@ -913,6 +1363,7 @@ $('btn-autowork').addEventListener('click', () => {
   btn.classList.toggle('on', autoWorkOn);
   btn.classList.toggle('off', !autoWorkOn);
   btn.setAttribute('aria-pressed', String(autoWorkOn));
+  ctlState(btn, autoWorkOn ? 'on' : 'paused');
 });
 
 $('btn-test-voice').addEventListener('click', () => {
@@ -957,8 +1408,26 @@ function readMeetingKey(companyId: string, goalId: string): string | undefined {
 function connectTo(companyId: string, goalId: string): void {
   currentCompany = companyId;
   currentGoal = goalId;
+  setRailProject();
   const meetingId = readMeetingKey(companyId, goalId);
   client.connect(companyId, goalId, meetingId);
+}
+
+// Nombres legibles para el rail: se llenan al pintar los pickers de Settings.
+const companyNames = new Map<string, string>();
+const projectNames = new Map<string, string>();
+
+function setRailProject(): void {
+  const name = document.getElementById('rail-project-name');
+  const meta = document.getElementById('rail-project-meta');
+  const company = companyNames.get(currentCompany) || '';
+  const project = projectNames.get(currentGoal) || '';
+  if (name) name.textContent = project || (currentGoal ? 'Project' : 'No project');
+  if (meta) {
+    if (company && project) meta.textContent = company;
+    else if (currentCompany) meta.textContent = company || 'Connected';
+    else meta.textContent = 'Create one in Settings';
+  }
 }
 
 // El servidor devuelve el meetingId en meeting_ready: persistirlo acá.
@@ -970,6 +1439,7 @@ async function renderCompanies(): Promise<void> {
   box.innerHTML = '';
   const companies = await listCompanies().catch(() => []);
   for (const c of companies) {
+    companyNames.set(c.id, c.name);
     const btn = document.createElement('button');
     btn.textContent = c.name;
     btn.classList.toggle('active', c.id === currentCompany);
@@ -980,6 +1450,7 @@ async function renderCompanies(): Promise<void> {
         connectTo(c.id, goalId);
         setStatus(`Switched to ${c.name}…`);
         void renderCompanies();
+        void renderProjects();
       })();
     });
     box.appendChild(btn);
@@ -989,11 +1460,85 @@ document.querySelector('.companies')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderCompanies();
 });
 
+// E-02: Sección Proyectos — el proyecto es LA unidad de contexto.
+async function renderProjects(): Promise<void> {
+  const box = $('projects-list');
+  box.innerHTML = '';
+  if (!currentCompany) {
+    box.textContent = 'Pick a company to see its projects.';
+    return;
+  }
+  const data = await apiJson<{ projects: Array<{ id: string; title: string; slug: string }> }>(
+    `/api/companies/${encodeURIComponent(currentCompany)}/projects`
+  ).catch(() => null);
+  for (const p of data?.projects || []) {
+    projectNames.set(p.id, p.title);
+    const row = document.createElement('div');
+    row.className = 'project-row';
+    const btn = document.createElement('button');
+    btn.textContent = p.title;
+    btn.classList.toggle('active', p.id === currentGoal);
+    btn.addEventListener('click', () => {
+      connectTo(currentCompany, p.id);
+      setStatus(`Switched to ${p.title}…`);
+      void renderProjects();
+    });
+    row.appendChild(btn);
+    // E-22: nivel de acceso por proyecto.
+    const sel = document.createElement('select');
+    for (const lv of ['auto', 'reversibles', 'pedir-todo']) {
+      const opt = document.createElement('option');
+      opt.value = lv;
+      opt.textContent = lv;
+      sel.appendChild(opt);
+    }
+    sel.value = (p as { access_level?: string }).access_level || 'auto';
+    sel.setAttribute('aria-label', `Nivel de acceso de ${p.title}`);
+    sel.addEventListener('change', () => {
+      void apiJson(`/api/projects/${encodeURIComponent(p.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_level: sel.value })
+      }).then(() => setStatus(`Nivel ${sel.value} en ${p.title}.`)).catch(() => setStatus('No se pudo cambiar.'));
+    });
+    row.appendChild(sel);
+    box.appendChild(row);
+  }
+  if ((data?.projects || []).length === 0) {
+    box.textContent = 'Sin proyectos — creá uno abajo.';
+  }
+}
+document.getElementById('projects-box')?.addEventListener('toggle', (e) => {
+  if ((e.target as HTMLDetailsElement).open) void renderProjects();
+});
+document.getElementById('project-create')?.addEventListener('click', () => {
+  void (async () => {
+    const input = document.getElementById('project-title') as HTMLInputElement;
+    const title = input.value.trim();
+    if (!title || !currentCompany) return;
+    try {
+      const created = await apiJson<{ project: { id: string; title: string } }>(
+        `/api/companies/${encodeURIComponent(currentCompany)}/projects`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }
+      );
+      input.value = '';
+      connectTo(currentCompany, created.project.id);
+      setStatus(`Project ${created.project.title} created.`);
+      void renderProjects();
+    } catch {
+      setStatus('No se pudo crear el proyecto.');
+    }
+  })();
+});
+
 // ── Puente orbe desktop (solo Tauri) ────────────────────────────────
 function orbState(): string {
   if (liveMic.userSpeaking) return 'escuchando';
   if (voiceSession) return 'escuchando';
   if (speakingAgent) return 'hablando';
+  // E-01: pensando sí se reporta (el protocolo Rust + orb.ts lo soportan;
+  // antes esta rama no existía y el orbe nunca mostraba pensamiento).
+  if (working.size > 0) return 'pensando';
   return 'idle';
 }
 
@@ -1090,6 +1635,105 @@ document.querySelector('#perms-box')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderPerms();
 });
 
+// F-04: aprobaciones pendientes (agent tools) — aprobar/denegar por click.
+async function renderApprovals(): Promise<void> {
+  const box = $('approvals-list');
+  box.innerHTML = '';
+  const data = await apiJson<{ pending: Array<{ id: string; tool: string; args: unknown; agentId: string }> }>(
+    '/api/approvals/pending'
+  ).catch(() => null);
+  const pendings = data?.pending || [];
+  if (pendings.length === 0) {
+    box.textContent = 'Sin pendientes.';
+    return;
+  }
+  for (const p of pendings) {
+    const row = document.createElement('div');
+    row.className = 'perm-row';
+    const label = document.createElement('span');
+    label.textContent = `${p.tool} ${JSON.stringify(p.args || {}).slice(0, 100)}`;
+    label.title = `pedida por ${p.agentId || '?'} (${p.id})`;
+    const okBtn = document.createElement('button');
+    okBtn.textContent = 'Aprobar';
+    okBtn.setAttribute('aria-label', `Aprobar ${p.tool}`);
+    okBtn.addEventListener('click', () => {
+      void apiJson(`/api/approvals/${encodeURIComponent(p.id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approve: true })
+      }).then(() => void renderApprovals()).catch(() => setStatus('No se pudo aprobar.'));
+    });
+    const noBtn = document.createElement('button');
+    noBtn.textContent = 'Denegar';
+    noBtn.setAttribute('aria-label', `Denegar ${p.tool}`);
+    noBtn.addEventListener('click', () => {
+      void apiJson(`/api/approvals/${encodeURIComponent(p.id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approve: false })
+      }).then(() => void renderApprovals()).catch(() => setStatus('No se pudo denegar.'));
+    });
+    row.appendChild(label);
+    row.appendChild(okBtn);
+    row.appendChild(noBtn);
+    box.appendChild(row);
+  }
+}
+document.querySelector('#approvals-box')?.addEventListener('toggle', (e) => {
+  if ((e.target as HTMLDetailsElement).open) void renderApprovals();
+});
+
+// E-22: prohibiciones globales (deny absoluto, harness).
+async function renderProhibitions(): Promise<void> {
+  const box = $('prohib-list');
+  box.innerHTML = '';
+  const data = await apiJson<{ prohibitions: Array<{ id: number; kind: string; pattern: string; reason: string }> }>(
+    '/api/prohibitions'
+  ).catch(() => null);
+  const rows = data?.prohibitions || [];
+  if (rows.length === 0) {
+    box.textContent = 'Sin prohibiciones.';
+    return;
+  }
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'perm-row';
+    const label = document.createElement('span');
+    label.textContent = `${r.kind}: ${r.pattern}${r.reason ? ` (${r.reason})` : ''}`;
+    const del = document.createElement('button');
+    del.textContent = 'Quitar';
+    del.setAttribute('aria-label', `Quitar prohibición ${r.pattern}`);
+    del.addEventListener('click', () => {
+      void apiJson(`/api/prohibitions/${r.id}`, { method: 'DELETE' })
+        .then(() => void renderProhibitions()).catch(() => setStatus('No se pudo quitar.'));
+    });
+    row.appendChild(label);
+    row.appendChild(del);
+    box.appendChild(row);
+  }
+}
+document.querySelector('#prohib-box')?.addEventListener('toggle', (e) => {
+  if ((e.target as HTMLDetailsElement).open) void renderProhibitions();
+});
+document.getElementById('prohib-add')?.addEventListener('click', () => {
+  void (async () => {
+    const kind = (document.getElementById('prohib-kind') as HTMLSelectElement).value;
+    const input = document.getElementById('prohib-pattern') as HTMLInputElement;
+    if (!input.value.trim()) return;
+    try {
+      await apiJson('/api/prohibitions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, pattern: input.value.trim() })
+      });
+      input.value = '';
+      void renderProhibitions();
+    } catch {
+      setStatus('No se pudo prohibir.');
+    }
+  })();
+});
+
 // ── Ajustes (cerebro, oído, voz) ──────────────────────────────────────
 const LLM_KEY_FIELD: Record<string, { field: string; label: string }> = {
   minimax: { field: 'llm.apiKey', label: '🔑 MiniMax key' },
@@ -1160,7 +1804,7 @@ async function renderSettings(): Promise<void> {
   const provSel = settingSelect(s.llm.providerOptions.map((p) => p.id), s.llm.provider, provLabels);
   provSel.setAttribute('aria-label', 'Reasoning provider');
   provSel.addEventListener('change', () => save({ 'llm.provider': provSel.value }, true));
-  box.appendChild(settingRow('🧠 Provider', provSel));
+  box.appendChild(settingRow('Provider', provSel));
 
   const modelSel = settingSelect(s.llm.modelOptions, s.llm.model);
   modelSel.setAttribute('aria-label', 'Model');
@@ -1170,7 +1814,8 @@ async function renderSettings(): Promise<void> {
   const keyInfo = LLM_KEY_FIELD[s.llm.provider] || LLM_KEY_FIELD.opencode;
   const masked = s.llm.provider === 'minimax' ? s.llm.apiKeyMasked
     : s.llm.provider === 'deepseek' ? s.llm.deepseekKeyMasked
-    : s.llm.provider === 'opencode' ? s.llm.opencodeKeyMasked : '';
+    : s.llm.provider === 'opencode' ? s.llm.opencodeKeyMasked
+    : s.llm.provider === 'groq' ? s.llm.groqKeyMasked : '';
   const keyInput = document.createElement('input');
   keyInput.type = 'password';
   keyInput.placeholder = masked || 'Empty — paste the key';
@@ -1181,6 +1826,88 @@ async function renderSettings(): Promise<void> {
     keyInput.value = '';
   });
   box.appendChild(settingRow(keyInfo.label, keyInput));
+
+  // E-14: modelos custom (CSV, solo activo) + orden de failover.
+  const modelsInput = document.createElement('input');
+  modelsInput.placeholder = 'Custom models (CSV, vacío = curados)';
+  modelsInput.value = s.llm.customModels || '';
+  modelsInput.setAttribute('aria-label', 'Custom models CSV');
+  modelsInput.addEventListener('change', () => save({ 'llm.models': modelsInput.value }, true));
+  box.appendChild(settingRow('📦 Models', modelsInput));
+
+  const foInput = document.createElement('input');
+  foInput.placeholder = `Failover order (efectivo: ${(s.llm.failoverResolved || []).join(', ') || '—'})`;
+  foInput.value = s.llm.failover || '';
+  foInput.setAttribute('aria-label', 'Failover order CSV');
+  foInput.addEventListener('change', () => save({ 'llm.failover': foInput.value }, true));
+  box.appendChild(settingRow('🔀 Failover', foInput));
+
+  // E-17: modo de energía (autostart + gate Jev).
+  box.appendChild(settingGroup('Energy'));
+  const modeSel = settingSelect(['always-on', 'gate', 'manual'], s.energy?.mode || 'manual');
+  modeSel.setAttribute('aria-label', 'Energy mode');
+  modeSel.addEventListener('change', () => {
+    void apiJson('/api/energy/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: modeSel.value })
+    }).then(() => {
+      flashSaved();
+      void renderSettings();
+    }).catch(() => setStatus('No se pudo cambiar el modo.'));
+  });
+  box.appendChild(settingRow('⚡ Mode', modeSel));
+  const modeNote = document.createElement('div');
+  modeNote.className = 'sidecar-note';
+  modeNote.textContent = 'always-on: completa al boot · gate: solo orbe + "Pablo" · manual: la abrís vos.';
+  box.appendChild(modeNote);
+
+  // E-15: channels (Telegram + WhatsApp) — Pablo fuera de la app.
+  // E-20: split local+VPS — lo pesado (STT/TTS) en el VPS.
+  box.appendChild(settingGroup('Split VPS'));
+  const splitSel = settingSelect(['local', 'split'], s.split?.mode || 'local');
+  splitSel.setAttribute('aria-label', 'Split mode');
+  splitSel.addEventListener('change', () => save({ 'split.mode': splitSel.value }, true));
+  box.appendChild(settingRow('🖥️ Mode', splitSel));
+  const vpsInput = document.createElement('input');
+  vpsInput.type = 'text';
+  vpsInput.placeholder = 'https://tu-vps (puertos 7788-7791)';
+  vpsInput.value = s.split?.vps || '';
+  vpsInput.spellcheck = false;
+  vpsInput.setAttribute('aria-label', 'VPS base URL');
+  vpsInput.addEventListener('change', () => save({ 'split.vps': vpsInput.value.trim() }));
+  box.appendChild(settingRow('VPS', vpsInput));
+
+  box.appendChild(settingGroup('Channels'));
+  const tg = s.channels?.telegram;
+  if (tg) {
+    const tgOn = document.createElement('input');
+    tgOn.type = 'checkbox';
+    tgOn.checked = tg.enabled;
+    tgOn.setAttribute('aria-label', 'Telegram enabled');
+    tgOn.addEventListener('change', () => save({ 'channels.telegram.enabled': String(tgOn.checked) }));
+    box.appendChild(settingRow('✈️ Telegram', tgOn));
+    const tgToken = document.createElement('input');
+    tgToken.type = 'password';
+    tgToken.placeholder = tg.botTokenMasked || 'Bot token';
+    tgToken.setAttribute('aria-label', 'Telegram bot token');
+    tgToken.addEventListener('change', () => {
+      if (!tgToken.value) return;
+      save({ 'channels.telegram.botToken': tgToken.value });
+      tgToken.value = '';
+    });
+    box.appendChild(settingRow('🔑 TG token', tgToken));
+    const tgTito = document.createElement('input');
+    tgTito.placeholder = 'Tito Telegram id (solo-Tito)';
+    tgTito.value = tg.titoId || '';
+    tgTito.setAttribute('aria-label', 'Tito Telegram id');
+    tgTito.addEventListener('change', () => save({ 'channels.telegram.titoId': tgTito.value }));
+    box.appendChild(settingRow('👤 TG Tito id', tgTito));
+    const tgMode = settingSelect(['tito-only', 'allowlist'], tg.mode || 'tito-only');
+    tgMode.setAttribute('aria-label', 'Telegram mode');
+    tgMode.addEventListener('change', () => save({ 'channels.telegram.mode': tgMode.value }));
+    box.appendChild(settingRow('🔒 TG mode', tgMode));
+  }
 
   box.appendChild(settingGroup('Hearing'));
   const sttSel = settingSelect(s.stt.providerOptions, s.stt.provider);
@@ -1262,7 +1989,7 @@ async function renderSettings(): Promise<void> {
   const engSel = settingSelect(s.tts.engineOptions || ['auto', 'piper', 'supertonic'], s.tts.engine || 'auto');
   engSel.setAttribute('aria-label', 'TTS engine');
   engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
-  box.appendChild(settingRow('🔊 TTS engine', engSel));
+  box.appendChild(settingRow('TTS engine', engSel));
 
   // Orden de la cascada TTS (tts.order): CSV de motores, aplica en caliente.
   // Vacío = default legacy (Deepgram-con-key → locales → Edge). Solo los
@@ -1279,6 +2006,26 @@ async function renderSettings(): Promise<void> {
   ttsNote.className = 'sidecar-note';
   ttsNote.textContent = 'Motores: piper, supertonic, deepgram, edge — solo los listados se intentan, en orden.';
   box.appendChild(ttsNote);
+
+  // E-16: velocidad de habla + URL del sidecar Piper.
+  const ttsSpeed = document.createElement('input');
+  ttsSpeed.type = 'number';
+  ttsSpeed.min = '0.5';
+  ttsSpeed.max = '2';
+  ttsSpeed.step = '0.1';
+  ttsSpeed.value = String(s.tts.speed ?? 1);
+  ttsSpeed.setAttribute('aria-label', 'Speech speed');
+  ttsSpeed.addEventListener('change', () => save({ 'tts.speed': ttsSpeed.value }));
+  box.appendChild(settingRow('⏩ Speed', ttsSpeed));
+
+  const piperInput = document.createElement('input');
+  piperInput.type = 'text';
+  piperInput.value = s.tts.piperUrl || '';
+  piperInput.placeholder = 'http://127.0.0.1:7791';
+  piperInput.spellcheck = false;
+  piperInput.setAttribute('aria-label', 'Piper sidecar URL');
+  piperInput.addEventListener('change', () => save({ 'tts.piperUrl': piperInput.value.trim() }));
+  box.appendChild(settingRow('Piper URL', piperInput));
 
   // ── Audio: routing PipeWire (salida/entrada) ──────────────────────
   // followDefault on = los streams siguen al sistema (selects off).
@@ -1580,6 +2327,21 @@ const palette = mountPalette({
 });
 $('btn-palette').addEventListener('click', () => palette.toggle());
 initViews();
+
+// E-17: boot en modo gate → solo orbe (la ventana main se esconde;
+// despierta con "Pablo" por voz o expandiendo el orbe).
+void (async () => {
+  try {
+    if (!isTauri()) return;
+    const s = await getSettings().catch(() => null);
+    if (s?.energy?.mode === 'gate') {
+      await tinvoke('toggle_main').catch(() => {});
+      await tinvoke('show_orb').catch(() => {});
+    }
+  } catch {
+    // Boot gate caído: arranca normal.
+  }
+})();
 {
   const settingsBox = document.getElementById('settings-box');
   if (settingsBox) {

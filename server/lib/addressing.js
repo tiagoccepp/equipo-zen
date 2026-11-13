@@ -37,7 +37,7 @@ export const ADDRESSING_ACTION = {
   ruido: 'ignorar'
 };
 
-export const JEV_URL = 'https://opencode.ai/zen/v1/systemone';
+export const JEV_URL = 'https://opencode.ai/inference/systemone/v1/systemone';
 export const JEV_MODEL = 'jev-1.13-free';
 export const JEV_TIMEOUT_MS = 8000;
 export const GROQ_TIMEOUT_MS = 5000;
@@ -117,7 +117,7 @@ export async function callJev({ text, context = {}, key = null, keyPath = null, 
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${Z}`,
-      // Zen requires a session (same header as the opencode provider in config.js).
+      // Go lane requires a session (same header as the opencode provider in config.js).
       'x-opencode-session': 'equipo-addressing'
     },
     body: JSON.stringify({

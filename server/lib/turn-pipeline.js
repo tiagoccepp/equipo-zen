@@ -10,6 +10,51 @@ import { getSalaV2 } from './settings.js';
 // chunk PCM y finish(); la liberación espera el ack playback_complete del
 // cliente o un timeout basado en la duración enviada. flush() corta al
 // dueño actual (barge-in).
+// F-08: ms estimados de una oración sintetizada (PCM base64 16-bit mono).
+// Puro: base para el karaoke (reparto por palabra en el cliente).
+export function sentenceAudioMs(prepared, sampleRate = 24000) {
+  try {
+    const rate = Number(sampleRate) > 0 ? Number(sampleRate) : 24000;
+    const parts = prepared?.kind === 'mp3' ? null : prepared?.parts;
+    if (!Array.isArray(parts) || parts.length === 0) {
+      return null;
+    }
+    let bytes = 0;
+    for (const p of parts) {
+      bytes += Math.ceil((String(p?.data || '').length * 3) / 4);
+    }
+    const ms = Math.round((bytes / 2 / rate) * 1000);
+    return ms > 0 ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+// QW-07: heard-text progresivo. Mapea audio sintetizado → etiquetas de
+// oración para el cliente. El primer chunk de cada oración lleva {sIdx,
+// sText}; los demás solo {sIdx}. Puro y testeable (sin gate ni red).
+export function sentenceAudioPlan(prepared, sIdx, { durMs = null } = {}) {
+  if (!prepared) {
+    return null;
+  }
+  const idx = Math.max(0, Math.floor(Number(sIdx) || 0));
+  const sText = typeof prepared.sentence === 'string' ? prepared.sentence.slice(0, 2000) : '';
+  const dur = Number.isFinite(Number(durMs)) && Number(durMs) > 0 ? Math.round(Number(durMs)) : null;
+  if (prepared.kind === 'mp3') {
+    return { kind: 'mp3', sIdx: idx, sText, ...(dur ? { sDurMs: dur } : {}) };
+  }
+  const parts = Array.isArray(prepared.parts) ? prepared.parts : [];
+  return {
+    kind: 'pcm',
+    chunks: parts.map((part, i) => ({
+      part,
+      extra: i === 0
+        ? { sIdx: idx, sText, ...(dur ? { sDurMs: dur } : {}) }
+        : { sIdx: idx }
+    }))
+  };
+}
+
 export class SpeakerGate {
   constructor({ emit, ackGraceMs = 1500 }) {
     this.emit = emit;
@@ -60,7 +105,7 @@ export class SpeakerGate {
     });
   }
 
-  sendChunk(token, data, mimeType) {
+  sendChunk(token, data, mimeType, extra = null) {
     if (this.owner !== token || token.finished) {
       return false;
     }
@@ -68,13 +113,30 @@ export class SpeakerGate {
     // Duración estimada del PCM base64: bytes/2 muestras a sampleRate.
     const bytes = Math.ceil((String(data).length * 3) / 4);
     token.sentMs += (bytes / 2 / token.sampleRate) * 1000;
+    // QW-07: extra lleva {sIdx, sText?} (heard-text progresivo). Solo
+    // esas dos claves pasan al evento; nada arbitrario cruza al cliente.
+    const tag = {};
+    if (extra && Number.isFinite(Number(extra.sIdx))) {
+      tag.sIdx = Math.max(0, Math.floor(Number(extra.sIdx)));
+    }
+    if (extra && typeof extra.sText === 'string' && extra.sText) {
+      tag.sText = extra.sText.slice(0, 2000);
+    }
+    // F-08: duración de la oración (karaoke) + timings reales si los hay.
+    if (extra && Number.isFinite(Number(extra.sDurMs)) && Number(extra.sDurMs) > 0) {
+      tag.sDurMs = Math.round(Number(extra.sDurMs));
+    }
+    if (extra && Array.isArray(extra.sTimes) && extra.sTimes.length > 0) {
+      tag.sTimes = extra.sTimes.map(Number).filter(Number.isFinite).slice(0, 200);
+    }
     this.emit({
       type: 'agent_audio_chunk',
       turnId: token.turnId,
       agentId: token.agentId,
       data,
       mimeType: mimeType || `audio/pcm;rate=${token.sampleRate}`,
-      seq: token.seq
+      seq: token.seq,
+      ...tag
     });
     return true;
   }
@@ -167,6 +229,18 @@ export class CancellableTurnQueue {
       return false;
     }
     this.pending.push({ id, job, onError });
+    void this.drain();
+    return true;
+  }
+
+  // M-05: steer — el usuario redirige a mitad de turno: se aborta lo
+  // actual y el nuevo job entra AL FRENTE (no al final de la cola).
+  steer(id, job, onError) {
+    this.interrupt('steered');
+    if (this.pending.length >= this.maxPending) {
+      return false;
+    }
+    this.pending.unshift({ id, job, onError });
     void this.drain();
     return true;
   }

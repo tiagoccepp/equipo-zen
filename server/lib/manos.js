@@ -21,6 +21,12 @@ import path from 'node:path';
 
 import { clasificarComando, ejecutar } from './herramientas.js';
 import { esCarpetaIgnorada, projectDir, safeWorkspacePath } from './workforce.js';
+import { APPLY_PATCH_MAX_FILE_BYTES, applyGroups, parseApplyPatch } from './apply-patch.js';
+import { figureEvent } from './figures.js';
+import { checkCall, requestApproval } from './permissions.js';
+import { runHooks } from './hooks.js';
+import { acquireLoopSlot } from './budgets.js';
+import { createThrashingGuard } from './checkpoints.js';
 // Manos extendidas (integración 09/11): los módulos solo definen; el registro
 // corre abajo, registry ya listo. Ciclo ESM seguro (sin top-level calls).
 import { registerBrowserTools } from './manos-browser.js';
@@ -43,9 +49,40 @@ export function truncarSalida(texto, tope = MAX_TOOL_OUTPUT) {
   return `${s.slice(0, tope)}\n…[salida recortada a ${tope} chars]`;
 }
 
+// QW-10: tools idempotentes dentro de la corrida. Misma tool + mismos args
+// = una sola ejecución; la repetida devuelve el resultado anterior SIN
+// re-ejecutar (el modelo suele reintentar tras un error: sin esto duplica
+// side effects). La observación aclara que fue repetida.
+export function stableJson(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+  return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(',')}}`;
+}
+
+export function toolCallKey(name, args) {
+  return `${String(name)}::${stableJson(args || {})}`;
+}
+
 // Cada tool: {name, description, parameters, execute}.
 // execute(args, ctx) -> {ok, output, error?} (puede ser async).
 // ctx lo pone runToolLoop: {companyId, slug, turnId?, agentId?}.
+// M-04: store inyectable (el server lo setea en boot; tools task_* lo usan).
+let manosStore = null;
+export function setManosStore(store) {
+  manosStore = store || null;
+}
+export function getManosStore() {
+  return manosStore;
+}
+
+function hookArgsForPost(llamada) {
+  return llamada?.args || {};
+}
+
 export const toolRegistry = new Map();
 
 export function registerTool({ name, description, parameters, execute }) {
@@ -193,6 +230,525 @@ registerTool({
     } catch (error) {
       return { ok: false, output: '', error: `no pude escribir ${args.path}: ${errorClaro(error)}` };
     }
+  }
+});
+
+function checklistGoal(ctx) {
+  if (!manosStore) {
+    return { error: 'checklist sin store (server no inicializado)' };
+  }
+  let companyId;
+  let slug;
+  try {
+    ({ companyId, slug } = ctxWorkspace(ctx));
+  } catch (error) {
+    return { error: errorClaro(error) };
+  }
+  const goal = manosStore.goalForSlug(companyId, slug);
+  if (!goal) {
+    return { error: `sin proyecto para ${slug}` };
+  }
+  return { goal };
+}
+
+function checklistSummary(items) {
+  const done = items.filter((i) => i.completed).length;
+  const lines = items.map((i, n) => `${n + 1}. [${i.completed ? 'x' : ' '}] ${i.text}`);
+  const pending = items.filter((i) => !i.completed).map((i) => i.text);
+  return {
+    done,
+    total: items.length,
+    output: items.length === 0
+      ? 'Checklist vacía.'
+      : `Checklist (${done} de ${items.length} listas):\n${lines.join('\n')}` +
+        (pending.length > 0 && done > 0 ? `\nFaltan: ${pending.slice(0, 5).join('; ')}` : '')
+  };
+}
+
+registerTool({
+  name: 'task_add',
+  description: 'Agrega un ítem a la checklist del proyecto. Se ve en vivo en el chat.',
+  parameters: {
+    type: 'object',
+    properties: { text: { type: 'string', description: 'Ítem, máx 300 chars' } },
+    required: ['text']
+  },
+  execute: async (args, ctx) => {
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const item = manosStore.addChecklistItem(g.goal.id, args.text, ctx?.agentId || null);
+    if (!item) {
+      return { ok: false, output: '', error: 'ítem vacío' };
+    }
+    const s = checklistSummary(manosStore.checklistForGoal(g.goal.id));
+    return { ok: true, output: `Agregado: ${item.text}\n${s.output}` };
+  }
+});
+
+registerTool({
+  name: 'task_done',
+  description: 'Marca listo un ítem (número o id).',
+  parameters: {
+    type: 'object',
+    properties: {
+      item: { type: 'string', description: 'Número (ej. "2") o id del ítem' },
+      undone: { type: 'boolean', description: 'true = desmarcar' }
+    },
+    required: ['item']
+  },
+  execute: async (args, ctx) => {
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const items = manosStore.checklistForGoal(g.goal.id);
+    const ref = String(args.item || '').trim();
+    const byIndex = /^\d+$/.test(ref) ? items[Number(ref) - 1] : null;
+    const target = byIndex || items.find((i) => i.id === ref);
+    if (!target) {
+      return { ok: false, output: '', error: `ítem inexistente: ${ref} (hay ${items.length})` };
+    }
+    manosStore.setTaskCompleted(target.id, args.undone !== true);
+    const s = checklistSummary(manosStore.checklistForGoal(g.goal.id));
+    const verb = args.undone === true ? 'Desmarcado' : 'Listo';
+    return { ok: true, output: `${verb}: ${target.text} (${s.done} de ${s.total}).\n${s.output}` };
+  }
+});
+
+registerTool({
+  name: 'task_list',
+  description: 'Muestra la checklist del proyecto.',
+  parameters: { type: 'object', properties: {} },
+  execute: async (args, ctx) => {
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    return { ok: true, output: checklistSummary(manosStore.checklistForGoal(g.goal.id)).output };
+  }
+});
+
+registerTool({
+  name: 'plan_propose',
+  description: 'Propone un plan (Tito aprueba por voz).',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Título corto del plan' },
+      steps: { type: 'array', items: { type: 'string' }, description: 'Pasos (máx 20)' },
+      questions: { type: 'array', items: { type: 'string' }, description: 'Preguntas a Tito antes de ejecutar (máx 5, opcional)' },
+      autoSec: { type: 'number', description: 'Segundos para auto-proceder si Tito calla (0=off, máx 600; solo reversible)' }
+    },
+    required: ['title', 'steps']
+  },
+  execute: async (args, ctx) => {
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    // Un pendiente por proyecto: el anterior se supera.
+    const prev = manosStore.planForGoal(g.goal.id);
+    if (prev) {
+      manosStore.finishTask(prev.id, { status: 'rejected', summary: 'Superado por un plan nuevo.' });
+    }
+    const plan = manosStore.proposePlan(g.goal.id, ctx?.agentId || null, args.title, args.steps, { questions: args.questions, autoProceedSec: args.autoSec ?? args.autoProceedSec });
+    if (!plan) {
+      return { ok: false, output: '', error: 'título + al menos 1 paso' };
+    }
+    const data = JSON.parse(plan.text);
+    const qs = (data.questions || []).length > 0 ? `\nPreguntas para Tito: ${data.questions.join(' / ')}` : '';
+    const auto = data.autoProceedSec > 0 ? `\n(Si Tito calla ${data.autoProceedSec}s y es reversible, procedo solo.)` : `\n(Tito lo aprueba por voz: "dale" / "hacelo".)`;
+    return { ok: true, output: `Plan propuesto: ${data.title}\n${data.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}${qs}${auto}` };
+  }
+});
+
+registerTool({
+  name: 'plan_status',
+  description: 'Muestra el plan pendiente del proyecto (o dice si no hay).',
+  parameters: { type: 'object', properties: {} },
+  execute: async (args, ctx) => {
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const plan = manosStore.planForGoal(g.goal.id);
+    if (!plan) {
+      return { ok: true, output: 'Sin plan pendiente.' };
+    }
+    const data = JSON.parse(plan.text);
+    return { ok: true, output: `Plan pendiente: ${data.title}\n${data.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}` };
+  }
+});
+
+registerTool({
+  name: 'agent_send',
+  description: 'Mensaje directo a otro agente.',
+  parameters: {
+    type: 'object',
+    properties: {
+      to: { type: 'string', description: 'id del agente destino o "broadcast"' },
+      text: { type: 'string', description: 'Mensaje, máx 1000 chars' }
+    },
+    required: ['to', 'text']
+  },
+  execute: async (args, ctx) => {
+    const bus = ctx?.bus || null;
+    if (!bus || typeof bus.send !== 'function') {
+      return { ok: false, output: '', error: 'sin bus entre agentes en este turno' };
+    }
+    const from = ctx?.agentId || null;
+    if (!from) {
+      return { ok: false, output: '', error: 'sin agentId: no sé quién sos' };
+    }
+    const r = bus.send(from, String(args.to || '').trim(), args.text);
+    if (!r.ok) {
+      return { ok: false, output: '', error: r.error };
+    }
+    return { ok: true, output: r.count > 1 ? `enviado a ${r.count} agentes` : `enviado a ${args.to}` };
+  }
+});
+
+registerTool({
+  name: 'mcp_search',
+  description: 'Busca tools MCP (úsala antes de pedir mcp_*).',
+  parameters: {
+    type: 'object',
+    properties: { query: { type: 'string', description: 'Qué necesitás (ej. "buscar archivos", "hora actual")' } },
+    required: ['query']
+  },
+  execute: async (args) => {
+    try {
+      const mod = await import('./manos-mcp.js');
+      const configured = mod.readMcpConfig().map((e) => e.name);
+      const matches = mod.searchMcpCatalog(args.query, { configured });
+      if (matches.length === 0) {
+        return { ok: true, output: 'Sin matches MCP. Servers configurados: ' + (configured.join(', ') || '(ninguno)') };
+      }
+      const registered = await mod.ensureMcpTools(matches.map((m) => m.name));
+      const lines = matches.map((m) => {
+        const state = registered.includes(m.name) ? 'lista' : (m.needsKey ? 'requiere key' : 'no disponible');
+        return `- ${m.name}: ${m.description} [${state}]`;
+      });
+      return { ok: true, output: `Matches MCP (ya registradas las listas, usalas directo):\n${lines.join('\n')}` };
+    } catch (error) {
+      return { ok: false, output: '', error: `mcp_search falló: ${errorClaro(error)}` };
+    }
+  }
+});
+
+registerTool({
+  name: 'taste_set',
+  description: 'Guarda un gusto de Tito.',
+  parameters: {
+    type: 'object',
+    properties: {
+      key: { type: 'string', description: 'Clave corta (minúsculas-guiones)' },
+      value: { type: 'string', description: 'Preferencia (máx 500ch)' },
+      scope: { type: 'string', description: '"global" o "project" (default project)' }
+    },
+    required: ['key', 'value']
+  },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'gustos sin store' };
+    }
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const scope = String(args.scope || 'project').toLowerCase() === 'global' ? 'global' : 'project';
+    try {
+      const { TASTE_KEY_RE } = await import('./tastes.js');
+      const key = String(args.key || '').trim().toLowerCase();
+      if (!TASTE_KEY_RE.test(key)) {
+        return { ok: false, output: '', error: 'key inválida (minúsculas-números-guiones)' };
+      }
+      manosStore.upsertTaste({
+        scope, goalId: scope === 'project' ? g.goal.id : null,
+        key, value: args.value, confidence: 0.9, source: `agent:${ctx?.agentId || '?' }`
+      });
+      return { ok: true, output: `Gusto guardado (${scope}): ${key} = ${String(args.value).slice(0, 200)}` };
+    } catch (error) {
+      return { ok: false, output: '', error: errorClaro(error) };
+    }
+  }
+});
+
+registerTool({
+  name: 'taste_list',
+  description: 'Muestra los gustos de Tito (globales + de este proyecto).',
+  parameters: { type: 'object', properties: {} },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'gustos sin store' };
+    }
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    try {
+      const { mergeTastes } = await import('./tastes.js');
+      const { global, project } = manosStore.tastesFor(g.goal.id);
+      const merged = mergeTastes(global, project);
+      if (merged.length === 0) {
+        return { ok: true, output: 'Sin gustos registrados todavía.' };
+      }
+      return { ok: true, output: merged.map((x) => `- [${x.scope}] ${x.taste_key} = ${x.value}`).join('\n') };
+    } catch (error) {
+      return { ok: false, output: '', error: errorClaro(error) };
+    }
+  }
+});
+
+registerTool({
+  name: 'improve_propose',
+  description: 'Propone auto-mejora (low aplica, resto a Tito).',
+  parameters: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string', description: 'skill | taste | tier | prompt-note' },
+      action: { type: 'string', description: 'create | update | ask | ...' },
+      payload: { type: 'object', description: 'Datos según kind' },
+      reason: { type: 'string', description: 'Por qué mejora (obligatorio)' }
+    },
+    required: ['kind', 'action', 'reason']
+  },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'mejoras sin store' };
+    }
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const reason = String(args.reason || '').trim();
+    if (!reason) {
+      return { ok: false, output: '', error: 'sin motivo no hay propuesta' };
+    }
+    try {
+      const si = await import('./self-improve.js');
+      const proposal = { kind: args.kind, action: args.action, payload: args.payload || {}, reason };
+      const risk = si.classifyRisk(proposal);
+      if (risk === 'low') {
+        const r = await si.applyLowRisk({ store: manosStore, goalId: g.goal.id, proposal });
+        if (r.applied && r.note) {
+          const pm = await import('./pablo-memory.js');
+          pm.appendDaily(g.goal.company_id || ctx.companyId, `[${g.goal.slug || 'proyecto'}] nota: ${r.detail}`);
+        }
+        manosStore.logChange(ctx?.agentId || 'self-improve', 'proposal', `${args.kind}:${args.action}`, r.applied ? 'auto-applied' : 'auto-failed', { reason });
+        return r.applied
+          ? { ok: true, output: `Auto-aplicado (riesgo bajo): ${r.detail}` }
+          : { ok: false, output: '', error: `no se pudo auto-aplicar: ${r.detail}` };
+      }
+      const row = manosStore.proposeChange(g.goal.id, ctx?.agentId || null, { ...proposal, risk });
+      return { ok: true, output: `Propuesto a Tito (riesgo ${risk}, id ${row.id}): ${si.proposalSummary(proposal)}. Queda pendiente de aprobación.` };
+    } catch (error) {
+      return { ok: false, output: '', error: errorClaro(error) };
+    }
+  }
+});
+
+registerTool({
+  name: 'improve_status',
+  description: 'Muestra propuestas de mejora pendientes del proyecto.',
+  parameters: { type: 'object', properties: {} },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'mejoras sin store' };
+    }
+    const g = checklistGoal(ctx);
+    if (g.error) {
+      return { ok: false, output: '', error: g.error };
+    }
+    const rows = manosStore.pendingProposals(g.goal.id);
+    if (rows.length === 0) {
+      return { ok: true, output: 'Sin propuestas pendientes.' };
+    }
+    return {
+      ok: true,
+      output: rows.map((r) => {
+        let d = {};
+        try { d = JSON.parse(r.text); } catch { /* legado */ }
+        return `- ${r.id} [${d.risk || '?'}] ${d.kind || '?'}:${d.action || '?'} — ${d.reason || ''}`.slice(0, 200);
+      }).join('\n')
+    };
+  }
+});
+
+registerTool({
+  name: 'task_claim',
+  description: 'Auto-aplicarte una tarea (anunciada, Tito veta).',
+  parameters: {
+    type: 'object',
+    properties: {
+      item: { type: 'string', description: 'id de la tarea' },
+      reason: { type: 'string', description: 'Por qué te sirve al proyecto (obligatorio, se anuncia)' }
+    },
+    required: ['item', 'reason']
+  },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'tareas sin store' };
+    }
+    const reason = String(args.reason || '').trim();
+    if (!reason) {
+      return { ok: false, output: '', error: 'sin motivo no hay auto-aplicación (Tito debe saber por qué)' };
+    }
+    const r = manosStore.claimTask(String(args.item || '').trim(), ctx?.agentId || null, reason);
+    if (!r.ok) {
+      return { ok: false, output: '', error: r.error };
+    }
+    return { ok: true, output: `Te auto-aplicaste: ${r.task.text} (Tito fue notificado en el log; puede vetar). ANUNCIALO en tu respuesta.` };
+  }
+});
+
+registerTool({
+  name: 'task_release',
+  description: 'Soltar una tarea que te auto-aplicaste.',
+  parameters: {
+    type: 'object',
+    properties: { item: { type: 'string', description: 'id de la tarea' } },
+    required: ['item']
+  },
+  execute: async (args, ctx) => {
+    if (!manosStore) {
+      return { ok: false, output: '', error: 'tareas sin store' };
+    }
+    const r = manosStore.releaseClaim(String(args.item || '').trim(), ctx?.agentId || null);
+    return r.ok
+      ? { ok: true, output: 'Auto-aplicación liberada.' }
+      : { ok: false, output: '', error: r.error };
+  }
+});
+
+registerTool({
+  name: 'notify_list',
+  description: 'Muestra las últimas notificaciones de equipos (títulos).',
+  parameters: { type: 'object', properties: {} },
+  execute: async () => {
+    const { notificationLog } = await import('./notifications.js');
+    const items = notificationLog({ limit: 10 });
+    if (items.length === 0) {
+      return { ok: true, output: 'Sin notificaciones.' };
+    }
+    return { ok: true, output: items.map((n) => `- ${n.id} [${n.at.slice(0, 16)}] ${n.title}${n.voiced ? ' (hablada)' : ''}`).join('\n') };
+  }
+});
+
+registerTool({
+  name: 'notify_read',
+  description: 'Lee el detalle de una notificación por id.',
+  parameters: {
+    type: 'object',
+    properties: { id: { type: 'string' } },
+    required: ['id']
+  },
+  execute: async (args) => {
+    const { notificationGet } = await import('./notifications.js');
+    const n = notificationGet(String(args.id || '').trim());
+    if (!n) {
+      return { ok: false, output: '', error: `notificación inexistente: ${args.id}` };
+    }
+    return { ok: true, output: `${n.title}\n${n.detail || '(sin detalle)'}` };
+  }
+});
+
+registerTool({
+  name: 'apply_patch',
+  description: 'Patch multi-archivo atómico (Begin Patch/End Patch).',
+  parameters: {
+    type: 'object',
+    properties: {
+      patch: { type: 'string', description: 'Patch completo entre *** Begin Patch y *** End Patch' },
+      dry_run: { type: 'boolean', description: 'true = solo valida y muestra qué cambiaría, sin escribir' }
+    },
+    required: ['patch']
+  },
+  execute: async (args, ctx) => {
+    const { companyId, slug } = ctxWorkspace(ctx);
+    const parsed = parseApplyPatch(args.patch);
+    if (!parsed.ok) {
+      return { ok: false, output: '', error: parsed.error };
+    }
+    // Fase 1: verificar TODO (lectura + match) sin escribir nada.
+    const plan = [];
+    try {
+      for (const f of parsed.files) {
+        const target = safeWorkspacePath(companyId, slug, f.path);
+        if (f.op === 'add') {
+          let exists = false;
+          try { await fs.stat(target); exists = true; } catch { /* no existe: bien */ }
+          if (exists) {
+            return { ok: false, output: '', error: `${f.path}: ya existe (usá Update File)` };
+          }
+          const lines = f.hunks.filter((h) => h.type === 'add').map((h) => h.text);
+          if (lines.length !== f.hunks.length) {
+            return { ok: false, output: '', error: `${f.path}: Add File solo acepta líneas +` };
+          }
+          plan.push({ op: 'add', path: f.path, target, content: lines.join('\n') + (lines.length ? '\n' : '') });
+        } else if (f.op === 'delete') {
+          try { await fs.stat(target); } catch {
+            return { ok: false, output: '', error: `${f.path}: no existe, nada que borrar` };
+          }
+          plan.push({ op: 'delete', path: f.path, target });
+        } else {
+          let original;
+          try {
+            original = await fs.readFile(target, 'utf-8');
+          } catch {
+            return { ok: false, output: '', error: `${f.path}: no existe (usá Add File)` };
+          }
+          if (original.length > APPLY_PATCH_MAX_FILE_BYTES) {
+            return { ok: false, output: '', error: `${f.path}: archivo muy grande para patch` };
+          }
+          const ending = original.endsWith('\n') ? '\n' : '';
+          const r = applyGroups(original.split('\n').filter((_, i, a) => i < a.length - (ending ? 1 : 0)), f.groups);
+          if (!r.ok) {
+            return { ok: false, output: '', error: `${f.path}: ${r.error}` };
+          }
+          plan.push({ op: 'update', path: f.path, target, content: r.lines.join('\n') + (r.lines.length ? ending || '\n' : '') });
+        }
+      }
+    } catch (error) {
+      return { ok: false, output: '', error: errorClaro(error) };
+    }
+    const resumen = plan.map((s) => `- ${s.op} ${s.path}`).join('\n');
+    if (args.dry_run) {
+      return { ok: true, output: `dry-run OK, cambiaría ${plan.length} archivo(s):\n${resumen}` };
+    }
+    // Fase 2: escribir todo, con rollback si algo falla a mitad.
+    const written = [];
+    try {
+      for (const step of plan) {
+        if (step.op === 'delete') {
+          const backup = await fs.readFile(step.target, 'utf-8');
+          await fs.unlink(step.target);
+          written.push({ ...step, backup });
+        } else {
+          let backup = null;
+          try { backup = await fs.readFile(step.target, 'utf-8'); } catch { /* nuevo */ }
+          await fs.mkdir(path.dirname(step.target), { recursive: true });
+          await fs.writeFile(step.target, step.content, 'utf-8');
+          written.push({ ...step, backup });
+        }
+      }
+    } catch (error) {
+      for (const w of written.reverse()) {
+        try {
+          if (w.op === 'delete') {
+            await fs.writeFile(w.target, w.backup, 'utf-8');
+          } else if (w.backup === null) {
+            await fs.unlink(w.target);
+          } else {
+            await fs.writeFile(w.target, w.backup, 'utf-8');
+          }
+        } catch { /* rollback best-effort */ }
+      }
+      return { ok: false, output: '', error: `falló escribiendo, rollback hecho: ${errorClaro(error)}` };
+    }
+    return { ok: true, output: `patch aplicado: ${plan.length} archivo(s)\n${resumen}` };
   }
 });
 
@@ -880,11 +1436,22 @@ export async function runToolLoop({
   agentId = null,
   signal = null,
   allow = null,
-  aprobadoOutreach = null
+  aprobadoOutreach = null,
+  onFirstToolCall = null,
+  bus = null,
+  blockedUserText = null
 } = {}) {
   if (typeof completeChat !== 'function') {
     throw new Error('runToolLoop necesita completeChat(messages)');
   }
+  // A-08: tope de loops paralelos (fail-closed con motivo, respeta abort).
+  let releaseSlot = null;
+  try {
+    releaseSlot = await acquireLoopSlot({ signal });
+  } catch (error) {
+    return { toolSummary: `[sin slot de ejecución: ${String(error?.message || error).slice(0, 120)}]`, toolTurns: [] };
+  }
+  try {
   const avisar = typeof emit === 'function' ? emit : () => {};
   // source objeto (tests, contrato original) gana; si es string (runtime en
   // vivo pasa 'text'/'audio'), valen los top-level sueltos.
@@ -897,9 +1464,24 @@ export async function runToolLoop({
     // Integración 09/11: identidad del turno para tools runtime (browser usa
     // agentId para su sesión). base ya los tenía; ctx los hereda.
     turnId: srcObj.turnId ?? turnId ?? null,
-    agentId: srcObj.agentId ?? agentId ?? null
+    agentId: srcObj.agentId ?? agentId ?? null,
+    bus: srcObj.bus ?? bus ?? null
   };
   const base = { turnId: srcObj.turnId ?? turnId, agentId: srcObj.agentId ?? agentId };
+  // F-04/E-22: contexto de permisos (queries por corrida, best-effort).
+  let permGoalId = null;
+  let planApproved = false;
+  let permLevel = null;
+  let permProhibitions = [];
+  try {
+    const g = manosStore?.goalForSlug?.(ctx.companyId, ctx.slug);
+    permGoalId = g?.id || null;
+    planApproved = permGoalId ? Boolean(manosStore?.approvedPlanForGoal?.(permGoalId)) : false;
+    permLevel = g?.access_level || null;
+    permProhibitions = manosStore?.prohibitionsFor?.(permGoalId) || [];
+  } catch {
+    permGoalId = null;
+  }
 
   // El system YA trae la sección manos anexada por agent-runtime en versión
   // source-aware (voz corta / texto full): no re-anexar (era 2×, ~2400ch).
@@ -917,6 +1499,9 @@ export async function runToolLoop({
 
   const inicio = Date.now();
   const toolTurns = [];
+  let anuncioHecho = false; // QW-03: anuncio estático solo en el primer tool
+  const ejecutadas = new Map(); // QW-10: idempotencia (key → resultado)
+  const thrasher = createThrashingGuard(); // A-09: frena reintentos idénticos
   let cortadoPor = null;
 
   for (let turno = 0; turno < maxTurns; turno += 1) {
@@ -950,6 +1535,9 @@ export async function runToolLoop({
     // En serie a propósito (paralelo NO en v1): orden predecible y sin
     // carreras entre write_file y run_cmd sobre el mismo proyecto.
     for (const llamada of llamadas) {
+      if (cortadoPor) {
+        break;
+      }
       if (signal?.aborted) {
         cortadoPor = 'abort';
         break;
@@ -961,24 +1549,117 @@ export async function runToolLoop({
       const resumen = resumirTool(llamada.name, llamada.args);
       const argsPreview = vistaPrevia(llamada.raw || JSON.stringify(llamada.args || {}));
       avisar({ type: 'agent_tool_call', ...base, tool: llamada.name, argsPreview, summary: resumen });
+      if (!anuncioHecho && typeof onFirstToolCall === 'function') {
+        anuncioHecho = true;
+        try { onFirstToolCall(llamada.name); } catch { /* el anuncio jamás rompe el turno */ }
+      }
 
       let resultado;
+      let repetida = false;
       const t0 = Date.now();
       if (llamada.error) {
         resultado = { ok: false, output: '', error: llamada.error };
-      } else if (Array.isArray(allow) && !allow.includes(llamada.name)) {
+      } else if (Array.isArray(allow) && !allow.includes(llamada.name) && !(llamada.name.startsWith('mcp_') && allow.includes('mcp_*'))) {
         // Track C: fuera de la allow-list del rol → rechazo claro, no ejecución.
+        // F-05: 'mcp_*' cubre tools MCP registradas on-demand (diferidas).
         resultado = { ok: false, output: '', error: `tool no permitida para tu rol: ${llamada.name}` };
       } else {
         const tool = getTool(llamada.name);
         if (!tool) {
           resultado = { ok: false, output: '', error: `tool desconocida: ${llamada.name}` };
         } else {
+          // F-06: pre-hooks (pueden bloquear o modificar args).
+          let hookArgs = llamada.args;
+          let hookBlock = null;
           try {
-            resultado = await tool.execute(llamada.args, ctx);
-          } catch (error) {
-            resultado = { ok: false, output: '', error: errorClaro(error) };
+            const pre = await runHooks('preToolUse', {
+              tool: llamada.name, args: llamada.args, ctx,
+              turnId: base.turnId, agentId: base.agentId
+            });
+            for (const r of pre.results) {
+              if (r.value && typeof r.value === 'object') {
+                if (r.value.block) {
+                  hookBlock = r.value.reason || `bloqueado por hook ${r.name}`;
+                }
+                if (r.value.args && typeof r.value.args === 'object') {
+                  hookArgs = r.value.args;
+                }
+              }
+            }
+          } catch {
+            hookBlock = null; // runHooks no lanza; defensa extra.
           }
+          if (hookBlock) {
+            resultado = { ok: false, output: '', error: hookBlock };
+          } else {
+          // F-04: gate deny→ask→allow (harness, no prompt).
+          const gate = checkCall(llamada.name, hookArgs, { goalId: permGoalId, planApproved, level: permLevel, prohibitions: permProhibitions });
+          if (gate.verdict === 'deny') {
+            const why = gate.prohibition
+              ? `prohibido: ${gate.prohibition.kind} ${gate.prohibition.pattern}${gate.prohibition.reason ? ` (${gate.prohibition.reason})` : ''}`
+              : `bloqueada por permisos: ${llamada.name} (tier deny)`;
+            resultado = { ok: false, output: '', error: why };
+          } else if (gate.verdict === 'ask') {
+            const approvalId = requestApproval({
+              tool: llamada.name,
+              args: hookArgs,
+              goalId: permGoalId,
+              agentId: ctx.agentId,
+              turnId: base.turnId,
+              userText: blockedUserText
+            });
+            resultado = { ok: false, output: '', error: `APPROVAL_REQUIRED:${approvalId} — necesito que Tito apruebe ${llamada.name} (decile qué quiero hacer y esperá su "dale")` };
+            cortadoPor = 'approval';
+          } else {
+          const key = toolCallKey(llamada.name, hookArgs);
+          const previa = ejecutadas.get(key);
+          if (previa) {
+            repetida = true;
+            resultado = { ok: previa.ok, output: previa.output, ...(previa.ok ? {} : { error: previa.error }) };
+          } else {
+            try {
+              resultado = await tool.execute(hookArgs, ctx);
+            } catch (error) {
+              resultado = { ok: false, output: '', error: errorClaro(error) };
+            }
+            ejecutadas.set(key, { ok: resultado.ok !== false, output: resultado.output || '', error: resultado.error || '' });
+          }
+          } // fin else gate allow
+          } // fin else hookBlock
+        }
+      }
+      if (cortadoPor === 'approval') {
+        // Registrar la bloqueada y frenar: el turno sigue cuando Tito apruebe.
+        const msApproval = Date.now() - t0;
+        registrTurno.calls.push({ tool: llamada.name, ok: false, ms: msApproval, summary: resumen, error: resultado.error, approvalId: resultado.error.match(/APPROVAL_REQUIRED:(approval-\d+)/)?.[1] || null });
+        avisar({
+          type: 'agent_tool_done',
+          ...base,
+          tool: llamada.name,
+          ok: false,
+          ms: msApproval,
+          outputPreview: vistaPrevia(resultado.error),
+          summary: resumen,
+          error: resultado.error,
+          approvalId: resultado.error.match(/APPROVAL_REQUIRED:(approval-\d+)/)?.[1] || null
+        });
+        observaciones.push(`[tool:${llamada.name} BLOQUEADA — falta aprobación de Tito]\n${resultado.error}`);
+        break;
+      }
+      // F-06: post-hooks (observan; note se anexa a la observación).
+      let hookNote = '';
+      if (resultado.ok !== false) {
+        try {
+          const post = await runHooks('postToolUse', {
+            tool: llamada.name, args: hookArgsForPost(llamada), result: resultado,
+            turnId: base.turnId, agentId: base.agentId
+          });
+          const notes = post.results.map((r) => (typeof r.value === 'string' ? r.value : r.value?.note)).filter(Boolean);
+          if (notes.length > 0) {
+            hookNote = ` [hook: ${notes.join('; ').slice(0, 300)}]`;
+          }
+        } catch {
+          // Post caído: el resultado igual vale.
         }
       }
       const ms = Date.now() - t0;
@@ -987,9 +1668,35 @@ export async function runToolLoop({
         ok: resultado.ok !== false,
         ms,
         summary: resumen,
-        ...(resultado.ok !== false ? {} : { error: resultado.error })
+        ...(resultado.ok !== false ? {} : { error: resultado.error }),
+        ...(repetida ? { repetida: true } : {})
       };
       registrTurno.calls.push(hecha);
+      // A-09: 4 fallos seguidos de la misma tool = thrashing: frenar.
+      if (!repetida && thrasher.push(llamada.name, hecha.ok)) {
+        cortadoPor = 'thrashing';
+        observaciones.push(`[basta: ${llamada.name} falló 4 veces seguidas — cambiar de estrategia en vez de reintentar]`);
+      }
+      // M-04: UI en vivo — tras mutar la checklist, figura actualizada.
+      if (hecha.ok && (llamada.name === 'task_add' || llamada.name === 'task_done' || llamada.name === 'task_list')) {
+        try {
+          const g = checklistGoal(ctx);
+          if (!g.error) {
+            const items = manosStore.checklistForGoal(g.goal.id).slice(0, 30).map((i) => ({
+              text: i.text,
+              done: Boolean(i.completed)
+            }));
+            if (items.length > 0) {
+              const ev = figureEvent(base.turnId || null, base.agentId || null, { kind: 'checklist', items });
+              if (ev) {
+                avisar(ev);
+              }
+            }
+          }
+        } catch {
+          // La figura es decorativa: la checklist igual quedó guardada.
+        }
+      }
       avisar({
         type: 'agent_tool_done',
         ...base,
@@ -1001,12 +1708,22 @@ export async function runToolLoop({
         ...(hecha.ok ? {} : { error: resultado.error })
       });
       observaciones.push(
-        `[tool:${llamada.name} ${hecha.ok ? 'OK' : 'FALLÓ'}]\n${hecha.ok ? resultado.output : resultado.error}`
+        `[tool:${llamada.name} ${hecha.ok ? 'OK' : 'FALLÓ'}${repetida ? ' repetida: no se re-ejecutó, este es el resultado anterior' : ''}${hookNote}]\n${hecha.ok ? resultado.output : resultado.error}`
       );
     }
     toolTurns.push(registrTurno);
     chat.push({ role: 'assistant', content: texto });
-    chat.push({ role: 'user', content: observaciones.join('\n\n') || '(sin observaciones)' });
+    // E-26: reminder anti-olvido cada 3 turnos (recency bias): reglas + top prohibiciones.
+    let obsText = observaciones.join('\n\n') || '(sin observaciones)';
+    if ((turno + 1) % 3 === 0 && !cortadoPor) {
+      try {
+        const top = (permProhibitions || []).slice(0, 4).map((r) => `${r.kind}:${r.pattern}`).join(', ');
+        obsText += `\n\n[recordatorio: respeta tu rol y sus límites;${top ? ` prohibido: ${top};` : ''} nada destructivo sin avisar; ante duda, preguntá]`;
+      } catch {
+        // Reminder caído: el loop sigue.
+      }
+    }
+    chat.push({ role: 'user', content: obsText });
     if (cortadoPor) {
       break;
     }
@@ -1018,23 +1735,63 @@ export async function runToolLoop({
 
   const totalCalls = toolTurns.reduce((n, t) => n + t.calls.length, 0);
   const fallos = toolTurns.flatMap((t) => t.calls).filter((c) => !c.ok);
+  const repetidas = toolTurns.flatMap((t) => t.calls).filter((c) => c.repetida).length;
   const partes = toolTurns.flatMap((t) =>
     t.calls.map((c) => {
       const estado = c.ok ? 'ok' : ('falló (' + (c.error || 'sin motivo') + ')');
       return '- ' + c.tool + ': ' + estado + ' — ' + c.summary;
     })
   );
+  // E-08: cada fallo de tool alimenta el loop de aprendizaje (máx 2 por
+  // corrida, best-effort, sin LLM). El dedup vive en recordErrorLearning.
+  try {
+    if (manosStore && fallos.length > 0) {
+      const seen = new Set();
+      const mod = await import('./learning.js');
+      for (const f of fallos.slice(0, 4)) {
+        if (f.approvalId || String(f.error || '').includes('APPROVAL_REQUIRED')) {
+          continue; // Bloqueo por aprobación ≠ error: no se aprende.
+        }
+        const key = `${f.tool}::${String(f.error || '').slice(0, 80)}`;
+        if (seen.has(key) || seen.size >= 2) {
+          continue;
+        }
+        seen.add(key);
+        mod.recordErrorLearning(manosStore, {
+          agentId: ctx.agentId,
+          meetingId: null,
+          goalId: permGoalId,
+          tool: f.tool,
+          error: f.error
+        });
+      }
+    }
+  } catch {
+    // Aprender nunca rompe el turno.
+  }
+
   const toolSummary = [
     totalCalls === 0 ? 'Sin acciones de herramientas.' : `Usé ${totalCalls} herramienta(s):`,
     ...partes,
     fallos.length > 0 ? `(${fallos.length} fallaron)` : '',
+    repetidas > 0 ? `(${repetidas} repetidas sin re-ejecutar)` : '',
     cortadoPor === 'maxTurns' ? '[cortado por tope de turnos: resumen parcial]' : '',
     cortadoPor === 'deadline' ? '[cortado por tiempo: resumen parcial]' : '',
     cortadoPor === 'abort' ? '[interrumpido por el usuario: resumen parcial]' : '',
-    cortadoPor === 'error-modelo' ? '[el modelo falló: resumen parcial]' : ''
+    cortadoPor === 'error-modelo' ? '[el modelo falló: resumen parcial]' : '',
+    cortadoPor === 'thrashing' ? '[frenado: reintentos idénticos — cambiar estrategia]' : '',
+    cortadoPor === 'approval' ? '[pausado: falta aprobación de Tito (repetí el pedido tras el \u0022dale\u0022)]' : ''
   ].filter(Boolean).join('\n');
 
-  return { toolSummary, toolTurns };
+  const outcome = { toolSummary, toolTurns };
+  releaseSlot();
+  return outcome;
+  } catch (error) {
+    try {
+      releaseSlot();
+    } catch { /* best-effort */ }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,10 +1800,17 @@ export async function runToolLoop({
 
 let mcpCache = null;
 
+// F-05: diferido real — NO lista ni spawnea nada (mcp_search registra
+// on-demand). preloadMcpTools() conserva el eager para /reconnect y tests.
 export async function loadMcpTools() {
   if (mcpCache) {
     return mcpCache;
   }
+  mcpCache = getTool('mcp_search') ? ['mcp_search'] : [];
+  return mcpCache;
+}
+
+export async function preloadMcpTools() {
   try {
     const mod = await import('./manos-mcp.js');
     const defs = await mod.getMcpTools();
@@ -1060,11 +1824,10 @@ export async function loadMcpTools() {
       });
       names.push(def.name);
     }
-    mcpCache = names;
+    mcpCache = ['mcp_search', ...names];
     return names;
   } catch {
-    // Sin módulo MCP (v1 no lo trae): [] y a otra cosa.
-    mcpCache = [];
+    mcpCache = ['mcp_search'];
     return [];
   }
 }

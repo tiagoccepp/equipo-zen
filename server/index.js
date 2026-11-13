@@ -12,6 +12,11 @@ import { synthesizePiper } from './lib/piper.js';
 import { getAudioFollowDefault, getAudioInput, getAudioOutput, initSettings } from './lib/settings.js';
 import { firstNonEmpty, loadWarmupWavBase64, pcmToWav16kBase64, startSidecarWatchdog, withTimeoutMs } from './lib/sidecars.js';
 import { Store } from './lib/store.js';
+import { setManosStore } from './lib/manos.js';
+import { registerBuiltinHooks } from './lib/hooks.js';
+import { startScheduler } from './lib/scheduler.js';
+import { startChannelPolling } from './lib/channel-runtime.js';
+import { setUsageSink } from './lib/billing.js';
 import { whisperHealthy } from './lib/stt.js';
 import { LEGACY_VOICE_MAP, isAvailable as ttsAvailable, synthesize } from './lib/supertonic.js';
 import { speechVerdict } from './lib/silero.js';
@@ -120,6 +125,8 @@ import { Workforce } from './lib/workforce.js';
 import { attachMeetingServer } from './lib/ws.js';
 
 const store = new Store(DB_PATH);
+setManosStore(store); // M-04: tools task_* operan sobre este store.
+registerBuiltinHooks(); // F-06: secrets-guard activo.
 if (process.env.EQUIPO_EPHEMERAL_MEETINGS === '1') {
   const n = store.clearEphemeral();
   console.log(`Modo test: reuniones efímeras (${n} filas limpiadas).`);
@@ -133,6 +140,9 @@ store.ensureGoalSlugs();
 
 const app = createApp({ store });
 const server = createServer(app);
+startScheduler({ store }); // E-13: cron/intervalos/watchers.
+startChannelPolling(); // E-15: polling Telegram (solo channels enabled).
+setUsageSink((u) => store.recordUsage(u)); // E-21: metering → ledger.
 const keyRing = new ApiKeyRing(collectProviderKeys(DEFAULT_LLM_PROVIDER));
 keyRing.setTelemetry(telemetry);
 initSettings(store, keyRing);
@@ -151,7 +161,24 @@ if (!getAudioFollowDefault()) {
 }
 attachMeetingServer(server, keyRing, store);
 const workforce = new Workforce(store, keyRing, {
-  onEvent: (companyId, payload) => broadcastToCompany(companyId, payload)
+  onEvent: (companyId, payload) => {
+    broadcastToCompany(companyId, payload);
+    void (async () => {
+      try {
+        const bg = await import('./lib/background.js');
+        const promo = bg.promotableWorkEvent(payload);
+        if (!promo) {
+          return;
+        }
+        const ms = await import('./lib/meeting-session.js');
+        for (const session of ms.sessionsForCompany(companyId)) {
+          try {
+            await session.promoteBackgroundResult(promo);
+          } catch {}
+        }
+      } catch {}
+    })();
+  }
 });
 workforce.start();
 

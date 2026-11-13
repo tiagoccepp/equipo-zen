@@ -10,6 +10,7 @@
 // objeto { created, ... } con motivo legible.
 
 import {
+  CAPABILITY_SOURCES,
   capabilitiesForRole,
   isKnownRole,
   knownRoles,
@@ -17,6 +18,9 @@ import {
   skillsForCapabilities,
   toolsForRole
 } from './capabilities.js';
+import { getTool, listTools, runToolLoop } from './manos.js';
+import { rmSync } from 'node:fs';
+import { enterSpawn, exitSpawn } from './budgets.js';
 import { ensureAgentConventions } from './agent-conventions.js';
 import { appendDaily } from './pablo-memory.js';
 
@@ -156,6 +160,8 @@ export function spawnRequest(pedido = {}, ctx = {}) {
     }
   }
 
+  // E-04(a): necesidades del entorno (display, tito-ok, mcp:X) + MCPs.
+  const needs = needsForCapabilities(capsFinales);
   const r = {
     created: true,
     agent,
@@ -163,9 +169,185 @@ export function spawnRequest(pedido = {}, ctx = {}) {
     capabilities: capsFinales,
     skills: skillsForCapabilities(capsFinales),
     tools: toolsForRole(roleFinal),
+    needs,
+    mcp: needs.filter((n) => n.startsWith('mcp:')).map((n) => n.slice(4)),
     motivo: `creado ${name} (${roleFinal}) para: ${porque}`
   };
   registrar({ ...r, resumen: `spawn ${id} (${roleFinal}): ${porque.slice(0, 120)}` }, companySlug);
+  return r;
+}
+
+// E-04(a): needs agregados de las capabilities (se reportan, no filtran:
+// el rol SABE qué puede fallarle por entorno).
+export function needsForCapabilities(caps) {
+  const out = [];
+  for (const cap of caps || []) {
+    for (const need of CAPABILITY_SOURCES[cap]?.needs || []) {
+      if (!out.includes(need)) {
+        out.push(need);
+      }
+    }
+  }
+  return out;
+}
+
+// E-04(b): smoke test real del rol spawneado. Sin red, sin side effects:
+// - registry: toda tool no-mcp del allow existe de verdad.
+// - boundaries: una tool real fuera del allow se rechaza sin ejecutar.
+// - exec: una tool segura del allow se ejecuta (now/read/list).
+// - responde: el loop llega a texto final.
+const SAFE_SMOKE_ARGS = {
+  now: {},
+  list_files: {},
+  read_file: { path: '__smoke__.txt' }
+};
+
+function smokeCall(name, args) {
+  return `\`\`\`tool:${name}\n${JSON.stringify(args || {})}\n\`\`\``;
+}
+
+export async function smokeSpawnedAgent({ role, allow = null, source = {} } = {}) {
+  const checks = {};
+  const allowed = Array.isArray(allow) ? allow : toolsForRole(role);
+  // 1. Registry: presencia real (las mcp_* son dinámicas, se saltean).
+  const missing = allowed.filter((n) => !String(n).startsWith('mcp_') && !getTool(n));
+  checks.registry = missing.length === 0 ? 'ok' : `faltan: ${missing.join(',')}`;
+  // 2-4. Loop con modelo fake.
+  const registered = new Set(listTools().map((x) => x.name));
+  const forbidden = [...registered].find((n) => !allowed.includes(n) && !String(n).startsWith('mcp_'))
+    || '__smoke_unknown__';
+  const safe = allowed.find((n) => SAFE_SMOKE_ARGS[n] && registered.has(n));
+  const scripts = [
+    smokeCall(forbidden, {}),
+    safe ? smokeCall(safe, SAFE_SMOKE_ARGS[safe]) : 'smoke: sin tool segura, respondo directo.',
+    'smoke final: respondo.'
+  ];
+  let fakeCalls = 0;
+  let idx = 0;
+  const outcome = await runToolLoop({
+    system: 'smoke del spawner',
+    messages: [{ role: 'user', content: 'smoke' }],
+    completeChat: async () => {
+      fakeCalls += 1;
+      return { text: scripts[Math.min(idx++, scripts.length - 1)] };
+    },
+    source: { companyId: 'smoke', slug: 'smoke', ...source },
+    allow: allowed,
+    maxTurns: 5,
+    deadlineMs: 20000
+  });
+  const calls = (outcome.toolTurns || []).flatMap((x) => x?.calls || []);
+  const rej = calls.find((c) => c.tool === forbidden);
+  checks.boundary = rej && !rej.ok && String(rej.error || '').includes('no permitida')
+    ? 'ok'
+    : (forbidden === '__smoke_unknown__' && rej && !rej.ok ? 'ok-desconocida' : `falló (calls=${calls.length})`);
+  if (safe) {
+    const ran = calls.find((c) => c.tool === safe);
+    checks.exec = ran && !String(ran.error || '').includes('no permitida') && !String(ran.error || '').includes('desconocida')
+      ? 'ok'
+      : 'falló';
+  } else {
+    checks.exec = 'n/a (solo presencia)';
+  }
+  checks.responded = fakeCalls >= 2 ? 'ok' : 'falló';
+  const ok = checks.registry === 'ok' && checks.boundary.startsWith('ok') &&
+    (checks.exec === 'ok' || checks.exec.startsWith('n/a')) && checks.responded === 'ok';
+  return { ok, role, checks };
+}
+
+const SPAWN_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M4', 'M5'];
+const SPAWN_COLORS = ['#4c6ef5', '#9c36b5', '#0ca678', '#e8590c', '#1c7ed6', '#f08c00', '#7048e8', '#37b24d'];
+
+// E-04(d): spawn completo contra store + proyecto: valida → inserta agente
+// → asigna a roster → smoke → persiste (changelog). Si algo falla,
+// ROLLBACK (borra agente + roster + ficha) y devuelve motivo.
+export async function spawnAgent({ store, goalId, pedido = {}, ctx = {} } = {}) {
+  if (!store || !goalId) {
+    return { created: false, rejected: true, motivo: 'spawnAgent necesita {store, goalId}' };
+  }
+  const goal = store.getGoal(goalId);
+  if (!goal) {
+    return { created: false, rejected: true, motivo: `proyecto inexistente: ${goalId}` };
+  }
+  // Equipo actual = roster del proyecto (cero duplicados intra-proyecto).
+  let equipo = Array.isArray(ctx.equipo) ? ctx.equipo : null;
+  if (!equipo) {
+    try {
+      equipo = store.rosterForProject(goalId)
+        .filter((r) => r.agent_id)
+        .map((r) => ({ id: r.agent_id, role: r.role || r.roleWanted }));
+    } catch {
+      equipo = [];
+    }
+  }
+  const companySlug = ctx.companySlug || goal.company_id;
+  // A-08: anti-recursión estructural de spawns anidados.
+  if (!enterSpawn()) {
+    return { created: false, rejected: true, motivo: 'rechazado: tope de spawns anidados (anti-recursión)' };
+  }
+  try {
+    return await spawnAgentInner(store, goal, goalId, pedido, ctx, equipo, companySlug);
+  } finally {
+    exitSpawn();
+  }
+}
+
+async function spawnAgentInner(store, goal, goalId, pedido, ctx, equipo, companySlug) {
+  const r = spawnRequest(pedido, { ...ctx, companySlug, equipo });
+  if (!r.created) {
+    return r;
+  }
+  const createdPaths = [];
+  if (r.ficha) {
+    createdPaths.push(r.ficha);
+  }
+  const rollback = (motivo) => {
+    try { store.deleteAgent(r.agent.id, 'spawner'); } catch { /* best-effort */ }
+    for (const p of createdPaths) {
+      try {
+        rmSync(p, { force: true });
+      } catch { /* best-effort */ }
+    }
+    try { store.logChange('spawner', 'agent', r.agent.id, 'rollback', { motivo }); } catch { /* best-effort */ }
+    registrar({ created: false, rolledBack: true, motivo }, companySlug);
+    return { created: false, rolledBack: true, motivo };
+  };
+  try {
+    const companyAgents = store.listAgents({ companyId: goal.company_id });
+    const usedVoices = new Set(companyAgents.map((a) => a.voice));
+    const voice = SPAWN_VOICES.find((v) => !usedVoices.has(v)) || SPAWN_VOICES[companyAgents.length % SPAWN_VOICES.length];
+    const color = SPAWN_COLORS[companyAgents.length % SPAWN_COLORS.length];
+    store.insertAgent({
+      id: r.agent.id,
+      name: r.agent.name,
+      title: `Especialista ${r.agent.role}`,
+      voice,
+      color,
+      style: '',
+      aliases: [r.agent.name.toLowerCase(), r.agent.role],
+      domains: [],
+      boundaries: [`Respeta su rol (${r.agent.role}): fuera de él, deriva.`],
+      knowledge: '',
+      craft: '',
+      companyId: goal.company_id,
+      role: r.agent.role,
+      managerId: null
+    }, 'spawn', 'spawner');
+    store.addAgentToProject(goalId, r.agent.id, r.agent.role, 'spawn');
+    store.logChange('spawner', 'roster', goalId, 'assign', { agentId: r.agent.id, role: r.agent.role });
+  } catch (error) {
+    return rollback(`no se pudo persistir: ${String(error?.message || error).slice(0, 200)}`);
+  }
+  // Smoke: si el rol no pasa, el spawn se revierte (barra perfectito).
+  try {
+    const smoke = await smokeSpawnedAgent({ role: r.agent.role });
+    if (!smoke.ok) {
+      return rollback(`smoke falló: ${JSON.stringify(smoke.checks).slice(0, 300)}`);
+    }
+    r.smoke = smoke.checks;
+  } catch (error) {
+    return rollback(`smoke rompió: ${String(error?.message || error).slice(0, 200)}`);
+  }
   return r;
 }
 

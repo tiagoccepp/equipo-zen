@@ -4,9 +4,15 @@ import {
   AUDIO_MIME_TYPE,
   MAX_CONTEXTUAL_FOLLOWUPS,
   ROUTER_TIMEOUT_MS,
-  TELEMETRY_MAX_EVENTS
+  TELEMETRY_MAX_EVENTS,
+  projectSessionId
 } from './config.js';
-import { getMinimaxModels, getSalaGroupchat, getTtsLanguage } from './settings.js';
+import { getEnergyMode, getMinimaxModels, getNotifyVoice, getSalaGroupchat, getTtsLanguage, modelsForTier } from './settings.js';
+import { scoreComplexity } from './complexity.js';
+import { jevGate } from './jev.js';
+import { freezePacket, routePacketToAgent } from './dispatch.js';
+import { registerVoiceAnnouncer } from './notifications.js';
+import { checkCaps, ramMbNow } from './caps.js';
 import { LiveAgentRuntime } from './agent-runtime.js';
 import { ensureAgentConventions, renderAgentConventions } from './agent-conventions.js';
 import {
@@ -36,7 +42,15 @@ import { getErrorText, getShortError } from './text.js';
 import { summarizeClientMessage, summarizeServerMessage, telemetry } from './telemetry.js';
 import { CaptureTranscriberRuntime } from './transcriber.js';
 import { maybeClassifyAddressing, maybeConsultSala } from './turn-pipeline.js';
-import { CancellableTurnQueue, SpeakerGate } from './turn-pipeline.js';
+import { AgentBus } from './agent-bus.js';
+import { classifyPlanReply } from './plan-mode.js';
+import { runHooks } from './hooks.js';
+import { buildClosingSlides, slideDelays } from './closing-slides.js';
+import { figureEvent } from './figures.js';
+import { listPending, resolveApproval } from './permissions.js';
+import { maybeResolvePlan, planStepsText } from './plan-mode.js';
+import { mergeTastes, renderTastesSection as renderTastes } from './tastes.js';
+import { CancellableTurnQueue, SpeakerGate, sentenceAudioPlan } from './turn-pipeline.js';
 
 const MAX_SESSION_AGENTS = 8;
 // Paciencia: cuánto se espera tras el último fragmento antes de rutear.
@@ -82,11 +96,14 @@ export function isMeetingLive(meetingId) {
 
 // Difusión a todas las sesiones vivas de una empresa (eventos de trabajo).
 export function broadcastToCompany(companyId, payload) {
-  for (const session of activeSessionsByMeeting.values()) {
-    if (session.company?.id === companyId) {
-      session.send(payload);
-    }
+  for (const session of sessionsForCompany(companyId)) {
+    session.send(payload);
   }
+}
+
+// A-07: sesiones vivas de una empresa (puente background a charla).
+export function sessionsForCompany(companyId) {
+  return [...activeSessionsByMeeting.values()].filter((s) => s.company?.id === companyId);
 }
 
 // Reflexión post-reunión: singleton por proceso (los timers de debounce
@@ -97,6 +114,34 @@ function getReflectionRunner(store, keyRing) {
     reflectionRunner = new ReflectionRunner(store, keyRing);
   }
   return reflectionRunner;
+}
+
+// E-26: prohibiciones top-10 al system (terse: kind+pattern+razón).
+function renderProhibitionsSection(store, goalId) {
+  try {
+    const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
+    const rows = store.prohibitionsFor(goalId).slice(0, 10);
+    if (rows.length === 0) {
+      return '';
+    }
+    const head = en
+      ? 'FORBIDDEN (hard blocks — do not even try, the harness denies them):'
+      : 'PROHIBIDO (bloqueo duro — ni lo intentes, el harness lo niega):';
+    return [head, ...rows.map((r) => `- ${r.kind}: ${r.pattern}${r.reason ? ` (${r.reason})` : ''}`.slice(0, 160))].join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// E-09: gustos global+proyecto fusionados y renderizados para el system.
+function renderTastesSection(store, goalId) {
+  try {
+    const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
+    const { global, project } = store.tastesFor(goalId);
+    return renderTastes(mergeTastes(global, project), { english: en });
+  } catch {
+    return '';
+  }
 }
 
 export class MeetingSession {
@@ -110,6 +155,7 @@ export class MeetingSession {
     // ¿El usuario quiere oír a los agentes? Solo en modo llamada. Arranca en
     // false: una reunión por texto no sintetiza una sola palabra.
     this.voiceEnabled = false;
+    this.groupCall = false; // E-06: llamada grupal (convoca a todo el roster)
     // ¿El equipo arranca a trabajar apenas se reparte una tarea, sin esperar
     // el cierre de la reunión? Sí por defecto — es el comportamiento de una
     // empresa de verdad. El usuario lo puede apagar desde la barra.
@@ -134,11 +180,30 @@ export class MeetingSession {
       timeoutMs: Number(process.env.TURN_TIMEOUT_MS || 120000),
       maxPending: 10,
       onCancelled: (turnId, reason) => {
-        this.send({ type: 'turn_cancelled', turnId, reason: reason === 'barge_in' ? 'barge_in' : 'superseded' });
+        const mapped = reason === 'barge_in' ? 'barge_in' : reason === 'steered' ? 'steered' : 'superseded';
+        this.send({ type: 'turn_cancelled', turnId, reason: mapped });
         this.logTelemetry('turn_cancelled', { turnId, reason }, turnId);
       }
     });
     this.learningObserver = new LearningObserver(store, keyRingInstance);
+    // E-18: si Pablo está despierto (voz on), los equipos avisan por voz.
+    try {
+      this._unregisterAnnouncer = registerVoiceAnnouncer(async ({ short }) => {
+        if (!this.voiceEnabled || !getNotifyVoice()) {
+          return false;
+        }
+        const runtimes = [...(this.agents?.values?.() || [])];
+        const pablo = runtimes.find((r) => r?.agent?.role === 'orquestador' || r?.agent?.id === 'pablo');
+        const agent = pablo?.agent || runtimes[0]?.agent;
+        if (!agent?.id) {
+          return false;
+        }
+        await this.speakAs(agent, String(short).slice(0, 200));
+        return true;
+      });
+    } catch {
+      this._unregisterAnnouncer = null;
+    }
     this.reflection = getReflectionRunner(store, keyRingInstance);
     // Paciencia conversacional: los mensajes seguidos del usuario se juntan
     // en UN solo turno antes de rutear (el agente espera a que termines la idea).
@@ -224,6 +289,30 @@ export class MeetingSession {
       ...agent,
       tasks: tasksByAgent.get(agent.id) || []
     }));
+    // E-27: contadores de tope (sesión; default sin topes).
+    this.sessionTokens = 0;
+    this.meetingStartedAt = Date.now();
+    // A-03: hooks sessionStart (inyectan proyecto; {notice} se muestra).
+    try {
+      void runHooks('sessionStart', {
+        company: this.company ? { id: this.company.id, name: this.company.name } : null,
+        project: this.project ? { id: this.project.id, title: this.project.title, slug: this.project.slug } : null,
+        meetingId: meeting.id,
+        agents: this.sessionAgents.map((a) => a.id)
+      }).then((r) => {
+        for (const h of r.results || []) {
+          const notice = h.value && typeof h.value === 'object' ? h.value.notice : null;
+          if (notice) {
+            this.send({ type: 'agent_progress', turnId: null, agentId: null, text: String(notice).slice(0, 300) });
+          }
+        }
+      }).catch(() => {});
+    } catch {
+      // Hooks caídos: la reunión igual arranca.
+    }
+    // E-05: bus peer-to-peer de la reunión (roster = destinatarios válidos).
+    this.agentBus = new AgentBus();
+    this.agentBus.setRoster(this.sessionAgents.map((a) => a.id));
     this.router = new AgentRouter(this.sessionAgents);
     this.agents = new Map(
       this.sessionAgents.map((agent) => [agent.id, this.createAgentRuntime(agent)])
@@ -301,10 +390,12 @@ export class MeetingSession {
       workSection: renderWorkSection(this.store, this.company?.id, this.project?.id || null),
       // De qué estudio son: sin esto ofrecían una web en un proyecto móvil.
       stack: this.project?.stack || this.company?.stack || null,
-      learningsSection: agentId ? renderLearningsSection(this.store, agentId) : '',
+      learningsSection: agentId ? renderLearningsSection(this.store, agentId, this.project?.id || null) : '',
+      tastesSection: renderTastesSection(this.store, this.project?.id || null),
+      prohibitionsSection: renderProhibitionsSection(this.store, this.project?.id || null),
       // Memoria Pablo (SOUL/USER/MEMORY/hoy): identidad antes que episódico.
       // 3600 chars: cubre los seeds (~3.2k) + daily; el recorte cae sobre el daily (va último).
-      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600 }),
+      memorySection: renderMemorySection(this.company?.id || 'pablo', { maxChars: 3600, projectSlug: this.project?.slug || null }),
       // Convenciones propias del agente (top ~15 líneas, ≤900ch): van a SU
       // system prompt y a ningún otro. buildSystemInstruction lo inyecta
       // (integración main); mientras tanto el campo se ignora sin daño.
@@ -374,10 +465,13 @@ export class MeetingSession {
         agenteInterrumpido: this.sessionAgents.find((a) => a.id === speakingAgentId)?.name || speakingAgentId,
         msReproducidos: message.playedMs ?? null
       });
+      // M-06: hint semántico del cliente (qué dijo al cortar).
+      const hint = message.hint && typeof message.hint === 'object' ? message.hint : null;
       this.logTelemetry('user_interrupt', {
         reason: message.reason,
         agentId: speakingAgentId,
-        playedMs: message.playedMs ?? null
+        playedMs: message.playedMs ?? null,
+        ...(hint ? { hintCls: String(hint.cls || '').slice(0, 20), hintText: String(hint.text || '').slice(0, 120) } : {})
       }, speakingTurnId);
       if (speakingAgentId) {
         this.memory.add('system', 'Orchestrator', `The user interrupted ${this.sessionAgents.find(a => a.id === speakingAgentId)?.name || speakingAgentId} before they finished.`);
@@ -395,11 +489,23 @@ export class MeetingSession {
       if (!text) {
         return;
       }
-      this.enqueueUserTurn(text, 'text');
+      // M-05: steer explícito (redirigir a mitad de turno) + turnId del
+      // cliente para eco optimista sin duplicados.
+      const clientTurnId = typeof message.turnId === 'string' && message.turnId ? message.turnId.slice(0, 32) : null;
+      if (message.steer === true) {
+        this.steerUserTurn(text, 'text', clientTurnId);
+        return;
+      }
+      this.enqueueUserTurn(text, 'text', clientTurnId);
       return;
     }
 
     if (message.type === 'audio_prepare') {
+      // E-06: el cliente avisa si es llamada grupal (todos escuchan).
+      this.groupCall = message.group === true;
+      if (message.group === true) {
+        this.logTelemetry('group_call_start', { agents: this.sessionAgents.map((a) => a.id) });
+      }
       try {
         await this.transcriber.prepareListening();
       } catch (error) {
@@ -454,6 +560,10 @@ export class MeetingSession {
 
     if (message.type === 'audio_stop') {
       this.transcriber.stopListening();
+      if (this.groupCall) {
+        this.groupCall = false;
+        this.logTelemetry('group_call_end', {});
+      }
       return;
     }
 
@@ -878,12 +988,25 @@ export class MeetingSession {
 
     // 2. Parsear auto-asignación: [TAREA_CREAR: descripción] (sin agenteId explícito)
     // Solo matchea si NO hay dos parámetros separados por ':'
+    // A-01: dispatch frío — se congela el paquete y se rutea por DESCRIPCIÓN
+    // al mejor agente del roster; si nadie calza, queda en el autor (fallback
+    // seguro; el spawner cubre roles faltantes por su lado E-04).
     const selfCreateRegex = /\[TAREA_CREAR:\s*([^:\]]+)\]/g;
     let selfCreateMatch;
     while ((selfCreateMatch = selfCreateRegex.exec(text)) !== null) {
       const taskText = selfCreateMatch[1].trim();
       if (taskText && !taskText.startsWith('TAREA_') && !taskText.includes(':')) {
-        const targetAgent = this.sessionAgents.find(a => a.id === agentId);
+        let targetAgent = this.sessionAgents.find(a => a.id === agentId);
+        try {
+          const packet = freezePacket(taskText);
+          const routed = routePacketToAgent(packet, this.sessionAgents);
+          if (routed) {
+            targetAgent = routed;
+            this.logTelemetry('dispatch_routed', { taskText: taskText.slice(0, 120), agentId: routed.id }, null);
+          }
+        } catch {
+          // Routing caído: fallback al autor.
+        }
         if (targetAgent && this.assignTaskToAgent(targetAgent, taskText)) {
           this.logTelemetry('task_created_by_agent', { agentId, taskText, method: 'self_assign' });
           changed = true;
@@ -937,6 +1060,27 @@ export class MeetingSession {
     if (!normalized) {
       return;
     }
+    // E-17: en modo gate, el habla sin wake word se ignora (Jev).
+    // Texto tipeado y sesiones despiertas pasan siempre.
+    try {
+      if (getEnergyMode() === 'gate' && !this._gateAwake) {
+        const { wake, command } = jevGate(normalized);
+        if (!wake) {
+          this.logTelemetry('jev_ignored', { text: normalized.slice(0, 120) });
+          return;
+        }
+        this._gateAwake = true;
+        this.send({ type: 'agent_progress', turnId: null, agentId: null, text: 'Pablo despierto' });
+        this.logTelemetry('jev_wake', { command: command.slice(0, 120) });
+        if (!command) {
+          return; // solo "Pablo": despierta, espera el pedido
+        }
+        this.enqueueUserTurn(command, 'audio');
+        return;
+      }
+    } catch {
+      // Jev caído: el habla pasa (fail-open, no deja mudo).
+    }
     this.enqueueUserTurn(normalized, 'audio');
   }
 
@@ -983,8 +1127,8 @@ export class MeetingSession {
     return false;
   }
 
-  enqueueUserTurn(text, source) {
-    const fragmentId = nanoid(8);
+  enqueueUserTurn(text, source, clientTurnId = null) {
+    const fragmentId = clientTurnId || nanoid(8);
     // Cada fragmento se muestra al instante en el chat…
     this.memory.add('user', 'You', text, null, fragmentId);
     // Los turnos de voz ya pintan su burbuja (YOU·VOICE) vía
@@ -1020,6 +1164,30 @@ export class MeetingSession {
     this.pendingUser.timer = setTimeout(() => this.flushPendingUser(), settleMs);
   }
 
+  // M-05: steer — salta la agregación, interrumpe y va al frente.
+  steerUserTurn(text, source, clientTurnId = null) {
+    const turnId = clientTurnId || nanoid(8);
+    if (this.pendingUser) {
+      clearTimeout(this.pendingUser.timer);
+      this.pendingUser = null;
+    }
+    this.memory.add('user', 'You', text, null, turnId);
+    if (source !== 'audio') {
+      this.send({ type: 'user_turn_received', turnId, text, source });
+    }
+    this.logTelemetry('user_turn_steered', { turnId, source, text }, turnId);
+    const accepted = this.turnQueue.steer(
+      turnId,
+      (signal) => this.processUserTurn(turnId, text, signal, source),
+      (error) => {
+        this.send({ type: 'error', turnId, message: 'Orchestration failed on this turn.', detail: getErrorText(error) });
+      }
+    );
+    if (!accepted) {
+      this.send({ type: 'error', turnId, message: 'Turn queue is full.' });
+    }
+  }
+
   flushPendingUser() {
     if (!this.pendingUser) {
       return;
@@ -1033,7 +1201,156 @@ export class MeetingSession {
     this.routeCombinedTurn(text, source);
   }
 
+  // A-07: promocion mid-flight - resultado de fondo a mensaje de agente
+  // en la charla viva (memoria + evento + voz opcional si despierto).
+  async promoteBackgroundResult({ agentId = null, agentName = 'equipo', text, taskId = null, speak = false } = {}) {
+    const clean = String(text || '').trim().slice(0, 1500);
+    if (!clean) {
+      return null;
+    }
+    const turnId = 'bg-' + Date.now().toString(36);
+    try {
+      this.memory.add('agent', agentName, clean, agentId, turnId);
+    } catch {}
+    this.send({ type: 'agent_transcript_delta', turnId, agentId, delta: clean, seq: 1 });
+    this.send({ type: 'agent_turn_complete', turnId, agentId, text: clean, usedMock: false, backend: 'background', background: true, taskId });
+    if (speak && this.voiceEnabled) {
+      const agent = (agentId && this.agents.get(agentId)?.agent) || { id: agentId || 'bg', name: agentName };
+      try {
+        await this.speakAs(agent, clean.slice(0, 500));
+      } catch {}
+    }
+    this.logTelemetry('background_promoted', { turnId, agentId, taskId });
+    return turnId;
+  }
+
+  // F-06: notificación → visible siempre + voz si se pide. Los hooks
+  // 'notification' pueden transformar ({text}) o suprimir ({suppress}).
+  async notify(text, { speak = false, agentId = null } = {}) {
+    let finalText = String(text || '').trim().slice(0, 500);
+    if (!finalText) {
+      return null;
+    }
+    try {
+      const r = await runHooks('notification', { text: finalText, speak, agentId });
+      for (const h of r.results) {
+        if (h.value && typeof h.value === 'object') {
+          if (h.value.suppress) {
+            return null;
+          }
+          if (typeof h.value.text === 'string' && h.value.text.trim()) {
+            finalText = h.value.text.trim().slice(0, 500);
+          }
+        }
+      }
+    } catch {
+      // Hooks caídos: la notificación igual sale.
+    }
+    this.send({ type: 'agent_progress', turnId: null, agentId, text: finalText });
+    if (speak && this.voiceEnabled) {
+      const speaker = (agentId && this.agents.get(agentId)) ||
+        [...this.agents.values()].find((r) => r?.agent?.role === 'orquestador') ||
+        [...this.agents.values()][0];
+      const agent = speaker?.agent || speaker;
+      if (agent && agent.id) {
+        try {
+          await this.speakAs(agent, finalText);
+        } catch {
+          // Voz caída: quedó el aviso visible.
+        }
+      }
+    }
+    return finalText;
+  }
+
+  // F-04: "dale" sobre aprobaciones pendientes → grants + re-ejecuta el
+  // turno original (máx 3 auto-continuaciones por cadena).
+  maybeApprovePending(text) {
+    try {
+      const goalId = this.project?.id || null;
+      const pendings = listPending().filter((p) => !goalId || !p.goalId || p.goalId === goalId);
+      if (pendings.length === 0) {
+        return { granted: false };
+      }
+      if (classifyPlanReply(text) !== 'approve') {
+        return { granted: false, pending: pendings.length };
+      }
+      const depth = Number((text.match(/\[continuación auto (\d+)\]/) || [null, '0'])[1]);
+      if (depth >= 3) {
+        return { granted: false, pending: pendings.length, capped: true };
+      }
+      const granted = [];
+      let userText = null;
+      for (const p of pendings) {
+        const r = resolveApproval(p.id, true, { scope: 'once', uses: 10 });
+        if (r.ok && r.approved) {
+          granted.push(p.tool);
+          userText = userText || r.req?.userText || null;
+        }
+      }
+      if (granted.length > 0 && userText) {
+        const rerun = `[continuación auto ${depth + 1}] ${userText}`;
+        this.logTelemetry('approval_voice_rerun', { granted, depth: depth + 1 });
+        this.routeCombinedTurn(rerun, 'text');
+        return { granted: true, tools: granted, rerouted: true };
+      }
+      return { granted: granted.length > 0, tools: granted };
+    } catch {
+      return { granted: false };
+    }
+  }
+
+  // E-12: veto por voz — "veto (eso)" revierte la última auto-aplicación.
+  maybeVetoClaim(text) {
+    try {
+      if (!/\bveto\b/i.test(String(text || ''))) {
+        return { vetoed: false };
+      }
+      const goalId = this.project?.id || null;
+      const recent = this.store.selfAssignedTasks(goalId, 60);
+      if (recent.length === 0) {
+        return { vetoed: false, note: 'no hay auto-aplicaciones recientes que vetar' };
+      }
+      const target = recent[0];
+      const r = this.store.vetoTask(target.id, 'tito-voz');
+      if (r.ok) {
+        this.logTelemetry('claim_vetoed', { taskId: target.id, text: String(target.text).slice(0, 160) });
+        return { vetoed: true, task: target };
+      }
+      return { vetoed: false, note: r.error };
+    } catch {
+      return { vetoed: false };
+    }
+  }
+
   routeCombinedTurn(text, source) {
+    // E-12: veto por voz antes que nada (revierte auto-aplicación).
+    const veto = this.maybeVetoClaim(text);
+    if (veto.vetoed) {
+      text = `[Tito VETÓ la auto-aplicación de "${String(veto.task.text).slice(0, 200)}". Reconocé el veto en una línea y seguí con lo demás.]\n${text}`;
+    }
+    // F-04: aprobar pendientes por voz ("dale") — re-ejecuta el original.
+    const appr = this.maybeApprovePending(text);
+    if (appr.rerouted) {
+      return;
+    }
+    if (appr.granted) {
+      text = `[Tito aprobó por voz: ${appr.tools.join(', ')}. Seguí con lo que estabas haciendo.]\n${text}`;
+    }
+    // M-09: si había plan pendiente y Tito lo resolvió por voz, el turno
+    // arranca informado (sin cirugía de prompts: nota al frente).
+    let turnText = text;
+    try {
+      const r = maybeResolvePlan(this.store, this.project?.id || null, text);
+      if (r.resolved) {
+        const title = (() => { try { return JSON.parse(r.plan.text).title; } catch { return 'plan'; } })();
+        turnText = `[Plan "${title}" ${r.verdict === 'approve' ? 'APROBADO' : 'RECHAZADO'} por voz por Tito. ${r.verdict === 'approve' ? `Pasos:\n${planStepsText(r.plan)}\nEjecutá.` : 'No lo ejecutes; preguntá qué cambiar.'}]\n${text}`;
+        void this.notify(`Plan ${r.verdict === 'approve' ? 'aprobado ✓' : 'rechazado ✗'}: ${title}`, { speak: true });
+      }
+    } catch {
+      // Plan caído: el turno sigue normal.
+    }
+    text = turnText;
     logEvent('turno_combinado', {
       meetingId: this.meeting?.id,
       companyId: this.company?.id,
@@ -1066,6 +1383,20 @@ export class MeetingSession {
       });
       this.logTelemetry('turn_rejected_queue_full', { turnId, source }, turnId);
     }
+  }
+
+  // E-06: en llamada grupal, TODOS responden (convocatoria explícita;
+  // SILENCIO sigue disponible por agente). Sin tope de voces.
+  applyGroupCallRoute(route, turnId = null) {
+    if (!this.groupCall || !route) {
+      return route;
+    }
+    route.groupAddressed = true;
+    route.targets = this.sessionAgents
+      .filter((a) => a && a.enabled !== false)
+      .map((a) => ({ agentId: a.id, name: a.name, score: 5, groupCall: true }));
+    this.logTelemetry('group_call_round', { turnId, targets: route.targets.map((x) => x.agentId) }, turnId);
+    return route;
   }
 
   async routeUserTurn(turnId, text) {
@@ -1158,8 +1489,9 @@ export class MeetingSession {
     ].join('\n');
 
     const { text: routerText } = await completeChat(this.keyRing, {
-      models: getMinimaxModels(),
+      models: modelsForTier('fast'),
       scope: 'orquestador',
+      sessionId: projectSessionId(this.company?.id || null, this.project?.slug || 'general'),
       timeoutMs: ROUTER_TIMEOUT_MS,
       emit: (event) => this.send(event),
       maxTokens: 1200,
@@ -1235,10 +1567,36 @@ export class MeetingSession {
         // Gate caído: el turno sigue legacy, como si no existiera.
       }
     }
+    // E-27: tope del proyecto (default sin topes: pasa siempre).
+    try {
+      const goal = this.project?.id ? this.store.getGoal(this.project.id) : null;
+      const caps = { tokens: goal?.cap_tokens ?? null, ramMb: goal?.cap_ram_mb ?? null, timeMin: goal?.cap_time_min ?? null };
+      if (caps.tokens || caps.ramMb || caps.timeMin) {
+        const check = checkCaps({
+          caps,
+          usage: {
+            tokens: this.sessionTokens || 0,
+            ramMb: ramMbNow(),
+            elapsedMin: (Date.now() - (this.meetingStartedAt || Date.now())) / 60000
+          }
+        });
+        for (const w of check.warnings) {
+          this.send({ type: 'agent_progress', turnId, agentId: null, text: `Tope: ${w}` });
+        }
+        if (!check.ok) {
+          this.send({ type: 'error', turnId, message: `Tope del proyecto: ${check.errors.join('; ')}` });
+          this.logTelemetry('caps_blocked', { turnId, errors: check.errors }, turnId);
+          return;
+        }
+      }
+    } catch {
+      // Gate caído: el turno pasa (fail-open, default sin topes).
+    }
     const route = await this.routeUserTurn(turnId, text);
     if (signal?.aborted) {
       return;
     }
+    this.applyGroupCallRoute(route, turnId);
     // Llamada grupal (flag sala.groupchat): sin grupo convocado, max 3
     // voces por turno. El recorte va ANTES del route_decision para que lo
     // emitido coincida con lo que sale. Flag OFF: intacto.
@@ -1256,6 +1614,14 @@ export class MeetingSession {
       }
     } catch {
       // Settings caidos: el turno sigue sin tope.
+    }
+    // A-10: tier por complejidad (saludos→fast, laburo→strong).
+    try {
+      route.complexity = scoreComplexity(text);
+      route.modelTier = route.complexity === 'simple' ? 'fast' : 'strong';
+    } catch {
+      route.complexity = 'medium';
+      route.modelTier = 'strong';
     }
     this.send({ type: 'route_decision', turnId, route });
     this.logTelemetry('route_decision', {
@@ -1349,8 +1715,17 @@ export class MeetingSession {
         usedMock: response.usedMock,
         backend: response.backend,
         interrupted: Boolean(response.interrupted),
+        ...(response.latency ? { latency: response.latency } : {}),
         keyStatus: this.keyRing.snapshot()
       });
+      // E-27: acumular tokens del turno (usage QW-05/M-12).
+      try {
+        const u = response.usage || null;
+        const n = Number(u?.tokens ?? 0);
+        if (Number.isFinite(n) && n > 0) {
+          this.sessionTokens = (this.sessionTokens || 0) + n;
+        }
+      } catch { /* best-effort */ }
       this.logTelemetry('agent_turn_complete', {
         turnId,
         agentId: agent.id,
@@ -1375,7 +1750,44 @@ export class MeetingSession {
       await this.processContextualFollowups(turnId, text, route, signal);
     }
 
-    this.learningObserver.observeCycle(this.meeting.id, this.memory, this.sessionAgents, text);
+    this.learningObserver.observeCycle(this.meeting.id, this.memory, this.sessionAgents, text, undefined, this.project?.id || null);
+    this.maybeCompact();
+  }
+
+  // F-09: compactación background (fire-and-forget, con llaves).
+  maybeCompact() {
+    try {
+      if (!this.keyRing?.hasKeys?.() || !this.meeting?.id) {
+        return;
+      }
+      // Conteo fresco (this.meeting es snapshot del init).
+      const fresh = this.store.getMeeting(this.meeting.id);
+      if (!fresh || (Number(fresh.turn_count) || 0) % 40 !== 0) {
+        return; // chequeo barato cada 40 turnos
+      }
+      void (async () => {
+        try {
+          const { needsCompaction, compactOnce } = await import('./compaction.js');
+          const { completeChat } = await import('./llm.js');
+          const { getMinimaxModels } = await import('./settings.js');
+          if (!needsCompaction(this.store, this.meeting.id)) {
+            return;
+          }
+          const r = await compactOnce({
+            store: this.store,
+            meetingId: this.meeting.id,
+            completeChat: (opts) => completeChat(this.keyRing, {
+              models: getMinimaxModels(), timeoutMs: 30000, ...opts
+            })
+          });
+          this.logTelemetry('compaction', { ...r, meetingId: this.meeting.id });
+        } catch (error) {
+          this.logTelemetry('compaction_failed', { error: String(error?.message || error).slice(0, 160) });
+        }
+      })();
+    } catch {
+      // Compact caído: la reunión sigue.
+    }
   }
 
   // Llamada grupal R2 (flag sala.groupchat, default OFF): tras la ronda 1,
@@ -1885,6 +2297,7 @@ export class MeetingSession {
         const { text } = await completeChat(this.keyRing, {
           models: getMinimaxModels(),
           scope: 'cierre de reunión',
+          sessionId: projectSessionId(this.company?.id || null, this.project?.slug || 'general'),
           timeoutMs: 30000,
           maxTokens: 4000,
           temperature: 0.4,
@@ -2041,11 +2454,77 @@ export class MeetingSession {
     }
 
     this.logTelemetry('meeting_confirmed_close', { goalId: goal.id, tasks: taskCount });
+    // F-07: slides narradas de cierre (figuras keyed + voz CEO por slide).
+    try {
+      this.emitClosingSlides(pending, taskCount);
+    } catch {
+      // Slides caídas: el cierre igual vale.
+    }
     const companyId = this.company.id;
     const goalId = this.project?.id || null;
     this.closeCurrentMeeting('finished_to_work');
     this.send({ type: 'meeting_reset' });
     this.initMeeting(null, companyId, goalId);
+  }
+
+  // F-07: construye + emite slides (delays estimados del habla) + narra.
+  emitClosingSlides(pending, taskCount) {
+    const en = String(getTtsLanguage() || 'en').toLowerCase().startsWith('en');
+    const kindByIndex = new Map(pending?.kinds || []);
+    let cursor = 0;
+    const decisions = [];
+    const tasksByOwner = [];
+    for (const agent of this.sessionAgents || []) {
+      const mine = [];
+      for (const task of agent.tasks || []) {
+        if (task.completed) {
+          continue;
+        }
+        cursor += 1;
+        const kind = kindByIndex.get(cursor) || 'entregable';
+        if (kind === 'decision') {
+          decisions.push(String(task.text || '').slice(0, 200));
+        } else {
+          mine.push(String(task.text || '').slice(0, 200));
+        }
+      }
+      if (mine.length > 0) {
+        tasksByOwner.push({ name: agent.name, tasks: mine });
+      }
+    }
+    const slides = buildClosingSlides({
+      goalTitle: pending?.goalTitle,
+      decisions,
+      tasksByOwner,
+      taskCount,
+      english: en
+    });
+    if (slides.length === 0) {
+      return;
+    }
+    const ceo = (this.sessionAgents || []).find((a) => a?.role === 'ceo') || null;
+    const ceoAgent = ceo ? { id: ceo.id, name: ceo.name } : null;
+    const delays = slideDelays(slides);
+    const turnId = `close-${Date.now().toString(36)}`;
+    slides.forEach((slide, i) => {
+      const ev = figureEvent(turnId, ceoAgent?.id || null, { ...slide.figure, key: `close-${i}`, ephemeral: false });
+      if (!ev) {
+        return;
+      }
+      const emitOne = () => {
+        this.send(ev);
+        if (ceoAgent && this.voiceEnabled) {
+          void this.speakAs(ceoAgent, slide.narration).catch(() => {});
+        }
+      };
+      if (!this.voiceEnabled || delays[i] <= 0) {
+        emitOne();
+      } else {
+        const timer = setTimeout(emitOne, delays[i]);
+        timer.unref?.();
+      }
+    });
+    this.logTelemetry('closing_slides', { count: slides.length });
   }
 
   // Habla sintética de un agente fuera del flujo de respuesta (p.ej. el
@@ -2071,8 +2550,10 @@ export class MeetingSession {
           if (parts.length > 0) {
             const rate = Number(parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
             const token = await this.gate.acquire(turnId, agent.id, { sampleRate: rate });
-            for (const part of parts) {
-              this.gate.sendChunk(token, part.data, part.mimeType);
+            // QW-07: habla sintética = una sola oración (sIdx 0).
+            const plan = sentenceAudioPlan({ kind: 'pcm', parts, sentence: text }, 0);
+            for (const { part, extra } of plan.chunks) {
+              this.gate.sendChunk(token, part.data, part.mimeType, extra);
             }
             this.gate.finish(token, 'complete');
           }
@@ -2091,6 +2572,9 @@ export class MeetingSession {
   }
 
   close() {
+    try {
+      this._unregisterAnnouncer?.();
+    } catch { /* best-effort */ }
     if (getDefaultSession() === this) setDefaultSession(null);
     if (this.sessionCounted) {
       unregisterSession();

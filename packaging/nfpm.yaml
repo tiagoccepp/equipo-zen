@@ -1,0 +1,14 @@
+# E-25: .rpm desde el árbol del .deb (nfpm). El CI lo corre post-build.
+name: equipo
+arch: amd64
+version: 0.1.0
+maintainer: Tito
+description: Equipo — tu equipo IA en el escritorio (orbe, voz, permisos)
+license: UNLICENSED
+contents:
+  - src: /tmp/deb-tree/usr/bin/equipo
+    dst: /usr/bin/equipo
+  - src: /tmp/deb-tree/usr/lib/Equipo
+    dst: /usr/lib/Equipo
+  - src: /tmp/deb-tree/usr/share/applications/equipo.desktop
+    dst: /usr/share/applications/equipo.desktop

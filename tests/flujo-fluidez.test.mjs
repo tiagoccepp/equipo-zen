@@ -173,7 +173,7 @@ test('fluidez persona: en llamada ES manda oído + manejo humano', () => {
   assert.ok(sys.includes('§VOICE'), 'bloque voz');
   assert.ok(sys.includes('LLAMADA DE VOZ'), 'consciente de la llamada');
   assert.ok(sys.includes('SOLO se escuchan'), 'respuestas solo escuchadas');
-  assert.ok(sys.includes('una idea por turno'), 'una idea por turno');
+  assert.ok(sys.includes('una idea por oraci'), 'una idea por oración (V-13)');
   assert.ok(sys.includes('Cero markdown'), 'cero markdown/listas/código');
   assert.ok(sys.includes('deletrean'), 'siglas deletreadas para oído');
   assert.ok(sys.includes('como modelo de IA'), 'prohíbe presentarse como IA');

@@ -15,6 +15,9 @@ function base64ToBytes(base64: string): Uint8Array {
 
 export class VoiceOut {
   onDrained: (() => void) | null = null;
+  // QW-07: se dispara al agendar cada chunk (inicio audible real ≈ +20ms).
+  // El tag viaja opaco (el servidor etiqueta oraciones con sIdx/sText).
+  onChunkStart: ((tag: unknown) => void) | null = null;
   levelAvailable = false;
 
   private context: AudioContext | null = null;
@@ -56,17 +59,17 @@ export class VoiceOut {
     }
   }
 
-  enqueuePcm(base64: string, sampleRate: number): Promise<void> {
+  enqueuePcm(base64: string, sampleRate: number, tag: unknown = null): Promise<void> {
     const at = this.epoch;
     this.playChain = this.playChain
       .then(() => {
-        if (at === this.epoch) return this.enqueuePcmNow(base64, sampleRate, at);
+        if (at === this.epoch) return this.enqueuePcmNow(base64, sampleRate, at, tag);
       })
       .catch(() => {});
     return this.playChain;
   }
 
-  private async enqueuePcmNow(base64: string, sampleRate: number, at: number): Promise<void> {
+  private async enqueuePcmNow(base64: string, sampleRate: number, at: number, tag: unknown = null): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -79,20 +82,20 @@ export class VoiceOut {
       channel[i] = Math.max(-1, Math.min(1, samples[i] / 32768));
     }
     if (at !== this.epoch) return; // flush() en el medio: descartar.
-    this.schedule(buffer);
+    this.schedule(buffer, tag);
   }
 
-  playMp3(base64: string): Promise<void> {
+  playMp3(base64: string, tag: unknown = null): Promise<void> {
     const at = this.epoch;
     this.playChain = this.playChain
       .then(() => {
-        if (at === this.epoch) return this.playMp3Now(base64, at);
+        if (at === this.epoch) return this.playMp3Now(base64, at, tag);
       })
       .catch(() => {});
     return this.playChain;
   }
 
-  private async playMp3Now(base64: string, at: number): Promise<void> {
+  private async playMp3Now(base64: string, at: number, tag: unknown = null): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -102,10 +105,10 @@ export class VoiceOut {
     copy.set(bytes);
     const buffer = await ctx.decodeAudioData(copy.buffer);
     if (at !== this.epoch) return; // flush() en el medio: descartar.
-    this.schedule(buffer);
+    this.schedule(buffer, tag);
   }
 
-  private schedule(buffer: AudioBuffer): void {
+  private schedule(buffer: AudioBuffer, tag: unknown = null): void {
     const ctx = this.context as AudioContext;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
@@ -120,6 +123,13 @@ export class VoiceOut {
     const startAt = Math.max(ctx.currentTime + 0.02, this.nextStart);
     source.start(startAt);
     this.nextStart = startAt + buffer.duration;
+    if (tag !== null && tag !== undefined) {
+      try {
+        this.onChunkStart?.(tag);
+      } catch {
+        // El revelado de texto jamás rompe el audio.
+      }
+    }
   }
 
   get playing(): boolean {
@@ -161,6 +171,35 @@ export class VoiceOut {
     this.epoch += 1; // lo encolado/decodificando queda stale y se descarta.
     if (this.context) {
       this.nextStart = this.context.currentTime;
+    }
+  }
+
+  /** QW-09: earcon "trabajando" — dos senos suaves, sin tocar la cadena de
+   *  habla (no consume nextStart ni entra a `active`: jamás dispara
+   *  onDrained ni mueve el gate). */
+  playWorkingEarcon(): void {
+    try {
+      const ctx = this.ensure();
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {});
+      }
+      const t0 = ctx.currentTime + 0.02;
+      const notes: Array<[number, number]> = [[660, 0], [880, 0.14]];
+      for (const [freq, offset] of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t0 + offset);
+        gain.gain.exponentialRampToValueAtTime(0.12, t0 + offset + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + offset + 0.22);
+        osc.connect(gain);
+        gain.connect(this.master as GainNode);
+        osc.start(t0 + offset);
+        osc.stop(t0 + offset + 0.25);
+      }
+    } catch {
+      // Sin audio: silencio, nunca una excepción.
     }
   }
 

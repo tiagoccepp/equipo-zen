@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 
 import { openDatabase } from './db.js';
 import { normalizeStack } from './playbooks.js';
+import { planProjectRoster } from './team-templates.js';
 
 function now() {
   return new Date().toISOString();
@@ -437,8 +438,20 @@ export class Store {
       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
     `).run(id, companyId || null, goalId, scenarioName, scenarioText, at, at);
 
-    for (const agent of this.listAgents({ companyId })) {
-      this._prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agent.id);
+    // E-03: la reunión hereda el EQUIPO DEL PROYECTO (no toda la empresa).
+    let roster = [];
+    if (goalId) {
+      try {
+        roster = this.rosterForProject(goalId).filter((r) => r.agent_id);
+      } catch {
+        roster = [];
+      }
+    }
+    const agentIds = roster.length > 0
+      ? roster.map((r) => r.agent_id)
+      : this.listAgents({ companyId }).map((a) => a.id);
+    for (const agentId of agentIds) {
+      this._prepare('INSERT INTO meeting_agents (meeting_id, agent_id, enabled) VALUES (?, ?, 1)').run(id, agentId);
     }
     if (companyId) {
       this.touchCompany(companyId);
@@ -777,6 +790,161 @@ export class Store {
     return fila?.fase ?? null;
   }
 
+  // E-12: auto-aplicación (el agente se asigna solo) + veto de Tito.
+  claimTask(taskId, agentId, reason = '') {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return { ok: false, error: `tarea inexistente: ${taskId}` };
+    }
+    if (task.agent_id && task.agent_id !== agentId && !['checklist', 'unassigned'].includes(task.agent_id)) {
+      return { ok: false, error: `ya asignada a ${task.agent_id}` };
+    }
+    if (task.status === 'done' || task.completed) {
+      return { ok: false, error: 'ya terminada' };
+    }
+    this._prepare("UPDATE tasks SET agent_id = ?, origin = 'self' WHERE id = ?").run(agentId, taskId);
+    this.logChange(agentId, 'task', taskId, 'self-assign', { reason: String(reason).slice(0, 200) });
+    return { ok: true, task: this.getTask(taskId) };
+  }
+
+  releaseClaim(taskId, agentId) {
+    const task = this.getTask(taskId);
+    if (!task || task.origin !== 'self' || task.agent_id !== agentId) {
+      return { ok: false, error: 'no es tu auto-asignación' };
+    }
+    if (task.status === 'done' || task.completed) {
+      return { ok: false, error: 'ya terminada' };
+    }
+    this._prepare("UPDATE tasks SET agent_id = 'unassigned', origin = 'assign' WHERE id = ?").run(taskId);
+    this.logChange(agentId, 'task', taskId, 'release-claim', {});
+    return { ok: true };
+  }
+
+  // Veto de Tito: desasigna auto-aplicadas no empezadas (status pending).
+  vetoTask(taskId, actor = 'tito') {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return { ok: false, error: `tarea inexistente: ${taskId}` };
+    }
+    if (task.origin !== 'self') {
+      return { ok: false, error: 'solo se vetan auto-aplicaciones' };
+    }
+    if (task.status !== 'pending' && task.status !== 'approved') {
+      return { ok: false, error: `ya empezó (${task.status}): no se puede vetar` };
+    }
+    this._prepare("UPDATE tasks SET agent_id = 'unassigned', origin = 'assign', status = 'pending' WHERE id = ?").run(taskId);
+    this.logChange(actor, 'task', taskId, 'veto', { text: String(task.text).slice(0, 160) });
+    return { ok: true, task: this.getTask(taskId) };
+  }
+
+  selfAssignedTasks(goalId = null, sinceMinutes = 60) {
+    const since = new Date(Date.now() - sinceMinutes * 60000).toISOString();
+    if (goalId) {
+      return this._prepare(`
+        SELECT DISTINCT t.* FROM tasks t
+        LEFT JOIN changelog c ON c.entity = 'task' AND c.entity_id = t.id AND c.action = 'self-assign'
+        WHERE t.origin = 'self' AND t.goal_id = ? AND c.at > ?
+        ORDER BY c.at DESC
+      `).all(goalId, since);
+    }
+    return this._prepare(`
+      SELECT DISTINCT t.* FROM tasks t
+      LEFT JOIN changelog c ON c.entity = 'task' AND c.entity_id = t.id AND c.action = 'self-assign'
+      WHERE t.origin = 'self' AND c.at > ?
+      ORDER BY c.at DESC
+    `).all(since);
+  }
+
+  // M-04: checklist del proyecto (tareas kind='checklist').
+  goalForSlug(companyId, slug) {
+    return this._prepare('SELECT * FROM goals WHERE company_id = ? AND slug = ? AND kind = \'proyecto\'')
+      .get(companyId, slug || 'general') || null;
+  }
+
+  checklistForGoal(goalId) {
+    return this._prepare("SELECT * FROM tasks WHERE goal_id = ? AND kind = 'checklist' ORDER BY created_at")
+      .all(goalId);
+  }
+
+  // E-10: propuestas de auto-mejora (kind='proposal', pending/applied/rejected).
+  proposeChange(goalId, agentId, proposal) {
+    const id = 'task-' + nanoid(6);
+    this._prepare(`
+      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, goal_id, kind, status)
+      VALUES (?, NULL, ?, ?, 0, ?, ?, 'proposal', 'pending')
+    `).run(id, agentId || 'self-improve', JSON.stringify({
+      kind: proposal.kind, action: proposal.action,
+      payload: proposal.payload || {}, reason: proposal.reason || '',
+      risk: proposal.risk || 'medium'
+    }), now(), goalId);
+    return this.getTask(id);
+  }
+
+  pendingProposals(goalId = null) {
+    if (goalId) {
+      return this._prepare("SELECT * FROM tasks WHERE kind = 'proposal' AND status = 'pending' AND goal_id = ? ORDER BY created_at").all(goalId);
+    }
+    return this._prepare("SELECT * FROM tasks WHERE kind = 'proposal' AND status = 'pending' ORDER BY created_at").all();
+  }
+
+  // M-09: plan pendiente del proyecto (kind='plan', status pending).
+  // F-04: ¿un plan aprobado cubre la ejecución? (modo plan, 30min).
+  approvedPlanForGoal(goalId, withinMinutes = 30) {
+    const row = this._prepare(`
+      SELECT id FROM tasks WHERE goal_id = ? AND kind = 'plan' AND status = 'approved'
+        AND created_at > datetime('now', ?)
+      ORDER BY created_at DESC LIMIT 1
+    `).get(goalId, `-${withinMinutes} minutes`);
+    return Boolean(row);
+  }
+
+  planForGoal(goalId) {
+    return this._prepare("SELECT * FROM tasks WHERE goal_id = ? AND kind = 'plan' AND status = 'pending' ORDER BY created_at DESC LIMIT 1")
+      .get(goalId) || null;
+  }
+
+  proposePlan(goalId, agentId, title, steps, { questions = [], autoProceedSec = 0 } = {}) {
+    const clean = String(title || '').trim().slice(0, 200);
+    const list = (Array.isArray(steps) ? steps : []).map((s) => String(s || '').trim().slice(0, 300)).filter(Boolean).slice(0, 20);
+    if (!clean || list.length === 0) {
+      return null;
+    }
+    const qs = (Array.isArray(questions) ? questions : []).map((s) => String(s || '').trim().slice(0, 300)).filter(Boolean).slice(0, 5);
+    const auto = Math.max(0, Math.min(600, Number(autoProceedSec) || 0));
+    const id = 'task-' + nanoid(6);
+    this._prepare(`
+      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, goal_id, kind, status)
+      VALUES (?, NULL, ?, ?, 0, ?, ?, 'plan', 'pending')
+    `).run(id, agentId || 'plan', JSON.stringify({ title: clean, steps: list, questions: qs, autoProceedSec: auto }), now(), goalId);
+    const plan = this.getTask(id);
+    // A-05: auto-proceed programa un once-job (E-13) que revalida al vencer.
+    if (auto > 0) {
+      try {
+        this.createSchedJob({
+          name: `auto-proceed plan ${clean.slice(0, 40)}`,
+          kind: 'once',
+          spec: { at: Date.now() + auto * 1000 },
+          action: { type: 'plan_auto', planId: id },
+          goalId
+        });
+      } catch { /* scheduler caído: queda pendiente manual */ }
+    }
+    return plan;
+  }
+
+  addChecklistItem(goalId, text, agentId = null) {
+    const clean = String(text || '').trim().slice(0, 300);
+    if (!clean) {
+      return null;
+    }
+    const id = nanoid(10);
+    this._prepare(`
+      INSERT INTO tasks (id, meeting_id, agent_id, text, completed, created_at, goal_id, kind)
+      VALUES (?, NULL, ?, ?, 0, ?, ?, 'checklist')
+    `).run(id, agentId || 'checklist', clean, now(), goalId);
+    return this.getTask(id);
+  }
+
   tasksForGoal(goalId) {
     return this._prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY created_at').all(goalId);
   }
@@ -800,7 +968,72 @@ export class Store {
     const elegido = normalizeStack(stack || this.getCompany(companyId)?.stack);
     this._prepare('UPDATE goals SET brief = ?, stack = ? WHERE id = ?')
       .run(String(brief).slice(0, 4000), elegido, goal.id);
+    // E-03: cada proyecto nace con su equipo (roles por stack; faltantes
+    // quedan marcados para el spawner).
+    try {
+      this.seedProjectRoster(goal.id);
+    } catch {
+      // Seed caído: el proyecto igual se crea; rosterForMeeting cae a empresa.
+    }
     return this.getGoal(goal.id);
+  }
+
+  // E-03: siembra idempotente del roster (no duplica si ya existe).
+  seedProjectRoster(goalId) {
+    const goal = this.getGoal(goalId);
+    if (!goal) {
+      return { assigned: [], missing: [] };
+    }
+    const existing = this._prepare('SELECT COUNT(*) AS n FROM project_roster WHERE goal_id = ?').get(goalId);
+    if (existing && existing.n > 0) {
+      return {
+        assigned: this._prepare('SELECT role_wanted AS role, agent_id AS agentId FROM project_roster WHERE goal_id = ? AND agent_id IS NOT NULL').all(goalId),
+        missing: this._prepare('SELECT role_wanted AS role FROM project_roster WHERE goal_id = ? AND agent_id IS NULL').all(goalId).map((r) => r.role)
+      };
+    }
+    const plan = planProjectRoster(this.listAgents({ companyId: goal.company_id }), goal.stack);
+    const at = now();
+    for (const a of plan.assigned) {
+      this._prepare('INSERT INTO project_roster (goal_id, agent_id, role_wanted, origin, enabled, created_at) VALUES (?, ?, ?, \'seed\', 1, ?)')
+        .run(goalId, a.agentId, a.role, at);
+    }
+    for (const role of plan.missing) {
+      this._prepare('INSERT INTO project_roster (goal_id, agent_id, role_wanted, origin, enabled, created_at) VALUES (?, NULL, ?, \'wanted\', 1, ?)')
+        .run(goalId, role, at);
+    }
+    return plan;
+  }
+
+  rosterForProject(goalId) {
+    return this._prepare(`
+      SELECT pr.role_wanted AS roleWanted, pr.origin, pr.enabled,
+             a.id AS agent_id, a.name, a.title, a.role, a.voice, a.color, a.status
+      FROM project_roster pr LEFT JOIN agents a ON a.id = pr.agent_id
+      WHERE pr.goal_id = ? AND pr.enabled = 1
+      ORDER BY pr.created_at
+    `).all(goalId);
+  }
+
+  missingProjectRoles(goalId) {
+    return this._prepare("SELECT role_wanted AS role FROM project_roster WHERE goal_id = ? AND agent_id IS NULL AND enabled = 1")
+      .all(goalId).map((r) => r.role);
+  }
+
+  addAgentToProject(goalId, agentId, roleWanted, origin = 'manual') {
+    this._prepare(`
+      UPDATE project_roster SET agent_id = ?, origin = ?, enabled = 1
+      WHERE goal_id = ? AND role_wanted = ? AND agent_id IS NULL
+    `).run(agentId, origin, goalId, roleWanted);
+    const row = this._prepare('SELECT COUNT(*) AS n FROM project_roster WHERE goal_id = ? AND agent_id = ?').get(goalId, agentId);
+    if (!row || row.n === 0) {
+      this._prepare('INSERT INTO project_roster (goal_id, agent_id, role_wanted, origin, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+        .run(goalId, agentId, roleWanted, origin, now());
+    }
+  }
+
+  setProjectAgentEnabled(goalId, agentId, enabled) {
+    this._prepare('UPDATE project_roster SET enabled = ? WHERE goal_id = ? AND agent_id = ?')
+      .run(enabled ? 1 : 0, goalId, agentId);
   }
 
   listProjects(companyId, { includeArchived = false } = {}) {
@@ -828,11 +1061,15 @@ export class Store {
     // title.trim()) borraba el nombre y el proyecto quedaba sin nada que
     // mostrar en la lista. Vacío = "no lo toques", no "dejalo sin nombre".
     const titulo = String(patch.title ?? '').trim() || goal.title;
-    this._prepare('UPDATE goals SET title = ?, brief = ?, description = ?, stack = ? WHERE id = ?').run(
+    const access = ['auto', 'reversibles', 'pedir-todo'].includes(patch.access_level)
+      ? patch.access_level
+      : (goal.access_level || 'auto');
+    this._prepare('UPDATE goals SET title = ?, brief = ?, description = ?, stack = ?, access_level = ? WHERE id = ?').run(
       titulo,
       patch.brief ?? goal.brief,
       patch.brief ?? goal.description,
       normalizeStack(patch.stack ?? goal.stack),
+      access,
       goalId
     );
     this.logChange('user', 'goal', goalId, 'update', patch);
@@ -1009,10 +1246,23 @@ export class Store {
   }
 
   logChange(actor, entity, entityId, action, detail) {
+    // E-23: el changelog nunca guarda secretos (scrub best-effort).
+    let detailJson = '{}';
+    try {
+      detailJson = JSON.stringify(detail ?? {});
+      detailJson = detailJson
+        .replace(/sk-[a-zA-Z0-9]{8,}/g, '[redacted]')
+        .replace(/AKIA[A-Z0-9]{12,}/g, '[redacted]')
+        .replace(/gh[pousr]_[a-zA-Z0-9]{8,}/g, '[redacted]')
+        .replace(/xox[bap]-[a-zA-Z0-9-]{6,}/g, '[redacted]')
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '[redacted]');
+    } catch {
+      detailJson = '{}';
+    }
     this._prepare(`
       INSERT INTO changelog (at, actor, entity, entity_id, action, detail_json)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(now(), actor, entity, entityId, action, JSON.stringify(detail ?? {}));
+    `).run(now(), actor, entity, entityId, action, detailJson);
   }
 
   listChangelog({ entity = null, entityId = null, limit = 50 } = {}) {
@@ -1030,13 +1280,26 @@ export class Store {
 
   // ── Aprendizajes (consumido por el workstream de auto-aprendizaje) ─────
 
-  insertLearning({ agentId = null, meetingId = null, type, content, confidence, sourceTurnIds = [] }) {
+  insertLearning({ agentId = null, meetingId = null, goalId = null, type, content, confidence, sourceTurnIds = [] }) {
     const at = now();
     const result = this._prepare(`
-      INSERT INTO learnings (agent_id, meeting_id, type, content, confidence, source_turn_ids, status, times_reinforced, created_at, last_reinforced_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)
-    `).run(agentId, meetingId, type, content, confidence, JSON.stringify(sourceTurnIds), at, at);
+      INSERT INTO learnings (agent_id, meeting_id, goal_id, type, content, confidence, source_turn_ids, status, times_reinforced, created_at, last_reinforced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)
+    `).run(agentId, meetingId, goalId, type, content, confidence, JSON.stringify(sourceTurnIds), at, at);
     return result.lastInsertRowid;
+  }
+
+  // E-04: borrado de agente (rollback de spawn fallido). Limpia rosters.
+  deleteAgent(agentId, actor = 'spawner') {
+    this._prepare('DELETE FROM meeting_agents WHERE agent_id = ?').run(agentId);
+    try {
+      this._prepare('DELETE FROM project_roster WHERE agent_id = ?').run(agentId);
+    } catch {
+      // DB vieja sin project_roster: seguir.
+    }
+    const r = this._prepare('DELETE FROM agents WHERE id = ?').run(agentId);
+    this.logChange(actor, 'agent', agentId, 'delete', { rollback: true });
+    return r.changes > 0;
   }
 
   reinforceLearning(learningId, confidence) {
@@ -1047,15 +1310,155 @@ export class Store {
     `).run(confidence, now(), learningId);
   }
 
-  activeLearnings(agentId = null) {
+  // E-09: gustos (upsert por scope+goal+key).
+  upsertTaste({ scope = 'global', goalId = null, key, value, confidence = 0.7, source = 'manual' }) {
+    const clean = String(key || '').trim().toLowerCase().slice(0, 61);
+    if (!clean) {
+      return null;
+    }
+    const useScope = scope === 'project' ? 'project' : 'global';
+    // Z-01: global usa '' (UNIQUE + NULL no conflictan en SQLite: duplicaba).
+    const gid = useScope === 'project' ? goalId : '';
+    this._prepare(`
+      INSERT INTO tastes (scope, goal_id, taste_key, value, confidence, source, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scope, goal_id, taste_key) DO UPDATE SET
+        value = excluded.value, confidence = MAX(confidence, excluded.confidence),
+        source = excluded.source, updated_at = excluded.updated_at
+    `).run(useScope, gid, clean, String(value || '').slice(0, 500), confidence, source, now());
+    return this._prepare('SELECT * FROM tastes WHERE scope = ? AND goal_id = ? AND taste_key = ?')
+      .get(useScope, gid, clean) || null;
+  }
+
+  tastesFor(goalId = null) {
+    const global = this._prepare("SELECT * FROM tastes WHERE scope = 'global' ORDER BY updated_at DESC").all();
+    const project = goalId
+      ? this._prepare('SELECT * FROM tastes WHERE scope = ? AND goal_id = ? ORDER BY updated_at DESC').all('project', goalId)
+      : [];
+    return { global, project };
+  }
+
+  deleteTaste(scope, goalId, key) {
+    const gid = scope === 'project' ? goalId : '';
+    const r = this._prepare('DELETE FROM tastes WHERE scope = ? AND goal_id = ? AND taste_key = ?')
+      .run(scope, gid, String(key || '').trim().toLowerCase());
+    return r.changes > 0;
+  }
+
+  // E-13: CRUD de jobs programados.
+  createSchedJob({ name, kind, spec = {}, action = {}, goalId = null, enabled = true }) {
+    const cleanKind = ['cron', 'interval', 'once', 'watcher'].includes(kind) ? kind : null;
+    if (!cleanKind || !String(name || '').trim()) {
+      return null;
+    }
+    const id = `job-${nanoid(8)}`;
+    this._prepare(`
+      INSERT INTO sched_jobs (id, name, kind, spec_json, action_json, goal_id, enabled, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, String(name).slice(0, 120), cleanKind, JSON.stringify(spec).slice(0, 4000),
+      JSON.stringify(action).slice(0, 4000), goalId, enabled ? 1 : 0, now());
+    return this._prepare('SELECT * FROM sched_jobs WHERE id = ?').get(id);
+  }
+
+  listSchedJobs(goalId = null) {
+    if (goalId) {
+      return this._prepare('SELECT * FROM sched_jobs WHERE goal_id IS NULL OR goal_id = ? ORDER BY created_at').all(goalId);
+    }
+    return this._prepare('SELECT * FROM sched_jobs ORDER BY created_at').all();
+  }
+
+  setSchedJobEnabled(id, enabled) {
+    const r = this._prepare('UPDATE sched_jobs SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+    return r.changes > 0;
+  }
+
+  deleteSchedJob(id) {
+    return this._prepare('DELETE FROM sched_jobs WHERE id = ?').run(id).changes > 0;
+  }
+
+  // E-21: ledger de uso.
+  recordUsage({ accountId = 'local', kind = 'llm', provider = null, model = null, scope = null, tokens = null, cost = null } = {}) {
+    this._prepare(`
+      INSERT INTO usage_ledger (at, account_id, kind, provider, model, scope, tokens, cost)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(now(), accountId, kind, provider, model, scope, tokens, cost);
+  }
+
+  usageSummary({ accountId = 'local', since = null } = {}) {
+    const row = this._prepare(`
+      SELECT COUNT(*) AS calls, COALESCE(SUM(tokens), 0) AS tokens, COALESCE(SUM(cost), 0) AS cost
+      FROM usage_ledger WHERE account_id = ? ${since ? 'AND at > ?' : ''}
+    `).get(...(since ? [accountId, since] : [accountId]));
+    return { calls: row.calls, tokens: row.tokens, cost: Math.round((row.cost || 0) * 1000000) / 1000000 };
+  }
+
+  // E-27: topes (null/<=0 = sin tope).
+  setProjectCaps(goalId, { tokens = null, ramMb = null, timeMin = null } = {}) {
+    const clean = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : null);
+    this._prepare('UPDATE goals SET cap_tokens = ?, cap_ram_mb = ?, cap_time_min = ? WHERE id = ?')
+      .run(clean(tokens), clean(ramMb), clean(timeMin), goalId);
+    this.logChange('user', 'goal', goalId, 'caps', { tokens: clean(tokens), ramMb: clean(ramMb), timeMin: clean(timeMin) });
+    return this.getGoal(goalId);
+  }
+
+  // E-22: nivel de acceso + prohibiciones (global y por proyecto).
+  setProjectAccess(goalId, level) {
+    const clean = ['auto', 'reversibles', 'pedir-todo'].includes(level) ? level : null;
+    if (!clean) {
+      return null;
+    }
+    this._prepare('UPDATE goals SET access_level = ? WHERE id = ?').run(clean, goalId);
+    this.logChange('user', 'goal', goalId, 'access', { level: clean });
+    return this.getGoal(goalId);
+  }
+
+  addProhibition({ scope = 'global', goalId = null, kind, pattern, reason = '' }) {
+    const cleanKind = ['tool', 'cmd', 'path', 'url'].includes(kind) ? kind : null;
+    const cleanPattern = String(pattern || '').trim().slice(0, 300);
+    if (!cleanKind || !cleanPattern) {
+      return null;
+    }
+    const useScope = scope === 'project' ? 'project' : 'global';
+    const r = this._prepare(`
+      INSERT INTO prohibitions (scope, goal_id, kind, pattern, reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(useScope, useScope === 'project' ? goalId : null, cleanKind, cleanPattern,
+      String(reason).slice(0, 300), now());
+    return this._prepare('SELECT * FROM prohibitions WHERE id = ?').get(r.lastInsertRowid);
+  }
+
+  removeProhibition(id) {
+    return this._prepare('DELETE FROM prohibitions WHERE id = ?').run(id).changes > 0;
+  }
+
+  prohibitionsFor(goalId = null) {
+    const global = this._prepare("SELECT * FROM prohibitions WHERE scope = 'global' ORDER BY id").all();
+    if (!goalId) {
+      return global;
+    }
+    const scoped = this._prepare('SELECT * FROM prohibitions WHERE scope = ? AND goal_id = ? ORDER BY id')
+      .all('project', goalId);
+    return [...global, ...scoped];
+  }
+
+  // E-02: goalId filtra por proyecto; los NULL (empresa) siempre aplican.
+  // Sin goalId, comportamiento histórico (todo lo activo).
+  activeLearnings(agentId = null, goalId = null) {
+    const scope = goalId ? 'AND (goal_id IS NULL OR goal_id = ?)' : '';
+    const params = [];
     if (agentId) {
+      params.push(agentId);
+      if (goalId) params.push(goalId);
       return this._prepare(`
         SELECT * FROM learnings WHERE status = 'active' AND (agent_id = ? OR agent_id IS NULL)
+        ${scope}
         ORDER BY last_reinforced_at DESC
-      `).all(agentId).map(this.#rowToLearning);
+      `).all(...params).map(this.#rowToLearning);
     }
-    return this._prepare("SELECT * FROM learnings WHERE status = 'active' ORDER BY last_reinforced_at DESC")
-      .all().map(this.#rowToLearning);
+    if (goalId) params.push(goalId);
+    return this._prepare(`
+      SELECT * FROM learnings WHERE status = 'active' ${scope} ORDER BY last_reinforced_at DESC
+    `).all(...params).map(this.#rowToLearning);
   }
 
   learningsForPanel(agentId) {
@@ -1168,6 +1571,7 @@ export class Store {
     id: row.id,
     agentId: row.agent_id,
     meetingId: row.meeting_id,
+    goalId: row.goal_id ?? null,
     type: row.type,
     content: row.content,
     confidence: row.confidence,

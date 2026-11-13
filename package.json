@@ -26,6 +26,7 @@
     "concurrently": "^10.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "mermaid": "^12.3.0",
     "nanoid": "^5.1.6",
     "node-edge-tts": "^1.2.12",
     "onnxruntime-node": "^1.31.1",

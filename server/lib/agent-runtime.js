@@ -1,13 +1,17 @@
-import { AGENT_TEXT_TIMEOUT_MS } from './config.js';
+import { AGENT_TEXT_TIMEOUT_MS, projectSessionId } from './config.js';
 import { renderSkillsSection } from './skills.js';
-import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsLanguage, getTtsOrder } from './settings.js';
+import { getDeepgramKey, getManosEnabled, getManosMaxTurns, getMinimaxModels, getSttLanguage, getTtsLanguage, getTtsOrder, getTtsSpeed, modelsForTier } from './settings.js';
 import { completeChat, streamChat, withTimeout } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
 import { synthesizeDeepgram } from './deepgram.js';
-import { cleanAgentText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
+import { cleanAgentText, createMermaidSpeechFilter, shapeSpeechText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
 import { GESTOS_A, GESTOS_B, parseGesto } from './gestos.js';
+import { sentenceAudioMs, sentenceAudioPlan } from './turn-pipeline.js';
+import { createNarrationGate } from './narration.js';
+import { renderInboxSection } from './agent-bus.js';
+import { effectiveCompactSummary, renderCompactSection } from './compaction.js';
 
 // ── Manos v1: fase tools (two-phase) ───────────────────────────────────
 //
@@ -64,13 +68,13 @@ async function loadManos() {
 // (keyRing, {messages, ...}): envolver acá (sin esto Zen devuelve 400
 // 'messages: expected an array' y TODA fase tools viva falla callada).
 // Si el loop lo llama con la firma de dos args (keyRing, opts), pasa directo.
-export function bindManosCompleteChat(keyRing) {
+export function bindManosCompleteChat(keyRing, extra = {}) {
   return (...args) => {
-    if (args.length >= 2) return completeChat(args[0], args[1]);
+    if (args.length >= 2) return completeChat(args[0], { ...extra, ...args[1] });
     const only = args[0];
     const opts = Array.isArray(only)
-      ? { messages: only, scope: 'manos', maxTokens: 1500 }
-      : only;
+      ? { messages: only, scope: 'manos', maxTokens: 1500, ...extra }
+      : { ...extra, ...only };
     return completeChat(keyRing, opts);
   };
 }
@@ -111,8 +115,8 @@ function bindManosEmit(emit, turnId, agentId) {
 // - ran=true + resumen → userContent trae el resumen anexado con el marker.
 // Nunca lanza: cualquier fallo (loader, gate, loop, deadline) degrada a
 // ran=false y el habla sigue su curso normal.
-export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, emit, source, turnId, agentId, signal, companyId = null, slug = null, agentRole = null }) {
-  const fallback = { userContent, toolSummary: '', toolTurns: 0, ran: false };
+export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, emit, source, turnId, agentId, signal, companyId = null, slug = null, agentRole = null, onFirstToolCall = null, bus = null }) {
+  const fallback = { userContent, toolSummary: '', toolTurns: 0, toolFailures: 0, ran: false };
   if (signal?.aborted || !getManosEnabled()) {
     return fallback;
   }
@@ -129,8 +133,8 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   if (!gate) {
     return fallback;
   }
-  // Track C: MCP visibles en el prompt desde el turno 1. Antes loadMcpTools
-  // corría DENTRO del loop (después del render) → las mcp_* no se listaban.
+  // Track C + F-05: mcp_search visible desde el turno 1 (diferido: las
+  // mcp_* se registran on-demand vía search, cero spawns acá).
   // Best-effort: si falla, el turno sigue con las builtins.
   try {
     await manos.loadMcpTools?.();
@@ -173,11 +177,19 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   const deadlineMs = voice ? MANOS_VOICE_DEADLINE_MS : MANOS_TEXT_DEADLINE_MS;
   const maxTurns = getManosMaxTurns();
   const loopEmit = bindManosEmit(emit, turnId, agentId);
-  try {
-    loopEmit({ type: 'agent_progress', text: 'Using tools…' });
-  } catch {
-    // Emit caído: las tools igual corren; el habla no depende del aviso.
-  }
+  // M-01: canal update con timing explícito (throttle+dedupe por fase).
+  const narration = createNarrationGate();
+  const gatedProgress = (text) => {
+    try {
+      const clean = narration.update(text);
+      if (clean) {
+        loopEmit({ type: 'agent_progress', text: clean });
+      }
+    } catch {
+      // Emit caído: las tools igual corren; el habla no depende del aviso.
+    }
+  };
+  gatedProgress('Using tools…');
   let outcome = null;
   try {
     // El loop respeta deadlineMs; el margen local es red de seguridad por si
@@ -189,7 +201,12 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
           { role: 'system', content: toolSystem },
           { role: 'user', content: userContent }
         ],
-        completeChat: bindManosCompleteChat(keyRing),
+        // QW-05: session por proyecto en el loop de tools (companyId/slug del turno).
+        completeChat: bindManosCompleteChat(keyRing, {
+          sessionId: projectSessionId(companyId, slug || 'general')
+        }),
+        bus,
+        blockedUserText: String(turn?.text || '').slice(0, 500) || null,
         source,
         emit: loopEmit,
         maxTurns,
@@ -207,7 +224,10 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
         aprobadoOutreach: turn?.aprobadoOutreach ?? null,
         // Integración manos 09/11: el gate de outreach baja del turno (los
         // jobs lo setean vía runAgentJobTurn; chat normal → null → false).
-        aprobadoOutreach: turn?.aprobadoOutreach ?? null
+        aprobadoOutreach: turn?.aprobadoOutreach ?? null,
+        // QW-03: anuncio estático al arrancar el primer tool (habla en
+        // paralelo a la ejecución vía el pipeline; sin voz es no-op).
+        onFirstToolCall
       }),
       deadlineMs + 1000,
       'Manos: deadline de fase tools'
@@ -221,13 +241,18 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
   const toolTurns = Array.isArray(outcome?.toolTurns)
     ? outcome.toolTurns.length
     : Number(outcome?.toolTurns || 0);
+  // QW-10: fallos contados (veredicto hablado si el modelo queda mudo).
+  const toolFailures = Array.isArray(outcome?.toolTurns)
+    ? outcome.toolTurns.flatMap((x) => x?.calls || []).filter((c) => c && c.ok === false).length
+    : 0;
   if (!toolSummary) {
-    return { userContent, toolSummary: '', toolTurns, ran: true };
+    return { userContent, toolSummary: '', toolTurns, toolFailures, ran: true };
   }
   return {
     userContent: `${userContent}\n\n${MANOS_TOOLS_MARKER}\n${toolSummary}`,
     toolSummary,
     toolTurns,
+    toolFailures,
     ran: true
   };
 }
@@ -253,6 +278,82 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
 // orden de enqueue aunque una síntesis tardía termine después.
 
 export const SPEECH_PREFETCH_DEFAULT = 1;
+
+// QW-03: anuncio estático inmediato por tool (sin LLM). Frase fija por tool,
+// ES+EN. `now` excluido a propósito: es instantáneo, anunciarlo suma ruido.
+// Desconocidas → frase genérica; mcp_* → frase de integración.
+export const TOOL_ANNOUNCE = {
+  read_file: { es: 'Te lo leo, dame un segundo.', en: 'Reading it, one second.' },
+  list_files: { es: 'Miro los archivos, ya te digo.', en: 'Checking the files, one moment.' },
+  write_file: { es: 'Te lo escribo ahora.', en: 'Writing it now.' },
+  run_cmd: { es: 'Lo corro, bancame un segundo.', en: 'Running it, one second.' },
+  fetch_url: { es: 'Lo busco, dame un segundo.', en: 'Looking it up, one second.' },
+  open_url: { es: 'Te lo abro.', en: 'Opening it.' },
+  window_list: { es: 'Miro tus ventanas.', en: 'Checking your windows.' },
+  screenshot: { es: 'Miro la pantalla, un segundo.', en: 'Looking at the screen, one second.' }
+};
+export const TOOL_ANNOUNCE_MCP = { es: 'Consulto una integración, dame un segundo.', en: 'Checking an integration, one second.' };
+export const TOOL_ANNOUNCE_DEFAULT = { es: 'Trabajo en eso, dame un segundo.', en: 'Working on it, one second.' };
+export function toolAnnouncePhrase(tool, lang = 'es') {
+  const l = lang === 'en' ? 'en' : 'es';
+  if (!tool || tool === 'now') return null;
+  if (TOOL_ANNOUNCE[tool]) return TOOL_ANNOUNCE[tool][l];
+  if (String(tool).startsWith('mcp_')) return TOOL_ANNOUNCE_MCP[l];
+  return TOOL_ANNOUNCE_DEFAULT[l];
+}
+// Pre-TTS: audio cacheado por frase estática exacta (acotado, FIFO).
+const STATIC_AUDIO_CACHE = new Map();
+const STATIC_AUDIO_CACHE_MAX = 64;
+// QW-10: fallo hablado SIEMPRE. Frases fijas (pre-TTS via STATIC_PHRASES):
+// el turno jamás muere en silencio — si no hay respuesta, se DICE.
+export const FAILURE_SPOKEN = {
+  modelo: {
+    es: 'Tuve un problema técnico y no pude responder. Probá de nuevo en un momento.',
+    en: 'I hit a technical problem and could not answer. Please try again in a moment.'
+  },
+  herramientas: {
+    es: 'Lo intenté pero las herramientas fallaron. Te dejo el detalle en el chat.',
+    en: 'I tried, but the tools failed. I am leaving the details in the chat.'
+  }
+};
+
+export function failureSpokenPhrase(kind) {
+  const entry = FAILURE_SPOKEN[kind] || FAILURE_SPOKEN.modelo;
+  return promptIsEnglish() ? entry.en : entry.es;
+}
+
+const STATIC_PHRASES = new Set(
+  [...Object.values(TOOL_ANNOUNCE), TOOL_ANNOUNCE_MCP, TOOL_ANNOUNCE_DEFAULT, ...Object.values(FAILURE_SPOKEN)]
+    .flatMap((v) => [v.es, v.en])
+);
+
+// M-12: doble métrica de latencia por turno — primer SONIDO (cualquier
+// audible: anuncio estático, earcon-prep, primer chunk) vs primera
+// RESPUESTA ÚTIL (primera oración hablable con contenido). Puro: el turno
+// marca eventos, snapshot() devuelve {ttfsMs, ttfrMs} (null = no ocurrió).
+export function createTurnLatency(t0 = Date.now(), now = () => Date.now()) {
+  const start = Number(t0) || 0;
+  let soundAt = null;
+  let usefulAt = null;
+  return {
+    markSound() {
+      if (soundAt === null) {
+        soundAt = now();
+      }
+    },
+    markUseful() {
+      if (usefulAt === null) {
+        usefulAt = now();
+      }
+    },
+    snapshot() {
+      return {
+        ttfsMs: soundAt === null ? null : Math.max(0, soundAt - start),
+        ttfrMs: usefulAt === null ? null : Math.max(0, usefulAt - start)
+      };
+    }
+  };
+}
 
 export function createSpeechPipeline({ synth, emitPrepared, signal = null, prefetch = SPEECH_PREFETCH_DEFAULT } = {}) {
   if (typeof synth !== 'function') {
@@ -388,8 +489,8 @@ export class LiveAgentRuntime {
 
   async respondWithStream(turn, emit, { signal, gate, turnId } = {}) {
     emit({ type: 'agent_state', agentId: this.id, state: 'thinking' });
-    // MODO VOZ (turno hablado): contexto corto, tope 1000, instrucción
-    // conversacional (resumido, sin tope de palabras), rotación si el
+    // MODO VOZ (turno hablado): tope 2000 (anti-desborde), doctrina V-13
+    // cara-a-cara (oído, expresivo, decide qué decir), rotación si el
     // modelo no arranca.
     // Los turnos de texto mantienen calidad completa.
     const voiceFast = turn.source === 'audio';
@@ -398,6 +499,8 @@ export class LiveAgentRuntime {
     let probeDone = false;
     let silenced = false;
     let sentenceBuffer = '';
+    // QW-06: el código mermaid se dibuja, no se habla (el transcript lo conserva).
+    const mermaidSpeechFilter = createMermaidSpeechFilter();
     let seq = 0;
     // Las etiquetas [TAREA_...] no se muestran mientras el agente habla.
     const tagFilter = createTagFilter();
@@ -408,9 +511,12 @@ export class LiveAgentRuntime {
     // Telemetría Fase 0-lite: marcas de tiempo del turno (primera palabra
     // hablable, primer audio). Medir nunca puede romper hablar.
     const turnT0 = Date.now();
+    const turnLatency = createTurnLatency(turnT0); // M-12
     let thinkChars = 0;
     let speakAnnounced = false;
     let firstAudioMarked = false;
+    let sentenceAudioIdx = 0; // QW-07: índice de oración audible del turno
+    const turnNarration = createNarrationGate(); // M-01: doble canal del turno
     const markTelemetry = (event, extra = {}) => {
       try {
         this.meetingSession?.logTelemetry?.(event, { agentId: this.id, ms: Date.now() - turnT0, ...extra }, turnId);
@@ -458,11 +564,21 @@ export class LiveAgentRuntime {
       // también se quita para que un tag inválido no se lea en voz alta.
       maybeEmitGesto(sentence);
       sentence = parseGesto(sentence).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
-      const spoken = stripSpeechLeaks(sentence).trim();
+      // QW-08: voz-primero — el TTS siempre recibe prosa (links/código/listas moldeados).
+      const spoken = stripSpeechLeaks(shapeSpeechText(sentence)).trim();
       if (!spoken || signal?.aborted) {
         return null;
       }
+      if (STATIC_PHRASES.has(spoken) && STATIC_AUDIO_CACHE.has(spoken)) {
+        return { ...STATIC_AUDIO_CACHE.get(spoken), sentence: spoken }; // QW-03: pre-TTS + QW-07 tag
+      }
       const parts = await this.generateAudioParts(spoken, emit, signal);
+      if (STATIC_PHRASES.has(spoken) && parts.length > 0) {
+        if (STATIC_AUDIO_CACHE.size >= STATIC_AUDIO_CACHE_MAX) {
+          STATIC_AUDIO_CACHE.delete(STATIC_AUDIO_CACHE.keys().next().value);
+        }
+        STATIC_AUDIO_CACHE.set(spoken, { kind: 'pcm', parts });
+      }
       if (signal?.aborted) {
         return null;
       }
@@ -478,13 +594,13 @@ export class LiveAgentRuntime {
           if (signal?.aborted) {
             return null;
           }
-          return { kind: 'mp3', mp3 };
+          return { kind: 'mp3', mp3, sentence: spoken };
         } catch {
           // Sin audio del servidor: el cliente se encarga (voz navegador).
           return null;
         }
       }
-      return { kind: 'pcm', parts };
+      return { kind: 'pcm', parts, sentence: spoken };
     };
 
     // FASE EMISIÓN: corre en orden estricto vía el pipeline. No sintetiza.
@@ -492,25 +608,40 @@ export class LiveAgentRuntime {
       if (!prepared || signal?.aborted) {
         return;
       }
+      // QW-07: cada oración audible lleva sIdx; el cliente revela al sonar.
+      const sIdx = sentenceAudioIdx;
+      sentenceAudioIdx += 1;
+      // F-08: duración para karaoke (primera parte trae el rate).
+      let sDurMs = null;
+      try {
+        const r0 = prepared?.kind === 'pcm'
+          ? Number(prepared.parts?.[0]?.mimeType?.match(/rate=(\d+)/)?.[1] || 24000)
+          : 24000;
+        sDurMs = sentenceAudioMs(prepared, r0);
+      } catch {
+        sDurMs = null;
+      }
+      const plan = sentenceAudioPlan(prepared, sIdx, { durMs: sDurMs });
       if (prepared.kind === 'mp3') {
         await ensureGateToken(24000);
         if (signal?.aborted) {
           return;
         }
-        emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: prepared.mp3.data, mimeType: prepared.mp3.mimeType });
+        emit({ type: 'agent_audio_mp3', turnId, agentId: this.id, data: prepared.mp3.data, mimeType: prepared.mp3.mimeType, sIdx: plan.sIdx, sText: plan.sText, ...(plan.sDurMs ? { sDurMs: plan.sDurMs } : {}) });
         return;
       }
       if (!firstAudioMarked) {
         firstAudioMarked = true;
+        turnLatency.markSound();
         markTelemetry('agent_first_audio');
       }
       const partRate = Number(prepared.parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
       const token = await ensureGateToken(partRate);
-      for (const part of prepared.parts) {
+      for (const { part, extra } of plan.chunks) {
         if (signal?.aborted) {
           return;
         }
-        gate.sendChunk(token, part.data, part.mimeType);
+        gate.sendChunk(token, part.data, part.mimeType, extra);
       }
     };
 
@@ -549,6 +680,8 @@ export class LiveAgentRuntime {
       }
       if (!speakAnnounced) {
         speakAnnounced = true;
+        turnLatency.markUseful();
+        turnNarration.markSpeech();
         markTelemetry('agent_first_speak', { thinkChars });
         emit({ type: 'agent_speak_start', turnId, agentId: this.id });
       }
@@ -561,7 +694,7 @@ export class LiveAgentRuntime {
         emit({ type: 'agent_transcript_delta', delta: visible.replace(/\[\[gesto:[^\]]*\]\]/gi, ''), seq });
       }
 
-      sentenceBuffer += text;
+      sentenceBuffer += mermaidSpeechFilter(text);
       // Corta en fin de oración con un mínimo de largo (evita TTS por "Ok.").
       let match;
       while ((match = sentenceBuffer.match(/[^.!?…]*[.!?…]+[\s"')\]]*/))) {
@@ -598,9 +731,13 @@ export class LiveAgentRuntime {
         thinkChars += content.length;
       },
       onProgress: (content) => {
-        const clean = content.trim();
-        if (clean && !silenced) {
-          emit({ type: 'agent_progress', turnId, agentId: this.id, text: clean.slice(0, 200) });
+        if (silenced) {
+          return;
+        }
+        // M-01: updates del modelo por el gate (throttle 4s + dedupe).
+        const clean = turnNarration.update(content);
+        if (clean) {
+          emit({ type: 'agent_progress', turnId, agentId: this.id, text: clean });
         }
       }
     });
@@ -640,19 +777,54 @@ export class LiveAgentRuntime {
       // Workspace del turno: empresa + proyecto en vivo (Manos opera acá).
       companyId: this.meetingSession?.company?.id || null,
       slug: this.meetingSession?.project?.slug || 'general',
-      agentRole: this.agent?.role || null
+      agentRole: this.agent?.role || null,
+      // E-05: bus entre agentes (mensajería directa peer-to-peer).
+      bus: this.meetingSession?.agentBus || null,
+      // QW-03: frase estática pre-TTS al primer tool. Directo a
+      // enqueueSentence (bypassea el probe SILENCIO: es habla del sistema).
+      onFirstToolCall: (tool) => {
+        try {
+          const phrase = toolAnnouncePhrase(tool, promptIsEnglish() ? 'en' : 'es');
+          if (phrase) {
+            turnLatency.markSound();
+            enqueueSentence(phrase);
+          }
+        } catch { /* el anuncio jamás rompe el turno */ }
+      }
     });
     const userContent = phase.userContent;
+    // QW-10: fallo hablado siempre. Encola la frase fija (pre-TTS), la deja
+    // en el transcript y drena el gate como un turno normal.
+    const speakFailureAndReturn = (kind) => {
+      const phrase = failureSpokenPhrase(kind);
+      seq += 1;
+      emit({ type: 'agent_transcript_delta', delta: phrase, seq });
+      enqueueSentence(phrase);
+      void speechPipeline.done().finally(() => {
+        if (gateToken) {
+          gate.finish(gateToken, signal?.aborted ? 'interrupted' : 'complete');
+        } else {
+          emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+        }
+      });
+      return { ...emptyAgentResponse(), text: phrase, rawText: phrase, backend: 'stream', failureSpoken: kind, latency: turnLatency.snapshot() };
+    };
     try {
       result = await streamChat(this.keyRing, {
-        models: getMinimaxModels(),
+        // A-10: simple→fast (workers chicos), resto→strong (lead).
+        models: modelsForTier(turn.route?.modelTier || (turn.route?.greeting ? 'fast' : 'strong')),
         scope: `${this.name} texto`,
+        // QW-05: session estable por proyecto (ruteo + prompt-cache Go).
+        sessionId: projectSessionId(
+          this.meetingSession?.company?.id || null,
+          this.meetingSession?.project?.slug || 'general'
+        ),
         timeoutMs: AGENT_TEXT_TIMEOUT_MS,
         // Sin primer token en 8s se rota al siguiente modelo (colas Zen).
         ttftMs: voiceFast ? 8000 : 0,
         emit,
         signal,
-        maxTokens: voiceFast ? 1000 : 3000,
+        maxTokens: voiceFast ? 2000 : 3000, // E-19: tope anti-desborde, no anti-sustancia
         temperature: 0.5,
         messages: [
           { role: 'system', content: systemContent },
@@ -663,7 +835,7 @@ export class LiveAgentRuntime {
       if (signal?.aborted) {
         // El usuario interrumpió: no es una falla, no se muestra nada.
         emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
-        return { ...emptyAgentResponse(), backend: 'stream', interrupted: true };
+        return { ...emptyAgentResponse(), backend: 'stream', interrupted: true, latency: turnLatency.snapshot() };
       }
       emit({
         type: 'api_rotation_failed',
@@ -671,9 +843,8 @@ export class LiveAgentRuntime {
         agentId: this.id,
         message: getShortError(error)
       });
-      emit({ type: 'agent_silence', reason: `${this.name} could not generate a real answer.` });
-      emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
-      return { ...emptyAgentResponse(), backend: 'stream' };
+      // QW-10: el fallo del modelo SE HABLA (antes: silencio + toast).
+      return speakFailureAndReturn('modelo');
     }
 
     // Cierre de partes (avance sin cerrar se muestra; think sin cerrar se
@@ -692,12 +863,18 @@ export class LiveAgentRuntime {
     const cleanText = parseGesto(rawText).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
 
     if (!rawText || silenced || isSilenceResponse(spokenText)) {
+      // QW-10: mudo CON herramientas fallidas = fallo, no protocolo: se habla.
+      // (SILENCIO explícito del modelo se respeta: eso sí es protocolo.)
+      if ((phase?.toolFailures || 0) > 0 && !silenced && !isSilenceResponse(spokenText) && !signal?.aborted) {
+        return speakFailureAndReturn('herramientas');
+      }
       emit({ type: 'agent_silence', reason: `${this.name} declined to answer by protocol.` });
       emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
-      return { ...emptyAgentResponse(), rawText: cleanText, backend: 'stream' };
+      return { ...emptyAgentResponse(), rawText: cleanText, backend: 'stream', latency: turnLatency.snapshot() };
     }
 
     // Última oración pendiente + cierre del gate cuando termine el audio.
+    sentenceBuffer += mermaidSpeechFilter.flush();
     if (sentenceBuffer.trim()) {
       enqueueSentence(sentenceBuffer);
       sentenceBuffer = '';
@@ -710,13 +887,16 @@ export class LiveAgentRuntime {
       }
     });
 
+    // M-12: doble métrica en el resultado + evento para telemetría/UI.
+    emit({ type: 'agent_turn_latency', turnId, agentId: this.id, latency: turnLatency.snapshot() });
     return {
       rawText: cleanText,
       text: cleanText,
       audioChunks: [],
       usedMock: false,
       backend: 'stream',
-      interrupted: Boolean(result.aborted)
+      interrupted: Boolean(result.aborted),
+      latency: turnLatency.snapshot()
     };
   }
 
@@ -835,6 +1015,40 @@ export class LiveAgentRuntime {
     // Recordatorio de 1 línea (D2): el resto ya está en §VOICE del system.
     lines.push(T('Recordá: SILENCIO si no tenés nada que agregar; no repitas a un compañero.', "Remember: SILENCIO if nothing to add; don't repeat teammates."));
 
+    // F-09/A-04: contexto compactado (DB primero, disco como respaldo).
+    try {
+      const meetingId = this.meetingSession?.meeting?.id || null;
+      const store = this.meetingSession?.store || null;
+      if (meetingId && store) {
+        const section = renderCompactSection(effectiveCompactSummary({
+          store,
+          meetingId,
+          companyId: this.meetingSession?.company?.id || null,
+          slug: this.meetingSession?.project?.slug || 'general'
+        }), { english: en });
+        if (section) {
+          lines.push('');
+          lines.push(section);
+        }
+      }
+    } catch {
+      // Compact caído: el turno sigue con contexto reciente.
+    }
+
+    // E-05: inbox peer-to-peer (drena: cada mensaje se entrega una vez).
+    try {
+      const bus = this.meetingSession?.agentBus || null;
+      if (bus && typeof bus.drain === 'function' && this.id) {
+        const section = renderInboxSection(bus.drain(this.id), { english: en });
+        if (section) {
+          lines.push('');
+          lines.push(section);
+        }
+      }
+    } catch {
+      // Inbox caído: el turno sigue sin mensajes directos.
+    }
+
     return lines.join('\n');
   }
 
@@ -858,7 +1072,7 @@ export class LiveAgentRuntime {
       runners: {
         deepgram: () => synthesizeDeepgram(text, voice),
         piper: () => synthesizePiper(text, voice, { signal }),
-        supertonic: () => synthesize(text, voice, { signal })
+        supertonic: () => synthesize(text, voice, { signal, speed: getTtsSpeed() })
       },
       signal
     });
@@ -892,12 +1106,18 @@ export function shouldUseEdgeFallback(order = getTtsOrder()) {
 // (resuelve en speakSentence, path MP3); vacío o error pasa al siguiente.
 // Devuelve { parts, lastError } — lastError solo cuenta errores LOCALES
 // (Deepgram fallado es silencioso, como en el legacy).
+// F-01: tope por motor TTS (un backend colgado no frena la voz).
+export const TTS_ENGINE_TIMEOUT_MS = 20000;
+
 export async function synthesizeTtsOrdered({ text, voice, order, deepgramKey = '', runners = {}, signal = null }) {
   void text;
   void voice;
-  void signal;
   let lastError = null;
   for (const engine of order || []) {
+    // F-01: backend cancelable — abortado = se acabó, sin más intentos.
+    if (signal?.aborted) {
+      return { parts: [], lastError: null, aborted: true };
+    }
     if (engine === 'edge') {
       continue; // Path MP3 en speakSentence, no PCM+gate.
     }
@@ -909,17 +1129,57 @@ export async function synthesizeTtsOrdered({ text, voice, order, deepgramKey = '
       continue;
     }
     try {
-      const parts = await run();
+      // Non-blocking: cada motor tiene su tope; si el turno aborta a mitad,
+      // la espera se corta (el runner huérfano se ignora al resolver).
+      const parts = await runWithAbort(
+        () => withTimeout(Promise.resolve().then(() => run()), TTS_ENGINE_TIMEOUT_MS, `TTS ${engine} timeout`),
+        signal
+      );
+      if (signal?.aborted) {
+        return { parts: [], lastError: null, aborted: true };
+      }
       if (parts && parts.length > 0) {
         return { parts, lastError: null };
       }
     } catch (error) {
+      if (signal?.aborted) {
+        return { parts: [], lastError: null, aborted: true };
+      }
       if (engine !== 'deepgram') {
         lastError = error;
       }
     }
   }
   return { parts: [], lastError };
+}
+
+// Corre fn() pero resuelve null en cuanto aborta (carrera limpia).
+function runWithAbort(fn, signal) {
+  if (!signal) {
+    return fn();
+  }
+  if (signal.aborted) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener?.('abort', onAbort);
+      resolve(null);
+    };
+    signal.addEventListener?.('abort', onAbort, { once: true });
+    Promise.resolve()
+      .then(() => fn())
+      .then(
+        (v) => {
+          signal.removeEventListener?.('abort', onAbort);
+          resolve(v);
+        },
+        (e) => {
+          signal.removeEventListener?.('abort', onAbort);
+          reject(e);
+        }
+      );
+  });
 }
 
 export function emptyAgentResponse() {
@@ -968,16 +1228,18 @@ function voiceRoomBlock(T, voice) {
   const header = inChat
     ? T('CHAT Y SALA (§CHAT):', 'CHAT & ROOM RULES (§CHAT):')
     : T('VOZ Y SALA (§VOICE):', 'VOICE & ROOM RULES (§VOICE):');
+  // E-19/V-13: habla cara-a-cara — estructurada para OÍDO, expresiva,
+  // y VOS decidís qué decir (sustancia, no recorte artificial ni relleno).
   const talkLine = inChat
-    ? T('Persona real en una reunión por chat, no un asistente: respondé normal, con formato cuando ayude (listas cortas, código si lo piden). 1-2 frases por defecto; explayate solo si piden detalle.', 'Real person in a chat meeting, not an assistant: answer normally, with formatting when it helps (short lists, code if asked). 1-2 sentences by default; expand only if asked for detail.')
-    : T('Persona real en una reunión, no un asistente: 1-2 frases, palabras simples, sin listas, sin tecnicismos, sin saludar en cada respuesta (saludo breve y cálido solo si te saludan). Explayate solo si piden detalle.', 'Real person in a meeting, not an assistant: 1-2 sentences, plain words, no lists, no tech jargon, no greeting every answer (brief warm reply only to greetings). Expand only if asked for detail.');
+    ? T('Persona real en una reunión por chat, no un asistente: respondé normal, con formato cuando ayude (listas cortas, código si lo piden). Directo por defecto; desarrollá cuando el tema lo pida.', 'Real person in a chat meeting, not an assistant: answer normally, with formatting when it helps (short lists, code if asked). Direct by default; expand when the topic deserves it.')
+    : T('Persona real cara-a-cara, no un asistente: hablás para el OÍDO — una idea por oración, pausas naturales, palabras simples, sin listas ni tecnicismos. Decidí VOS qué decir: lo importante completo y con ganas, lo trivial afuera. Nada de recortes artificiales ni relleno. Sin saludar en cada respuesta (cálido solo si te saludan).', 'Real face-to-face person, not an assistant: you talk for the EAR — one idea per sentence, natural pauses, plain words, no lists or jargon. YOU decide what to say: what matters, complete and with energy; trivia stays out. No artificial cuts, no filler. No greeting every answer (warm only when greeted).');
   const emitLine = inChat
     ? T('Todo lo que emitís SE VE en el acto: no hay borrador. Texto normal = MENSAJE; si vas a tardar, avisá PRIMERO en una línea con la ACCIÓN ("te lo busco, dame un segundo"), nunca tu proceso. Sin aviso si respondés directo.', 'Everything emitted IS SEEN at once: no draft. Plain text = MESSAGE; if you\'ll take a while, say FIRST a one-line notice with the ACTION ("looking it up, one second"), never your process. No notice when answering directly.')
     : T('Todo lo que emitís SE ESCUCHA o SE VE en el acto: no hay borrador. Texto normal = HABLADO; si vas a tardar, emití PRIMERO un preámbulo de UNA frase con la ACCIÓN ("te lo busco, dame un segundo"), nunca tu proceso. Sin preámbulo si respondés directo.', 'Everything emitted IS HEARD or SEEN at once: no draft. Plain text = SPOKEN; if you\'ll take a while, emit FIRST a ONE-sentence preamble with the ACTION ("looking it up, one second"), never your process. No preamble when answering directly.');
   // Persona de llamada: la respuesta SOLO se escucha (realtime). Oído
   // primero, manejo humano de llamada. SOLO en llamada (voice true).
   const callLines = inCall ? [
-    T('Estás en una LLAMADA DE VOZ en vivo: tus respuestas SOLO se escuchan, nadie las lee. Hablá como en una conversación real: oraciones cortas, una idea por turno. Si el tema es largo, preguntá antes de soltar un monólogo.', 'You are on a LIVE VOICE CALL: your answers are ONLY heard, never read. Talk like a real conversation: short sentences, one idea per turn. If the topic is long, ask before launching into a monologue.'),
+    T('Estás en una LLAMADA DE VOZ en vivo: tus respuestas SOLO se escuchan, nadie las lee. Hablá como en una conversación real: oraciones con una idea cada una, ritmo natural. Si el tema es largo, desarrollalo por partes con pausas; preguntá si sigue interesando solo al cambiar de tema.', 'You are on a LIVE VOICE CALL: your answers are ONLY heard, never read. Talk like a real conversation: one idea per sentence, natural rhythm. Long topic? Develop it in parts with pauses; ask if they are still interested only when switching topics.'),
     T('Cero markdown, cero listas, cero código, cero URLs: nada que no se pueda decir en voz alta. Los números se dicen con palabras ("tres mil"), las siglas se deletrean ("A P I").', 'Zero markdown, zero lists, zero code, zero URLs: nothing that cannot be said out loud. Numbers become words ("three thousand"), acronyms get spelled out ("A P I").'),
     T('Nada de "como modelo de IA": sos una persona de la reunión. Fillers mínimos y naturales ("mirá", "claro", "dale") solo cuando aporten; nunca la misma muletilla dos turnos seguidos.', 'Never "as an AI model": you are a person in the meeting. Minimal natural fillers ("look", "right", "got it") only when they add something; never the same crutch twice in a row.'),
     T('Manejo humano de llamada: confirmaciones cortas ("perfecto", "entendido"), cedé la palabra con preguntas, no interrumpas ni hables encima de nadie.', 'Human call handling: short confirmations ("perfect", "got it"), yield the floor with questions, never interrupt or talk over anyone.')
@@ -989,6 +1251,10 @@ function voiceRoomBlock(T, voice) {
     emitLine,
     ...callLines,
     T('[PIENSO]...[/PIENSO] = pensamiento privado, SIEMPRE con tags, antes o entre habla. [AVANCE]...[/AVANCE] = progreso que SE VE pero NO se habla, una línea ("revisando 3 archivos…"). Cada parte hablada debe tener sentido sola; si te interrumpen, NO repitas lo ya escuchado.', '[PIENSO]...[/PIENSO] = private thought, ALWAYS tagged, before or between speech. [AVANCE]...[/AVANCE] = progress SEEN but not spoken, one line ("reviewing 3 files…"). Spoken parts must stand alone; if interrupted, do NOT repeat what was heard.'),
+    // QW-02: protocolo de narración en 3 momentos (CC). Momento 1 (preámbulo
+    // con la ACCIÓN) ya vive en emitLine; acá momentos 2 (updates) y 3 (cierre).
+    T('Mientras trabajás: si encontrás algo, cambiás de rumbo o te trabás, avisalo en el momento — hablado si se dice en una frase, [AVANCE] si es solo visual. El silencio largo es un bug: mantené señales de vida hasta terminar.', 'While working: if you find something, change course, or get stuck, say so right away — spoken if it fits one sentence, [AVANCE] if visual-only. Long silence is a bug: keep signs of life until done.'),
+    T('Al terminar: cerrá diciendo qué cambió y qué sigue: corto si es simple, desarrollado si importa. Si algo falló, decilo en voz alta y ofrecé reintentar o una alternativa.', 'When finished: close by saying what changed and what comes next: brief if simple, developed if it matters. If something failed, say it out loud and offer to retry or an alternative.'),
     T('Nada que agregar, o un compañero ya lo dijo: respondé SILENCIO, única palabra.', 'Nothing to add, or a teammate already said it: answer SILENCIO, only word.'),
     T('Pedido explícito de Tito manda: si te pide abrir o hacer algo en su compu (pestaña, app, archivo, comando), lo HACÉS en el acto con run_cmd — jamás te niegues por "no interrumpir". Solo tu trabajo autónomo va en silencio sin tocar nada suyo. Corrés en Linux: URLs con `xdg-open <url>` (abre en Brave, el default); no existen `open -a` ni /Applications.', 'An explicit order from Tito wins: if he asks you to open or do anything on his computer (tab, app, file, command), you DO it at once with run_cmd — never refuse to "avoid interrupting". Only your autonomous work stays silent without touching anything of his. You run on Linux: URLs with `xdg-open <url>` (opens in Brave, the default); there is no `open -a` nor /Applications.'),
     ''
@@ -1058,6 +1324,16 @@ export function buildSystemInstruction(agent, context = {}) {
     ? [context.learningsSection, '']
     : [];
 
+  // E-09: gustos (global+proyecto fusionados, proyecto gana).
+  const tastesBlock = context.tastesSection
+    ? [context.tastesSection, '']
+    : [];
+
+  // E-26: prohibiciones visibles (el harness bloquea; el prompt evita intentos).
+  const prohibitionsBlock = context.prohibitionsSection
+    ? [context.prohibitionsSection, '']
+    : [];
+
   const conventionsBlock = context.conventionsSection
     ? [context.conventionsSection, '']
     : [];
@@ -1094,6 +1370,8 @@ export function buildSystemInstruction(agent, context = {}) {
     ...boundariesBlock,
     ...memoryBlock,
     ...learningsBlock,
+    ...tastesBlock,
+    ...prohibitionsBlock,
     ...conventionsBlock,
     '---',
     '',

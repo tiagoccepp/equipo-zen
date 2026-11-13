@@ -1,0 +1,16 @@
+# E-25: paquete Arch (extrae el .deb oficial — Tito solo prueba .deb).
+pkgname=equipo-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Equipo — tu equipo IA en el escritorio (orbe, voz, permisos)"
+arch=('x86_64')
+url="https://example.invalid/equipo"
+license=('custom')
+depends=('webkit2gtk-4.1' 'openssl' 'nodejs')
+source=("Equipo_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+package() {
+  bsdtar -xf "${srcdir}/Equipo_${pkgver}_amd64.deb" -C "${pkgdir}" data.tar.gz
+  bsdtar -xf "${pkgdir}/data.tar.gz" -C "${pkgdir}"
+  rm -f "${pkgdir}/data.tar.gz"
+}

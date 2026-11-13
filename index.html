@@ -3,83 +3,163 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0a0a0a" />
-    <title>Pablo — At your service</title>
+    <meta name="theme-color" content="#0e1013" />
+    <title>Equipo — Your AI team</title>
   </head>
   <body>
+    <a class="skip-link" href="#prompt">Skip to composer</a>
+    <a class="skip-link" href="#stream">Skip to activity</a>
     <div class="mesh" aria-hidden="true"></div>
+
     <header class="topbar">
       <div class="brand">
         <span class="brand-dot" aria-hidden="true"></span>
         <span class="brand-name">Pablo</span>
         <span class="brand-sub">team</span>
       </div>
-      <nav class="tabs" aria-label="Views">
-        <button type="button" data-view="console" aria-selected="true">Console</button>
-        <button type="button" data-view="jobs" aria-selected="false" tabindex="-1">Jobs</button>
-        <button type="button" data-view="manager" aria-selected="false" tabindex="-1">Manager</button>
-        <button type="button" data-view="settings" aria-selected="false" tabindex="-1">Settings</button>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" id="tab-console" aria-controls="view-console" data-view="console" aria-selected="true">Console</button>
+        <button type="button" role="tab" id="tab-jobs" aria-controls="view-jobs" data-view="jobs" aria-selected="false" tabindex="-1">Jobs</button>
+        <button type="button" role="tab" id="tab-manager" aria-controls="view-manager" data-view="manager" aria-selected="false" tabindex="-1">Manager</button>
+        <button type="button" role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings" aria-selected="false" tabindex="-1">Settings</button>
       </nav>
       <div class="top-right">
-        <button type="button" id="btn-palette" class="kbd-hint" title="Command bar (Ctrl+K)">Ctrl+K</button>
+        <button type="button" id="btn-palette" class="kbd-hint" title="Command bar (Ctrl+K)">Ctrl K</button>
         <div class="conn" id="conn" role="status">
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-text">Connecting</span>
         </div>
       </div>
     </header>
+
     <main class="shell">
-      <section id="view-console" class="view" aria-label="Console">
-      <section class="stage">
-        <div class="orbs" id="orbs" aria-hidden="true">
-          <canvas id="orb-canvas"></canvas>
-          <div class="orb-cells" id="orb-cells"></div>
-        </div>
-        <h1 class="greet" id="greet">Team console</h1>
-        <p class="status" id="status">Connecting…</p>
-      </section>
-
-      <section class="composer">
-        <textarea
-          id="prompt"
-          rows="2"
-          placeholder="Type a message or instruction…"
-          aria-label="Type a message or instruction"
-        ></textarea>
-        <div class="composer-actions">
-          <div class="left">
-            <button id="btn-mic" class="pill" type="button" aria-pressed="false" title="Talk to Pablo with your voice"><span class="pill-dot" aria-hidden="true"></span><span>Talk</span></button>
-            <button id="btn-call" class="pill" type="button" aria-pressed="false" title="Let the whole team listen"><span class="pill-dot" aria-hidden="true"></span><span>Call all</span></button>
-            <button id="btn-voice" class="pill on" type="button" aria-pressed="true" title="Spoken replies on/off"><span class="pill-dot" aria-hidden="true"></span><span>Voice</span></button>
-            <button id="btn-autowork" class="pill on" type="button" aria-pressed="true" title="Agents keep working on the project on their own"><span class="pill-dot" aria-hidden="true"></span><span>Auto</span></button>
+      <section id="view-console" class="view view-console" role="tabpanel" aria-labelledby="tab-console" aria-label="Console" tabindex="0">
+        <aside class="rail" aria-label="Project and team">
+          <div class="rail-block">
+            <div class="rail-head">
+              <span>Project</span>
+              <button type="button" class="rail-act" data-goto="settings" title="Manage projects">Manage</button>
+            </div>
+            <div class="rail-project" id="rail-project-name">No project</div>
+            <div class="rail-project-meta" id="rail-project-meta">Create one in Settings</div>
           </div>
-          <button id="btn-send" class="send" type="button" aria-label="Send">Send</button>
-        </div>
+
+          <div class="rail-block rail-grow">
+            <div class="rail-head">
+              <span>Team</span>
+              <span class="rail-count" id="rail-count">0</span>
+            </div>
+            <div class="rail-list" id="rail-people" role="list"></div>
+          </div>
+
+          <div class="rail-block">
+            <div class="rail-head"><span>Session</span></div>
+            <div class="rail-controls">
+              <button id="btn-mic" class="ctl" type="button" aria-pressed="false" title="Talk to Pablo with your voice">
+                <span class="ctl-label">Talk</span><span class="ctl-state" aria-hidden="true">off</span>
+              </button>
+              <button id="btn-call" class="ctl" type="button" aria-pressed="false" title="Let the whole team listen">
+                <span class="ctl-label">Call all</span><span class="ctl-state" aria-hidden="true">off</span>
+              </button>
+              <button id="btn-voice" class="ctl on" type="button" aria-pressed="true" title="Spoken replies">
+                <span class="ctl-label">Voice</span><span class="ctl-state" aria-hidden="true">on</span>
+              </button>
+              <button id="btn-autowork" class="ctl on" type="button" aria-pressed="true" title="Agents keep working on the project on their own">
+                <span class="ctl-label">Auto</span><span class="ctl-state" aria-hidden="true">on</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="work" aria-label="Activity">
+          <div class="work-head">
+            <h2 class="work-title">Activity</h2>
+            <span class="work-sub" id="work-sub">live</span>
+          </div>
+          <section class="stream" id="stream" aria-live="polite" aria-label="Messages" tabindex="-1"><div class="stream-empty" id="stream-empty">
+            <span class="empty-title">Nothing running yet</span>
+            <span class="empty-body">Ask Pablo for something, or pick a task. Tool runs and agent replies land here in order.</span>
+          </div></section>
+
+          <section class="composer" aria-label="Composer">
+            <label class="sr-only" for="prompt">Message or instruction</label>
+            <textarea
+              id="prompt"
+              rows="1"
+              placeholder="Message Pablo or the team…"
+            ></textarea>
+            <div class="composer-actions">
+              <span class="composer-hint"><kbd>Enter</kbd> send<kbd class="hint-alt">Shift Enter</kbd> newline</span>
+              <button id="btn-send" class="send" type="button" aria-label="Send">Send</button>
+            </div>
+          </section>
+        </section>
+
+        <aside class="context" aria-label="Presence">
+          <section class="stage">
+            <div class="orbs" id="orbs" aria-hidden="true">
+              <canvas id="orb-canvas"></canvas>
+              <div class="orb-cells" id="orb-cells"></div>
+            </div>
+            <div class="stage-text">
+              <h1 class="greet" id="greet">Team console</h1>
+              <p class="status" id="status" role="status">Connecting…</p>
+            </div>
+          </section>
+
+          <div class="context-block">
+            <div class="rail-head"><span>Runtime</span></div>
+            <dl class="kv" id="ctx-kv">
+              <div class="kv-row"><dt>Agents</dt><dd id="ctx-agents">—</dd></div>
+              <div class="kv-row"><dt>Working</dt><dd id="ctx-working">—</dd></div>
+              <div class="kv-row"><dt>Mode</dt><dd id="ctx-mode">chat</dd></div>
+            </dl>
+          </div>
+        </aside>
       </section>
 
-      <section class="stream-wrap">
-        <div class="stream-head" aria-hidden="true"><span>Activity</span></div>
-        <section class="stream" id="stream" aria-live="polite"><div class="stream-empty" id="stream-empty">No activity yet — messages and tool runs will appear here.</div></section>
-      </section>
-      </section>
+      <section id="view-jobs" class="view" role="tabpanel" aria-labelledby="tab-jobs" aria-label="Jobs" tabindex="0" hidden></section>
 
-      <section id="view-jobs" class="view" aria-label="Jobs" hidden>
-        <!-- T4 monta mountJobs(el) acá (main integra) -->
-      </section>
+      <section id="view-manager" class="view" role="tabpanel" aria-labelledby="tab-manager" aria-label="Manager" tabindex="0" hidden></section>
 
-      <section id="view-manager" class="view" aria-label="Manager" hidden>
-        <!-- T5 monta mountManager(el) acá (main integra) -->
-      </section>
-
-      <section id="view-settings" class="view" aria-label="Settings" hidden>
+      <section id="view-settings" class="view view-settings" role="tabpanel" aria-labelledby="tab-settings" aria-label="Settings" tabindex="0" hidden>
         <details class="companies" open>
           <summary>Companies</summary>
           <div id="companies-list"></div>
         </details>
 
+        <details class="companies" id="projects-box" open>
+          <summary>Projects</summary>
+          <div id="projects-list"></div>
+          <div class="project-new">
+            <input id="project-title" type="text" maxlength="120" placeholder="New project…" aria-label="New project" />
+            <button id="project-create" type="button">Create</button>
+          </div>
+        </details>
+
         <details class="companies" id="perms-box" hidden>
           <summary>Computer permissions</summary>
           <div id="perms-list"></div>
+        </details>
+
+        <details class="companies" id="approvals-box">
+          <summary>Pending approvals</summary>
+          <div id="approvals-list"></div>
+        </details>
+
+        <details class="companies" id="prohib-box">
+          <summary>Prohibitions</summary>
+          <div id="prohib-list"></div>
+          <div class="project-new">
+            <select id="prohib-kind" aria-label="Type">
+              <option value="tool">tool</option>
+              <option value="cmd">cmd</option>
+              <option value="path">path</option>
+              <option value="url">url</option>
+            </select>
+            <input id="prohib-pattern" type="text" maxlength="300" placeholder="Pattern (glob or /regex/)" aria-label="Pattern" />
+            <button id="prohib-add" type="button">Prohibit</button>
+          </div>
         </details>
 
         <details class="companies" id="settings-box" open>

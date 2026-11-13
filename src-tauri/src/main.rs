@@ -21,6 +21,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_single_instance::init as single_instance_init;
 
 const CAPS: [&str; 3] = ["pantalla", "mouse", "teclado"];
 const LEVELS: [&str; 3] = ["permitir", "preguntar", "bloquear"];
@@ -566,6 +567,12 @@ fn main() {
                 })
                 .build(),
         )
+        // E-24: single-instance — un 2do lanzamiento enfoca la ventana
+        // existente en vez de duplicar app + sidecars (era lo que "bloqueaba
+        // la reapertura": dos instancias peleando puertos/DB).
+        .plugin(single_instance_init(|app, _args, _cwd| {
+            show_main_inner(app);
+        }))
         .setup(|app| {
             let datos = app.path().app_data_dir()?;
             fs::create_dir_all(&datos)?;

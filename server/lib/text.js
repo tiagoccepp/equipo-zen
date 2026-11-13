@@ -31,6 +31,61 @@ export function stripForeignScript(value) {
   return text.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.;:!?])/g, '$1');
 }
 
+// QW-06: los bloques ```mermaid se DIBUJAN en el chat, no se hablan.
+// Filtro incremental (los fences llegan partidos entre deltas): retiene la
+// cola sospechosa y la resuelve con el chunk siguiente. Solo mermaid; otros
+// fences pasan intactos. flush() al final del stream libera el carry.
+export function createMermaidSpeechFilter() {
+  let inMermaid = false;
+  let carry = '';
+  const filter = (chunk) => {
+    let text = carry + String(chunk || '');
+    carry = '';
+    let out = '';
+    while (text) {
+      if (!inMermaid) {
+        const idx = text.search(/```[^\S\n]*mermaid\b/i);
+        if (idx === -1) {
+          const tail = text.match(/`{1,3}[^\S\n]*[a-zA-Z]*$/);
+          if (tail && tail[0].length < text.length) {
+            out += text.slice(0, text.length - tail[0].length);
+            carry = tail[0];
+          } else if (tail) {
+            carry = text;
+          } else {
+            out += text;
+          }
+          break;
+        }
+        out += text.slice(0, idx);
+        const after = text.slice(idx);
+        const nl = after.indexOf('\n');
+        text = nl === -1 ? '' : after.slice(nl + 1);
+        inMermaid = true;
+        out += ' ';
+      } else {
+        const end = text.indexOf('```');
+        if (end === -1) {
+          const tail = text.match(/`{1,2}$/);
+          carry = tail ? tail[0] : '';
+          break;
+        }
+        inMermaid = false;
+        text = text.slice(end + 3);
+        out += ' ';
+      }
+    }
+    return out;
+  };
+  filter.flush = () => {
+    const rest = inMermaid ? '' : carry;
+    carry = '';
+    inMermaid = false;
+    return rest;
+  };
+  return filter;
+}
+
 export function stripTaskTags(value) {
   return String(value || '').replace(/\[TAREA_[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -160,14 +215,30 @@ export function getMentionIndex(text, aliases) {
   return best;
 }
 
+// E-23: scrub de secretos en errores que llegan al cliente/logs.
+const SCRUB_RES = [
+  /sk-[a-zA-Z0-9]{8,}/g,
+  /AKIA[A-Z0-9]{12,}/g,
+  /gh[pousr]_[a-zA-Z0-9]{8,}/g,
+  /xox[bap]-[a-zA-Z0-9-]{6,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g
+];
+
+export function scrubSecretsText(value) {
+  let s = String(value ?? '');
+  for (const re of SCRUB_RES) {
+    re.lastIndex = 0;
+    s = s.replace(re, '[redacted]');
+  }
+  return s;
+}
+
 export function getErrorText(error) {
   if (!error) {
     return 'Unknown error';
   }
-  if (typeof error === 'string') {
-    return error;
-  }
-  return error.stack || error.message || JSON.stringify(error);
+  const raw = typeof error === 'string' ? error : (error.stack || error.message || JSON.stringify(error));
+  return scrubSecretsText(raw);
 }
 
 export function getShortError(error) {
@@ -206,6 +277,35 @@ export function stripProgressBlocks(value) {
 
 // Última defensa antes del TTS: pela TODO lo no-hablable. Si algo pasa,
 // el usuario lo escucha — este filtro no puede fallar abierto.
+// QW-08: regla voz-primero a nivel harness. El modelo escribe markdown
+// (links, código, listas); el oído necesita prosa. Esto moldea CUALQUIER
+// texto a hablable ANTES del TTS — el modelo no tiene que acordarse.
+// No toca el transcript visible (ese conserva el markdown).
+export function shapeSpeechText(value) {
+  let text = String(value || '');
+  // Links markdown [texto](url) → texto.
+  text = text.replace(/\[([^\[\]]+)\]\([^()\s]+\)/g, '$1');
+  // URLs peladas → fuera (el contexto suele nombrarlas; leerlas es ruido).
+  text = text.replace(/https?:\/\/[^\s)\]"'<>]+/g, ' ');
+  // Código inline + bloques ``` (el filtro mermaid ya sacó mermaid; esto
+  // pela el resto de fences y backticks, dejando el contenido).
+  text = text.replace(/```[a-zA-Z]*\n?/g, ' ').replace(/```/g, ' ');
+  text = text.replace(/`([^`]*)`/g, '$1');
+  // Énfasis markdown → texto plano.
+  text = text.replace(/(\*\*|__)([^*_]+)\1/g, '$2').replace(/(\*|_)([^*_\s][^*_]*)\1/g, '$2');
+  // Headings, citas, reglas → prosa.
+  text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+  text = text.replace(/^\s{0,3}>\s?/gm, '');
+  text = text.replace(/^\s{0,3}([-*_]\s*){3,}$/gm, ' ');
+  // Ítems de lista → oraciones separadas por punto (pausa natural).
+  text = text.replace(/^\s{0,3}([-*+]|\d+[.)])\s+/gm, '');
+  // Tablas: pipes → comas.
+  text = text.replace(/\s*\|\s*/g, ', ');
+  // Saltos de línea → espacio (la puntuación ya marca las pausas).
+  text = text.replace(/\r?\n+/g, ' ');
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 export function stripSpeechLeaks(value) {
   let text = stripPrivateBlocks(stripProgressBlocks(value));
   text = stripTaskTags(text);

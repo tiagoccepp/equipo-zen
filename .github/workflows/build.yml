@@ -1,0 +1,100 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Tito solo prueba .deb: el resto de plataformas se valida acá (E-25).
+# PRIORIDAD MÁXIMA: Windows debe funcionar excelente.
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: smoke portable
+        run: node scripts/smoke-platform.mjs
+      - name: unit subset (rápido, sin red)
+        run: >
+          node --test --test-force-exit
+          tests/f04-permisos.test.mjs tests/f06-hooks.test.mjs
+          tests/e22-acceso.test.mjs tests/e25-plataforma.test.mjs
+          tests/m01-narration.test.mjs tests/qw08-vozprimero.test.mjs
+
+  desktop:
+    needs: smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: install Linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          libasound2-dev
+      - run: npm ci
+      - name: frontend build
+        run: npx vite build
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: npm run tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: verify artifacts exist
+        shell: bash
+        run: ls -la src-tauri/target/${{ matrix.target }}/release/bundle/
+
+  linux-extras:
+    # .rpm (nfpm desde el .deb) + PKGBUILD (arch) — E-25 "linux por base".
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.sha }}-ubuntu
+        continue-on-error: true
+      - name: nfpm deb→rpm
+        run: |
+          test -f packaging/nfpm.yaml || (echo "sin nfpm.yaml" && exit 1)
+          go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package \
+            --config packaging/nfpm.yaml --packager rpm --target /tmp/ || echo "rpm: revisar"
+      - name: shellcheck PKGBUILD helper
+        run: >
+          bash -n packaging/arch/PKGBUILD 2>/dev/null || echo "arch revisar PKGBUILD"

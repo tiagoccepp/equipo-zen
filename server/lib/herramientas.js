@@ -147,6 +147,72 @@ function escribirPerfil(cwd) {
 
 // Ejecuta dentro de la carpeta del proyecto. Nunca lanza: los errores son
 // resultado, porque para el agente un comando que falla es información.
+// E-25: shell por plataforma — Windows usa COMSPEC (cmd), resto /bin/sh.
+// Pura (platform inyectable) para testear sin Windows.
+export function shellFor(platform = process.platform, comando = '') {
+  if (platform === 'win32') {
+    return [process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe', ['/d', '/s', '/c', comando]];
+  }
+  return ['/bin/sh', ['-c', comando]];
+}
+
+// E-23: env scrub — el hijo NO hereda secretos de la app (llaves van por
+// archivos/settings, nunca por entorno del shell). Opt-in `env` puede
+// re-agregar lo que el caller necesite explícitamente.
+const SECRET_ENV_RE = /(^|_)(API_?KEYS?|TOKEN|SECRET|PASSWORD|PRIVATE_?KEY)$/i;
+const SECRET_ENV_EXACT = new Set([
+  'MINIMAX_API_KEY', 'MINIMAX_API_KEYS', 'DEEPSEEK_API_KEY', 'GROQ_API_KEY',
+  'OPENCODE_API_KEY', 'BRAVE_API_KEY', 'TAVILY_API_KEY', 'CONTEXT7_API_KEY',
+  'FIRECRAWL_API_KEY', 'TELEGRAM_BOT_TOKEN', 'WHATSAPP_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN',
+  'SLACK_MCP_XOXB_TOKEN', 'DEEPGRAM_API_KEY'
+]);
+
+export function scrubEnvForChild(env = process.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env || {})) {
+    if (SECRET_ENV_EXACT.has(k) || SECRET_ENV_RE.test(k)) {
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+// E-23: contención Linux vía bubblewrap (si existe y EQUIPO_SANDBOX !== '0'):
+// / solo-lectura, proyecto + tmp + cachés escribibles, sin setuid.
+const BWRAP_CANDIDATES = ['/usr/bin/bwrap', '/bin/bwrap'];
+export function bwrapPath() {
+  if (process.env.EQUIPO_SANDBOX === '0') {
+    return null;
+  }
+  try {
+    for (const p of BWRAP_CANDIDATES) {
+      if (existsSync(p)) {
+        return p;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function bwrapArgs(cwd, comando) {
+  const home = process.env.HOME || '/root';
+  return [
+    '--ro-bind', '/', '/',
+    '--bind', cwd, cwd,
+    '--bind', '/tmp', '/tmp',
+    '--bind', `${home}/.npm`, `${home}/.npm`,
+    '--bind', `${home}/.cache`, `${home}/.cache`,
+    '--proc', '/proc',
+    '--dev', '/dev',
+    '--unshare-pid',
+    '--die-with-parent',
+    '/bin/sh', '-c', comando
+  ];
+}
+
 export function ejecutar(comando, cwd, { timeoutMs = TIMEOUT_MS, env = {} } = {}) {
   return new Promise((resolve) => {
     if (!existsSync(cwd)) {
@@ -155,13 +221,17 @@ export function ejecutar(comando, cwd, { timeoutMs = TIMEOUT_MS, env = {} } = {}
     }
     // Shell de login NO: no se heredan alias ni funciones del usuario, y el
     // comando es exactamente el que se ve en el registro.
+    // Contención: seatbelt (macOS) > bubblewrap (Linux) > crudo.
+    const bwrap = !contencionReal() ? bwrapPath() : null;
     const [programa, argumentos] = contencionReal()
       ? [SANDBOX_EXEC, ['-f', escribirPerfil(path.resolve(cwd)), '/bin/sh', '-c', comando]]
-      : ['/bin/sh', ['-c', comando]];
+      : bwrap
+        ? [bwrap, bwrapArgs(path.resolve(cwd), comando)]
+        : shellFor(process.platform, comando);
     const hijo = spawn(programa, argumentos, {
       cwd,
       env: {
-        ...process.env,
+        ...scrubEnvForChild(),
         ...env,
         // Sin color ni paginador: la salida va a un prompt, no a una terminal.
         NO_COLOR: '1',

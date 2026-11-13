@@ -7,7 +7,17 @@
 import { TTS_TIMEOUT_MS } from './config.js';
 import { getTtsLanguage } from './settings.js';
 
-const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:7791';
+import { getPiperUrl } from './settings.js';
+
+const PIPER_URL_DEFAULT = 'http://127.0.0.1:7791';
+function piperUrl() {
+  try {
+    return getPiperUrl() || process.env.PIPER_URL || PIPER_URL_DEFAULT;
+  } catch {
+    return process.env.PIPER_URL || PIPER_URL_DEFAULT;
+  }
+}
+const PIPER_URL = process.env.PIPER_URL || PIPER_URL_DEFAULT;
 
 export function mapVoiceToPiper(voice) {
   const v = String(voice || '').trim().toUpperCase();
@@ -27,7 +37,7 @@ export async function isPiperAvailable() {
     return availability.ok;
   }
   try {
-    const response = await fetch(`${PIPER_URL}/health`, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(`${piperUrl()}/health`, { signal: AbortSignal.timeout(1500) });
     availability = { checked: Date.now(), ok: response.ok };
   } catch {
     availability = { checked: Date.now(), ok: false };
@@ -72,7 +82,7 @@ export async function synthesizePiper(text, voice, { signal } = {}) {
   signal?.addEventListener('abort', abortListener, { once: true });
 
   try {
-    const response = await fetch(`${PIPER_URL}/v1/tts`, {
+    const response = await fetch(`${piperUrl()}/v1/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: clean, voice: mapVoiceToPiper(voice) }),
