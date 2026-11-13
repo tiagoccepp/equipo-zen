@@ -18,4 +18,4 @@ A `.docx` is a ZIP archive of XML files. Choose your approach by task:
 - **Page size defaults to A4.** For US Letter set `page: { size: { width: 12240, height: 15840 } }` (DXA; 1440 = 1″).
 - **Landscape:** pass portrait dimensions and `orientation: PageOrientation.LANDSCAPE` — docx-js swaps width/height internally.
 
-*Fuente: extracto verbatim de https://github.com/anthropics/skills/blob/main/skills/docx/SKILL.md — Licencia: Apache-2.0.*
+*Source: verbatim excerpt from https://github.com/anthropics/skills/blob/main/skills/docx/SKILL.md — License: Apache-2.0.*

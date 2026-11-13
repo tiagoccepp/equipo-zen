@@ -19,4 +19,4 @@ scope: chat, role:data, role:backend
 - **Professional font** (Arial, Times New Roman) throughout, unless the user says otherwise.
 - **Zero formula errors.** Never ship while `recalc.py` reports `errors_found`. If you think an error predates you, prove it: load the *original* with `data_only=True` and look at that cell. An error you introduced looks exactly like one you inherited.
 
-*Fuente: extracto verbatim de https://github.com/anthropics/skills/blob/main/skills/xlsx/SKILL.md — Licencia: Apache-2.0.*
+*Source: verbatim excerpt from https://github.com/anthropics/skills/blob/main/skills/xlsx/SKILL.md — License: Apache-2.0.*

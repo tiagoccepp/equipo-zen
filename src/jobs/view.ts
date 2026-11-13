@@ -56,7 +56,7 @@ interface JobDetailPayload {
  };
  history?: Array<{ at?: string; tipo?: string; texto?: string }>;
  brief?: Record<string, unknown> | null;
- fases?: Array<{ titulo?: string; dueño?: string; doneCriteria?: string }>;
+ fases?: Array<{ titulo?: string; title?: string; dueño?: string; dueno?: string; owner?: string; doneCriteria?: string }>;
 }
 
 function esc(s: unknown): string {
@@ -177,11 +177,15 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
 
  const fasesHtml = fases.length === 0
  ? '<p class="jobs-muted">No phase snapshot.</p>'
- : `<ol class="jobs-fases">${fases.map((f, i) => `
+ : `<ol class="jobs-fases">${fases.map((f, i) => {
+ const title = f.title || f.titulo || 'phase';
+ const owner = f.owner || f.dueño || f.dueno || '?';
+ return `
  <li>
- <strong>${i + 1}. ${esc(f.titulo || 'phase')}</strong>
- <span class="jobs-muted">→ ${esc(f.dueño || '?')} · done: ${esc(f.doneCriteria || '—')}</span>
- </li>`).join('')}</ol>`;
+ <strong>${i + 1}. ${esc(title)}</strong>
+ <span class="jobs-muted">→ ${esc(owner)} · done: ${esc(f.doneCriteria || '—')}</span>
+ </li>`;
+ }).join('')}</ol>`;
 
  const entregasHtml = entregas.length === 0
  ? '<p class="jobs-muted">No deliveries recorded.</p>'

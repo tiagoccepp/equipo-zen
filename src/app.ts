@@ -116,7 +116,7 @@ function switchView(name: ViewName): void {
  mountJobs(el, { fetchJson: (path: string, init?: RequestInit) => apiJson(path, init) });
  jobsMounted = true;
  } catch (err) {
- console.warn('[jobs] mount falló:', err);
+ console.warn('[jobs] mount failed:', err);
  }
  }
  }
@@ -127,7 +127,7 @@ function switchView(name: ViewName): void {
  mountManager(el, { fetchJson: (path: string, init?: RequestInit) => apiJson(path, init) });
  managerMounted = true;
  } catch (err) {
- console.warn('[manager] mount falló:', err);
+ console.warn('[manager] mount failed:', err);
  }
  }
  }
@@ -1095,7 +1095,7 @@ const client = new Client({
  try {
  field.setGlyph(agentId, gesto);
  } catch (err) {
- console.warn('[gesto] setGlyph falló:', err);
+ console.warn('[gesture] setGlyph failed:', err);
  }
  },
  // M-02/M-10: figuras tipadas. Efímeras → zona viva (se reemplazan);
@@ -1113,7 +1113,7 @@ const client = new Client({
  trimStream();
  }
  } catch (err) {
- console.warn('[figura] render falló:', err);
+ console.warn('[figure] render failed:', err);
  }
  },
  onInterrupted: (agentId, turnId) => {
@@ -1601,19 +1601,19 @@ async function renderProjects(): Promise<void> {
  sel.appendChild(opt);
  }
  sel.value = (p as { access_level?: string }).access_level || 'auto';
- sel.setAttribute('aria-label', `Nivel de acceso de ${p.title}`);
+ sel.setAttribute('aria-label', `Access level for ${p.title}`);
  sel.addEventListener('change', () => {
  void apiJson(`/api/projects/${encodeURIComponent(p.id)}`, {
  method: 'PATCH',
  headers: { 'Content-Type': 'application/json' },
  body: JSON.stringify({ access_level: sel.value })
- }).then(() => setStatus(`Nivel ${sel.value} en ${p.title}.`)).catch(() => setStatus('No se pudo cambiar.'));
+ }).then(() => setStatus(`Access level set to ${sel.value} for ${p.title}.`)).catch(() => setStatus('Could not change access level.'));
  });
  row.appendChild(sel);
  box.appendChild(row);
  }
  if ((data?.projects || []).length === 0) {
- box.textContent = 'Sin proyectos — creá uno abajo.';
+ box.textContent = 'No projects yet — create one below.';
  }
 }
 document.getElementById('projects-box')?.addEventListener('toggle', (e) => {
@@ -1634,7 +1634,7 @@ document.getElementById('project-create')?.addEventListener('click', () => {
  setStatus(`Project ${created.project.title} created.`);
  void renderProjects();
  } catch {
- setStatus('No se pudo crear el proyecto.');
+ setStatus('Could not create the project.');
  }
  })();
 });
@@ -1752,7 +1752,7 @@ async function renderApprovals(): Promise<void> {
  ).catch(() => null);
  const pendings = data?.pending || [];
  if (pendings.length === 0) {
- box.textContent = 'Sin pendientes.';
+ box.textContent = 'No pending approvals.';
  return;
  }
  for (const p of pendings) {
@@ -1760,26 +1760,26 @@ async function renderApprovals(): Promise<void> {
  row.className = 'perm-row';
  const label = document.createElement('span');
  label.textContent = `${p.tool} ${JSON.stringify(p.args || {}).slice(0, 100)}`;
- label.title = `pedida por ${p.agentId || '?'} (${p.id})`;
+ label.title = `requested by ${p.agentId || '?'} (${p.id})`;
  const okBtn = document.createElement('button');
- okBtn.textContent = 'Aprobar';
- okBtn.setAttribute('aria-label', `Aprobar ${p.tool}`);
+ okBtn.textContent = 'Approve';
+ okBtn.setAttribute('aria-label', `Approve ${p.tool}`);
  okBtn.addEventListener('click', () => {
  void apiJson(`/api/approvals/${encodeURIComponent(p.id)}/resolve`, {
  method: 'POST',
  headers: { 'Content-Type': 'application/json' },
  body: JSON.stringify({ approve: true })
- }).then(() => void renderApprovals()).catch(() => setStatus('No se pudo aprobar.'));
+ }).then(() => void renderApprovals()).catch(() => setStatus('Could not approve.'));
  });
  const noBtn = document.createElement('button');
- noBtn.textContent = 'Denegar';
- noBtn.setAttribute('aria-label', `Denegar ${p.tool}`);
+ noBtn.textContent = 'Deny';
+ noBtn.setAttribute('aria-label', `Deny ${p.tool}`);
  noBtn.addEventListener('click', () => {
  void apiJson(`/api/approvals/${encodeURIComponent(p.id)}/resolve`, {
  method: 'POST',
  headers: { 'Content-Type': 'application/json' },
  body: JSON.stringify({ approve: false })
- }).then(() => void renderApprovals()).catch(() => setStatus('No se pudo denegar.'));
+ }).then(() => void renderApprovals()).catch(() => setStatus('Could not deny.'));
  });
  row.appendChild(label);
  row.appendChild(okBtn);
@@ -1800,7 +1800,7 @@ async function renderProhibitions(): Promise<void> {
  ).catch(() => null);
  const rows = data?.prohibitions || [];
  if (rows.length === 0) {
- box.textContent = 'Sin prohibiciones.';
+ box.textContent = 'No prohibitions.';
  return;
  }
  for (const r of rows) {
@@ -1809,11 +1809,11 @@ async function renderProhibitions(): Promise<void> {
  const label = document.createElement('span');
  label.textContent = `${r.kind}: ${r.pattern}${r.reason ? ` (${r.reason})` : ''}`;
  const del = document.createElement('button');
- del.textContent = 'Quitar';
- del.setAttribute('aria-label', `Quitar prohibición ${r.pattern}`);
+ del.textContent = 'Remove';
+ del.setAttribute('aria-label', `Remove prohibition ${r.pattern}`);
  del.addEventListener('click', () => {
  void apiJson(`/api/prohibitions/${r.id}`, { method: 'DELETE' })
- .then(() => void renderProhibitions()).catch(() => setStatus('No se pudo quitar.'));
+ .then(() => void renderProhibitions()).catch(() => setStatus('Could not remove prohibition.'));
  });
  row.appendChild(label);
  row.appendChild(del);
@@ -1837,7 +1837,7 @@ document.getElementById('prohib-add')?.addEventListener('click', () => {
  input.value = '';
  void renderProhibitions();
  } catch {
- setStatus('No se pudo prohibir.');
+ setStatus('Could not add prohibition.');
  }
  })();
 });

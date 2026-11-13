@@ -29,4 +29,4 @@ Use for ANY technical issue:
 - Build failures
 - Integration issues
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/systematic-debugging/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/systematic-debugging/SKILL.md — License: MIT.*

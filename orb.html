@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Orb</title>
     <style>
-      /* Mini ventana 200x264 (ORB_W/H en Rust): la tarjeta respira 6px.
-         Layout medido: card 188x252 = stage flexible + status 18px +
-         controles 46px. El canvas LLENA el stage (absolute inset 0) y
-         orb.ts centra el orbe en el rect real: encuadre perfecto siempre,
-         sin recortes ni adivinanzas de píxeles. */
+      /* Mini window 200x264 (ORB_W/H in Rust): the card breathes 6px.
+         Measured layout: card 188x252 = flexible stage + 18px status +
+         46px controls. The canvas FILLS the stage (absolute inset 0) and
+         orb.ts centers the orb in the real rect: always a perfect frame,
+         no cropping or pixel guesswork. */
       * { box-sizing: border-box; }
       html, body {
         margin: 0; height: 100%; overflow: hidden;
@@ -60,16 +60,16 @@
         min-height: 0;
         width: 100%;
       }
-      /* !important: OrbField.resize() escribe width/height inline en px
-         (medidos del viewport anterior). Sin esto, achicar la ventana deja
-         el canvas gigante y el orbe se dibuja fuera del área visible. */
+      /* !important: OrbField.resize() writes inline width/height in px
+         (measured from the previous viewport). Without this, shrinking the window leaves
+         a giant canvas and the orb is drawn outside the visible area. */
       #orb-canvas {
         position: absolute; inset: 0;
         width: 100% !important; height: 100% !important;
         display: block;
         filter: drop-shadow(0 4px 18px rgba(0,0,0,0.5));
       }
-      /* Status: 1 línea, legible a 200px, nunca empuja el layout. */
+      /* Status: 1 line, readable at 200px, never pushes the layout. */
       .status {
         flex: none;
         margin-top: 6px;
@@ -87,7 +87,7 @@
         display: flex; gap: 12px; justify-content: center;
         margin-top: 6px;
       }
-      /* Controles táctiles: 46px de alto, área generosa, firma Lovable. */
+      /* Touch controls: 46px tall, generous tap area, Lovable signature. */
       .btn {
         appearance: none; cursor: pointer;
         flex: 1 1 0; max-width: 84px; height: 46px; border-radius: 23px;
