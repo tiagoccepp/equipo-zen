@@ -1,90 +1,79 @@
-# El motor de trabajo
+# The Work Engine
 
-Cómo una tarea pasa de "se dijo en una reunión" a "hay un archivo navegable", y
-cómo depurarlo cuando algo sale mal.
+How a task goes from "it was mentioned in a meeting" to "there is a browsable file", and how to debug it when something goes wrong.
 
-## Estados de una tarea
+## Task states
 
-| Estado | Significa |
+| State | Meaning |
 |---|---|
-| `pending` | En la cola, esperando que alguien la tome |
-| `in_progress` | Alguien la tomó (checkout atómico) y está corriendo |
-| `done` | Terminó y produjo lo suyo |
-| `blocked` | No pudo avanzar; `blocked_reason` dice por qué |
-| `noted` | No es trabajo: es un acuerdo o un seguimiento registrado |
+| `pending` | In the queue, waiting for someone to take it |
+| `in_progress` | Someone took it (atomic checkout) and it is running |
+| `done` | Finished and produced its output |
+| `blocked` | Could not move forward; `blocked_reason` explains why |
+| `noted` | Not work: it is a recorded agreement or follow-up |
 
-El checkout es atómico por SQL:
+Checkout is atomic in SQL:
 
 ```sql
 UPDATE tasks SET status = 'in_progress', run_count = run_count + 1
 WHERE id = ? AND status = 'pending'
 ```
 
-Si `changes !== 1`, otro se la llevó. Es lo que impide que dos heartbeats tomen
-la misma tarea.
+If `changes !== 1`, someone else took it. This is what prevents two heartbeats from taking the same task.
 
-## Tipos de tarea (`kind`)
+## Task types (`kind`)
 
-- `spec` — escribir el contrato del proyecto. Fase 1, bloquea a las demás.
-- `entregable` — producir algo real.
-- `revision` — leer el trabajo de un par y aprobarlo o pedir cambios.
-- `refinamiento` — el contratista afina el perfil de alguien del equipo.
-- `decision` / `seguimiento` — quedan en `noted`, nadie las "trabaja".
+- `spec` — write the project contract. Phase 1, blocks the rest.
+- `deliverable` — produce something real.
+- `review` — read a peer's work and approve it or request changes.
+- `refinement` — the talent contractor fine-tunes someone's profile.
+- `decision` / `follow-up` — stay as `noted`, nobody "works" on them.
 
-## Una corrida por dentro
+## Inside a run
 
-`workforce.executeWork()` da hasta `MAX_STEPS_PER_RUN` pasos. En cada uno el
-modelo devuelve **una** acción:
+`workforce.executeWork()` allows up to `MAX_STEPS_PER_RUN` steps. In each one the model returns **one** action:
 
-| Acción | Qué hace |
+| Action | What it does |
 |---|---|
-| `list_files` | Lista el proyecto (una sola vez por corrida) |
-| `read_file` | Lee un archivo |
-| `write_file` | Escribe el archivo COMPLETO, contenido crudo entre marcadores |
-| `edit_file` | Reemplaza un fragmento (preferido sobre reescribir) |
-| `finish` | Cierra — pero antes pasa por la verificación |
-| `block` | Se traba y explica qué le falta |
+| `list_files` | Lists the project (only once per run) |
+| `read_file` | Reads a file |
+| `write_file` | Writes the COMPLETE file, raw content between markers |
+| `edit_file` | Replaces a fragment (preferred over rewriting) |
+| `finish` | Closes — but it goes through verification first |
+| `block` | Gets stuck and explains what is missing |
 
-Dos barreras contra pisar el trabajo ajeno:
+Two barriers against overwriting someone else's work:
 
-1. **Un archivo que ya existía no se sobreescribe sin haberlo leído** en esta
-   corrida.
-2. **Un proyecto tiene una sola corrida a la vez** (`busyGoals`): el que entra
-   ve lo que dejó el anterior.
+1. **A file that already existed cannot be overwritten without having been read** in this run.
+2. **A project has only one run at a time** (`busyGoals`): whoever enters sees what the previous one left behind.
 
-`applyEdit()` intenta primero el reemplazo exacto y, si falla, uno tolerante a
-espacios e indentación — el modelo casi nunca reproduce el sangrado tal cual, y
-rechazarlo por eso quemaba pasos sin que el archivo avanzara.
+`applyEdit()` first tries an exact replacement and, if it fails, one tolerant to whitespace and indentation — the model almost never reproduces indentation exactly, and rejecting it for that burned steps without the file making progress.
 
-## La verificación
+## Verification
 
-Al primer `finish`, si la corrida escribió algo, corre `verify.js` sobre lo que
-quedó **en disco**. Si encuentra problemas:
+On the first `finish`, if the run wrote anything, `verify.js` runs on what ended up **on disk**. If it finds problems:
 
-- No se acepta el `finish`.
-- El informe vuelve como `lastObservation` del paso siguiente.
-- El agente arregla y vuelve a intentar.
+- The `finish` is not accepted.
+- The report comes back as `lastObservation` for the next step.
+- The agent fixes it and tries again.
 
-Corre **una sola vez por corrida**, para no encerrarlo en un bucle. Lo que quede
-sin resolver se guarda como comentario de `verificacion` en la tarea, y el
-revisor lo recibe para no volver a buscar lo ya medido.
+It runs **only once per run**, to avoid trapping it in a loop. Anything left unresolved is saved as a `verification` comment on the task, and the reviewer receives it so they don't look again for what was already measured.
 
-## Topes
+## Limits
 
-| Variable | Default | Para qué |
+| Variable | Default | Purpose |
 |---|---|---|
-| `WORKFORCE_TICK_MS` | 5000 | Cada cuánto mira la cola |
-| `WORKFORCE_MAX_CONCURRENT` | 2 | Corridas en paralelo (1 con reunión abierta) |
-| `WORKFORCE_MAX_STEPS` | 12 | Pasos por corrida |
-| `WORKFORCE_MAX_RUNS_PER_TASK` | 3 | Reintentos antes de bloquear |
-| `WORKFORCE_STEP_TIMEOUT_MS` | 180000 | Tope por llamada al modelo |
+| `WORKFORCE_TICK_MS` | 5000 | How often the queue is checked |
+| `WORKFORCE_MAX_CONCURRENT` | 2 | Parallel runs (1 with an open meeting) |
+| `WORKFORCE_MAX_STEPS` | 12 | Steps per run |
+| `WORKFORCE_MAX_RUNS_PER_TASK` | 3 | Retries before blocking |
+| `WORKFORCE_STEP_TIMEOUT_MS` | 180000 | Timeout per model call |
 
-La persona tiene prioridad: mientras hablás, el motor no arranca trabajo nuevo
-(comparten la misma clave de API) y cede si empezás a hablar a mitad de un paso.
+The person has priority: while you speak, the engine does not start new work (they share the same API key) and yields if you start speaking in the middle of a step.
 
-## Depurar una corrida
+## Debugging a run
 
-Todo queda en `work_runs.log_json`:
+Everything is stored in `work_runs.log_json`:
 
 ```bash
 node -e "
@@ -98,23 +87,19 @@ console.log(JSON.parse(r.log_json).map(s =>
 "
 ```
 
-Lo que se lee ahí:
+What to read there:
 
-- Muchos `write_file ✗` seguidos → el modelo no está usando los marcadores.
-- Muchos `edit_file ✗` con "ese texto no está" → está copiando de memoria en vez
-  de leer el archivo.
-- `verify` con hallazgos y después `finish` → arregló y cerró: es lo esperado.
-- `error` en el paso 1 → falló la llamada al modelo (clave o servicio).
+- Many `write_file ✗` in a row → the model is not using the markers.
+- Many `edit_file ✗` with "that text is not there" → it is copying from memory instead of reading the file.
+- `verify` with findings and then `finish` → it fixed and closed: expected.
+- `error` on step 1 → the model call failed (key or service).
 
-También hay registro legible por reunión en `server/logs/`, y la pestaña
-**Actividad** del proyecto muestra lo mismo en vivo.
+There is also a readable log per meeting in `server/logs/`, and the project's **Activity** tab shows the same thing live.
 
-## Cuándo una tarea queda bloqueada
+## When a task gets blocked
 
-- El modelo respondió `block` explicando qué le falta.
-- Agotó los pasos **sin producir ningún archivo** (si produjo algo, cuenta como
-  hecho y queda la revisión del par para juzgarlo).
-- Falló la llamada al modelo `MAX_RUNS_PER_TASK` veces seguidas.
+- The model replied `block` explaining what it needs.
+- It ran out of steps **without producing any file** (if it produced something, it counts as done and peer review judges it).
+- The model call failed `MAX_RUNS_PER_TASK` times in a row.
 
-Una tarea bloqueada no se reintenta sola: se ve en el tablero con su motivo y se
-resuelve hablándolo en la reunión.
+A blocked task does not retry on its own: it shows up on the board with its reason and is resolved by discussing it in the meeting.

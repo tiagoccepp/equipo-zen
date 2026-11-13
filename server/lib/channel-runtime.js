@@ -9,6 +9,7 @@ import {
   waSend
 } from './channels.js';
 import { dbValue } from './settings.js';
+import { getDefaultSession } from './driver.js';
 
 export const CHANNEL_POLL_MS = 30000;
 
@@ -44,6 +45,39 @@ export function channelConfigs() {
 
 const inbox = []; // inbound aceptado (cap 100)
 const subscribers = new Set();
+const seenInbound = new Map(); // dedupe key -> ts
+const recentOutbound = new Map(); // anti-loop: destination text hash -> ts
+const SEEN_TTL_MS = 10 * 60 * 1000;
+
+function pruneSeen(map, ttl = SEEN_TTL_MS) {
+  const now = Date.now();
+  for (const [k, ts] of map) {
+    if (now - ts > ttl) map.delete(k);
+  }
+}
+
+function dedupeKey(channelId, parsed) {
+  if (parsed?.updateId != null) return `${channelId}:upd:${parsed.updateId}`;
+  if (parsed?.messageId) return `${channelId}:msg:${parsed.messageId}`;
+  return `${channelId}:body:${parsed?.chatId || ''}:${String(parsed?.text || '').slice(0, 120)}`;
+}
+
+function markSeen(key) {
+  pruneSeen(seenInbound);
+  if (seenInbound.has(key)) return false;
+  seenInbound.set(key, Date.now());
+  return true;
+}
+
+function rememberOutbound(channelId, to, text) {
+  pruneSeen(recentOutbound);
+  recentOutbound.set(`${channelId}:${to}:${String(text || '').slice(0, 200)}`, Date.now());
+}
+
+function isLoopInbound(channelId, to, text) {
+  pruneSeen(recentOutbound);
+  return recentOutbound.has(`${channelId}:${to}:${String(text || '').slice(0, 200)}`);
+}
 
 export function onChannelInbound(fn) {
   if (typeof fn === 'function') {
@@ -60,6 +94,8 @@ export function channelInbox() {
 export function __resetChannelState() {
   inbox.length = 0;
   subscribers.clear();
+  seenInbound.clear();
+  recentOutbound.clear();
 }
 
 function acceptInbound(channel, parsed) {
@@ -82,6 +118,58 @@ function acceptInbound(channel, parsed) {
         fn(entry);
       } catch { /* subscriber caído no frena */ }
     }
+  }
+  return entry;
+}
+
+async function pickResponderAgent(session) {
+  if (!session) return null;
+  const agents = session.sessionAgents || [...(session.agents?.values?.() || [])].map((r) => r?.agent).filter(Boolean);
+  return agents.find((a) => a?.role === 'orquestador' || a?.id === 'pablo')
+    || agents.find((a) => a?.enabled !== false)
+    || agents[0]
+    || null;
+}
+
+async function dispatchInboundReply(entry, channelConfig, { fetchFn = fetch } = {}) {
+  try {
+    if (!entry?.allowed || !entry?.text) return null;
+    if (isLoopInbound(entry.channel, entry.chatId, entry.text)) return null;
+    const session = getDefaultSession();
+    if (!session || typeof session.runAgentJobTurn !== 'function') return null;
+    const agent = await pickResponderAgent(session);
+    if (!agent?.id) return null;
+    const prompt = [
+      `[Inbound ${entry.channel} message from ${entry.fromName || entry.fromId || entry.chatId}]`,
+      String(entry.text).slice(0, 4000),
+      '',
+      'Reply helpfully and concisely for the originating channel.'
+    ].join('\n');
+    const result = await session.runAgentJobTurn(agent.id, prompt, { timeoutMs: 120000 });
+    const reply = String(result?.text || '').trim();
+    if (!reply) return null;
+    if (entry.channel === 'telegram') {
+      rememberOutbound('telegram', entry.chatId, reply);
+      await sendTelegram({ to: entry.chatId, text: reply }, { fetchFn, config: channelConfig });
+    } else if (entry.channel === 'whatsapp') {
+      rememberOutbound('whatsapp', entry.chatId, reply);
+      await sendWhatsapp({ to: entry.chatId, text: reply }, { fetchFn, config: channelConfig });
+    }
+    return reply;
+  } catch {
+    return null;
+  }
+}
+
+export async function handleChannelInbound(channel, parsed, { fetchFn = fetch, respond = true, config = null } = {}) {
+  if (!channel || !parsed) return null;
+  const key = dedupeKey(channel.id || channel.kind, parsed);
+  const fresh = markSeen(key);
+  const entry = acceptInbound(channel, parsed);
+  entry.duplicate = !fresh;
+  if (!fresh || !entry.allowed) return entry;
+  if (respond && !channel.autoRespond) {
+    void dispatchInboundReply(entry, config || channel, { fetchFn });
   }
   return entry;
 }
@@ -135,11 +223,12 @@ export async function pollTelegramOnce({ fetchFn = fetch, config = null, offsetR
     if (!parsed) {
       continue;
     }
-    const entry = acceptInbound(channel, parsed);
+    const entry = await handleChannelInbound(channel, parsed, { fetchFn, respond: !channel.autoRespond, config: channel });
     accepted.push(entry);
     // autoRespond=echo: devuelve el texto (verifica el loop completo).
-    if (entry.allowed && channel.autoRespond) {
+    if (entry.allowed && !entry.duplicate && channel.autoRespond) {
       try {
+        rememberOutbound('telegram', parsed.chatId, `eco: ${parsed.text}`);
         await tgCall(channel.botToken, 'sendMessage', { chat_id: parsed.chatId, text: `eco: ${parsed.text}` }, { fetchFn });
       } catch { /* echo caído: el inbound igual quedó */ }
     }

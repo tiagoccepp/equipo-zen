@@ -1,13 +1,13 @@
 ---
 name: marketing
-description: Posicionar y comunicar un producto: propuesta de valor, canal, métrica.
-keywords: marketing, posicionamiento, propuesta de valor, canal, campaña, métrica, audiencia, público, marca, pricing, embudo, funnel, conversión
+description: Position and communicate a product: value proposition, channel, metric.
+keywords: marketing, positioning, value proposition, channel, campaign, metric, audience, public, brand, pricing, funnel, conversion
 scope: role:marketing, role:ventas, role:copy
 ---
 
-Cuando el turno pide criterio de marketing (posicionar, lanzar, comunicar):
-1. Propuesta de valor en 1 frase: para quién, qué gana, por qué vos y no otro. Sin frase no hay pieza.
-2. Audiencia concreta: quién compra (no "todo el mundo"), dónde está, qué objeción trae.
-3. Canal antes que pieza: dónde se publica define formato y largo; una pieza por canal.
-4. Cada entrega trae su métrica: qué número dice que funcionó y cómo se mide.
-5. Datos con fuente: mercado, precios y competencia se investigan y se citan; nunca se inventan.
+When the turn asks for marketing judgment (position, launch, communicate):
+1. Value proposition in 1 sentence: for whom, what they gain, why you and not another. No sentence, no piece.
+2. Concrete audience: who buys (not "everyone"), where they are, what objection they bring.
+3. Channel before piece: where it's published defines format and length; one piece per channel.
+4. Every deliverable includes its metric: what number says it worked and how it's measured.
+5. Data with sources: market, prices, and competition are researched and cited; never invented.

@@ -15,7 +15,7 @@ test('valid user_turn passes; giant text is rejected', () => {
 test('unknown type is rejected on the server', () => {
   const res = parseClientMessage(JSON.stringify({ type: 'hackeo', data: 1 }));
   assert.equal(res.ok, false);
-  assert.match(res.error, /desconocido/);
+  assert.match(res.error, /unknown|desconocido/i);
 });
 
 test('spawn_agent: off-whitelist voice and giant style are rejected', () => {
@@ -24,7 +24,7 @@ test('spawn_agent: off-whitelist voice and giant style are rejected', () => {
     agent: { name: 'Ana', title: 'QA', voice: 'Batman' }
   }));
   assert.equal(malaVoz.ok, false);
-  assert.match(malaVoz.error, /Voz inválida/);
+  assert.match(malaVoz.error, /Invalid voice|Voz inválida/);
 
   const estiloGigante = parseClientMessage(JSON.stringify({
     type: 'spawn_agent',

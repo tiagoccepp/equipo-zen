@@ -14,7 +14,7 @@ import { buildSystemInstruction } from './agent-runtime.js';
 import { applyAudioSettings, listDevices, playTestTone, setNodeMute, setNodeVolume } from './audio.js';
 import { CONNECTIVITY_INTERVAL_MS, ensureConnectivityLoop, getConnectivitySnapshot, isConnectivityTestEnv, refreshConnectivitySnapshot } from './connectivity.js';
 import { androidStatus, iosStatus, openInAndroid, openInIos, screenSize, screenshot, sendInput, startAndroid, wakeAndroid } from './emulator.js';
-import { enqueueJob, findJobRecord, getDefaultSession, getJob, listJobHistory, listJobs, loadJobBrief, loadJobRecord } from './driver.js';
+import { enqueueJob, findJobRecord, getDefaultSession, getJob, listJobHistory, listJobs, listJobCheckpoints, loadJobBrief, loadJobRecord, loadLatestJobCheckpoint } from './driver.js';
 import { renderLearningsSection } from './learning.js';
 import { getMcpStatus, setMcpStatusSnapshot } from './mcp-status.js';
 import { isMeetingLive } from './meeting-session.js';
@@ -544,20 +544,20 @@ export function createApp({ store }) {
     try {
       const { waParseWebhook } = await import('./channels.js');
       const parsed = waParseWebhook(req.body);
-      if (parsed) {
-        const { channelConfigs } = await import('./channel-runtime.js');
-        const ch = channelConfigs().find((c) => c.kind === 'whatsapp-meta');
-        if (ch) {
-          const { channelMayInteract } = await import('./channels.js');
-          const gate = channelMayInteract(ch, { fromId: parsed.fromId });
-          if (!gate.ok) {
-            return res.json({ ok: true, allowed: false });
-          }
-        }
-        res.json({ ok: true, allowed: true });
-      } else {
-        res.json({ ok: true, allowed: false });
+      if (!parsed) {
+        return res.json({ ok: true, allowed: false });
       }
+      const { channelConfigs, handleChannelInbound } = await import('./channel-runtime.js');
+      const ch = channelConfigs().find((c) => c.kind === 'whatsapp-meta') || {
+        id: 'whatsapp',
+        kind: 'whatsapp-meta',
+        enabled: true,
+        mode: 'tito-only',
+        allow: [],
+        titoId: process.env.WHATSAPP_TITO_ID || ''
+      };
+      const entry = await handleChannelInbound(ch, parsed, { respond: true, config: ch });
+      return res.json({ ok: true, allowed: Boolean(entry?.allowed), duplicate: Boolean(entry?.duplicate) });
     } catch (error) {
       res.status(500).json({ error: String(error?.message || error).slice(0, 200) });
     }
@@ -1225,32 +1225,81 @@ export function createApp({ store }) {
     res.json({ job: view, history: record?.history || [], brief: record?.brief || null, fases });
   });
 
+  app.get('/api/jobs/:id/checkpoints', async (req, res) => {
+    const slug = typeof req.query.slug === 'string' ? req.query.slug : null;
+    const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : (slug || getDefaultSession()?.company?.id || null);
+    let checkpoints = listJobCheckpoints({ jobId: req.params.id, slug, companyId, session: getDefaultSession() });
+    if (checkpoints.length === 0 && !slug) {
+      try {
+        const found = await findJobRecord(req.params.id);
+        const foundSlug = found?.slug || null;
+        if (foundSlug) {
+          checkpoints = listJobCheckpoints({ jobId: req.params.id, slug: foundSlug, companyId: foundSlug, session: getDefaultSession() });
+        }
+      } catch {
+        checkpoints = [];
+      }
+    }
+    res.json({ jobId: req.params.id, checkpoints });
+  });
+
+  app.get('/api/team/jobs/:id/checkpoints', async (req, res) => {
+    const slug = typeof req.query.slug === 'string' ? req.query.slug : null;
+    const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : (slug || getDefaultSession()?.company?.id || null);
+    let checkpoints = listJobCheckpoints({ jobId: req.params.id, slug, companyId, session: getDefaultSession() });
+    if (checkpoints.length === 0 && !slug) {
+      try {
+        const found = await findJobRecord(req.params.id);
+        const foundSlug = found?.slug || null;
+        if (foundSlug) {
+          checkpoints = listJobCheckpoints({ jobId: req.params.id, slug: foundSlug, companyId: foundSlug, session: getDefaultSession() });
+        }
+      } catch {
+        checkpoints = [];
+      }
+    }
+    res.json({ jobId: req.params.id, checkpoints });
+  });
+
   // T4: replay — re-encola el brief guardado como un job nuevo.
   app.post('/api/team/jobs/:id/replay', async (req, res) => {
     const session = getDefaultSession();
     if (!session || typeof session.runAgentJobTurn !== 'function') {
       return res.status(503).json({ error: 'sin sesión viva: el driver necesita una reunión con agentes' });
     }
-    const slug = typeof req.body?.slug === 'string' ? req.body.slug : null;
+    const slug = typeof req.body?.slug === 'string' ? req.body.slug : (typeof req.query.slug === 'string' ? req.query.slug : null);
+    const resume = req.body?.resume === true || req.body?.resumeFromCheckpoint === true || req.query.resume === '1';
     let brief = null;
     let foundSlug = slug;
+    let record = null;
     try {
       if (slug) {
         brief = await loadJobBrief(slug, req.params.id);
+        record = await loadJobRecord(slug, req.params.id);
       } else {
         const found = await findJobRecord(req.params.id);
         brief = found?.record?.brief || null;
+        record = found?.record || null;
         foundSlug = found?.slug || null;
       }
     } catch {
       brief = null;
+      record = null;
     }
     if (!brief) {
       return res.status(404).json({ error: 'job sin brief guardado: no se puede re-ejecutar' });
     }
     try {
-      const { jobId, estado } = enqueueJob(session, brief, { recordHistory: true, slug: foundSlug || 'general' });
-      res.json({ jobId, estado, replayOf: req.params.id });
+      let opts = { recordHistory: true, slug: foundSlug || 'general' };
+      if (resume) {
+        const companyId = typeof req.body?.companyId === 'string' ? req.body.companyId : (foundSlug || session?.company?.id || 'general');
+        const checkpoint = req.body?.checkpoint || loadLatestJobCheckpoint({ jobId: req.params.id, slug: foundSlug || 'general', companyId, session });
+        if (checkpoint) {
+          opts = { ...opts, resumeCheckpoint: checkpoint, resumeJobId: req.params.id };
+        }
+      }
+      const { jobId, estado } = enqueueJob(session, brief, opts);
+      res.json({ jobId, estado, replayOf: req.params.id, resumed: Boolean(opts.resumeCheckpoint) });
     } catch (error) {
       res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
     }

@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
-   fx/motion.css — micro-interacciones (Emil Kowalski: 140–220ms,
-   solo transform/opacity, UN easing, sin loops decorativos).
-   Importar una vez: `import '../fx/motion.css'` (o el path que use vite).
+   fx/motion.css — micro-interactions (Emil Kowalski: 140–220ms,
+   transform/opacity only, ONE easing, no decorative loops).
+   Import once: `import '../fx/motion.css'` (or whatever path vite uses).
    ═══════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -23,7 +23,7 @@
   transition: opacity var(--fx-reveal) var(--fx-ease),
     transform var(--fx-reveal) var(--fx-ease);
 }
-/* Stagger solo para grupos chicos (≤6): delay por índice. */
+/* Stagger only for small groups (≤6): delay by index. */
 [data-reveal-group] > [data-reveal].fx-in:nth-child(2) { transition-delay: 30ms; }
 [data-reveal-group] > [data-reveal].fx-in:nth-child(3) { transition-delay: 60ms; }
 [data-reveal-group] > [data-reveal].fx-in:nth-child(4) { transition-delay: 90ms; }
@@ -50,7 +50,7 @@
   outline-offset: 2px;
 }
 
-/* ── Transición entre vistas: la saliente se va, la entrante llega ───── */
+/* ── Transition between views: the outgoing one leaves, the incoming one arrives ── */
 [data-view] {
   transition: opacity var(--fx-med) var(--fx-ease),
     transform var(--fx-med) var(--fx-ease);
@@ -69,7 +69,7 @@
   transform: none;
 }
 
-/* ── Celda del que habla: glow accent ─────────────────────────────── */
+/* ── Speaking cell: accent glow ────────────────────────────────────── */
 [data-speaking="true"] {
   box-shadow: var(--fx-glow);
   transition: box-shadow var(--fx-med) var(--fx-ease);

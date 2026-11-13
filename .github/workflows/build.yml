@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Tito solo prueba .deb: el resto de plataformas se valida acá (E-25).
+# J.A.B.S (Just A Better System): Tito solo prueba .deb; el resto de plataformas se valida acá (E-25).
 # PRIORIDAD MÁXIMA: Windows debe funcionar excelente.
 
 jobs:

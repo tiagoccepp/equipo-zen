@@ -1,374 +1,197 @@
-# Simulaciones — guía del código
+# Simulations — code guide
 
-App local para simular estudios de tecnología con empleados IA. Se entra a una
-empresa, se abre un **proyecto**, y adentro del proyecto se conversa por voz o
-texto con el equipo, que después **produce entregables reales** en segundo plano.
+Local app for simulating technology studios with AI employees. You enter a company, open a **project**, and inside the project you converse by voice or text with the team, which later **produces real deliverables** in the background.
 
-Este documento es para quien (persona o modelo) tenga que tocar el código. No
-repite lo que el código ya dice: explica **por qué** está armado así y qué
-invariantes no hay que romper.
+This document is for anyone (person or model) who needs to modify the code. It does not repeat what the code already says: it explains **why** it is built this way and which invariants must not be broken.
 
-## La jerarquía manda
+## Hierarchy rules
 
 ```
-Empresa (companies)
-  └── Proyecto (goals, kind='proyecto')   ← LA UNIDAD DE TRABAJO
-        ├── Reuniones (meetings.goal_id)
-        ├── Tareas (tasks.goal_id)
-        ├── Corridas de trabajo (work_runs)
-        └── Carpeta propia: workspace/<empresa>/<slug>/
+Company (companies)
+  └── Project (goals, kind='proyecto')   ← THE UNIT OF WORK
+        ├── Meetings (meetings.goal_id)
+        ├── Tasks (tasks.goal_id)
+        ├── Work runs (work_runs)
+        └── Its own folder: workspace/<company>/<slug>/
 ```
 
-**El proyecto es el contenedor de todo.** Es la decisión de diseño central:
-cuando el contexto era la empresa entera, el agente recibía cinco webs distintas
-y no entendía a cuál te referías con "cambiá el header". Con el proyecto como
-límite, el prompt trae ese proyecto y nada más.
+**The project is the container for everything.** This is the central design decision: when the context was the entire company, the agent received five different websites and could not understand which one you meant by "change the header". With the project as the boundary, the prompt brings that project and nothing else.
 
-Consecuencias que hay que respetar:
+Consequences that must be respected:
 
-- Una reunión **siempre** vive dentro de un proyecto (`meetings.goal_id`).
-- `renderWorkSection(store, companyId, goalId)` con `goalId` filtra a ese
-  proyecto. Sin `goalId` cae al comportamiento viejo (toda la empresa).
-- Borrar un proyecto **sí** se lleva todo lo suyo. Borrar una **reunión** NO: lo
-  que produjo trabajo sobrevive desligado. Son opuestos a propósito.
+- A meeting **always** lives inside a project (`meetings.goal_id`).
+- `renderWorkSection(store, companyId, goalId)` with `goalId` filters to that project. Without `goalId` it falls back to the old behavior (the whole company).
+- Deleting a project **does** take everything inside it. Deleting a **meeting** does NOT: work produced from it survives detached. They are opposites on purpose.
 
-## El ciclo de una tarea
+## The lifecycle of a task
 
 ```
-reunión → tareas asignadas → [Comenzar a trabajar] o [Finalizar reunión]
-   → cola (store.workQueue, ordenada por phase)
-   → checkout atómico (store.checkoutTask)
-   → corrida: N pasos con herramientas de archivo (workforce.executeWork)
-   → verificación determinista (verify.js) ← el agente arregla acá mismo
-   → finish → revisión de un par (workforce.executeReview)
-   → si pide cambios: una tarea de corrección de vuelta al autor
+meeting → assigned tasks → [Start working] or [End meeting]
+   → queue (store.workQueue, ordered by phase)
+   → atomic checkout (store.checkoutTask)
+   → run: N steps with file tools (workforce.executeWork)
+   → deterministic verification (verify.js) ← the agent fixes it right here
+   → finish → peer review (workforce.executeReview)
+   → if changes requested: a correction task back to the author
 ```
 
-`workQueue` ordena por `tasks.phase` y después por fecha. La columna sobrevive a
-una tarea de contrato que se eliminó (ver más abajo); sirve para priorizar sin
-tener que migrar.
+`workQueue` orders by `tasks.phase` and then by date. The column survives a removed contract-task schema (see below); it is used for prioritization without requiring a migration.
 
-## El pedido del usuario es lo que manda
+## The user's request is what matters
 
-`store.userRequestForGoal(goalId)` trae los turnos del usuario de las reuniones
-de ese proyecto, y van **primero y en todos los pasos** del prompt de trabajo.
+`store.userRequestForGoal(goalId)` brings the user's turns from that project's meetings, and they go **first and in every step** of the work prompt.
 
-Esto no es un adorno: cuando el prompt arrancaba con el título del proyecto, un
-proyecto llamado "Trabajo de 27/7/2026" hacía que el equipo inventara una web
-institucional genérica aunque en la reunión se hubiera pedido un menú de sushi
-con parallax. El título es una derivación; las palabras del usuario son la
-fuente de verdad.
+This is not decoration: when the prompt started with the project title, a project named "Work from 27/7/2026" caused the team to invent a generic corporate website even though the meeting asked for a sushi menu with parallax. The title is a derivation; the user's words are the source of truth.
 
-## El esquema de archivos
+## The file scheme
 
-Cada tarea `entregable` declara **qué archivo escribe** (`tasks.target_file`), y
-cada archivo tiene **un solo dueño**. La CEO lo decide al cerrar la reunión.
+Each `deliverable` task declares **which file it writes** (`tasks.target_file`), and each file has **a single owner**. The CEO decides this when closing the meeting.
 
-Sin esto el equipo repartía por disciplina — "definir la paleta", "implementar
-el parallax", "revisar prolijidad", "prototipo en Figma" — y esas tareas no
-mapean a ningún archivo: el motor exige producir uno para dar la tarea por
-hecha, así que agotaban los 12 pasos y quedaban bloqueadas. Reglas que se
-desprenden y hay que sostener:
+Without this, the team assigned by discipline — "define the palette", "implement parallax", "review neatness", "prototype in Figma" — and those tasks do not map to any file: the engine requires producing one to mark the task done, so they exhausted their 12 steps and got blocked. Rules that follow and must be upheld:
 
-- Lo que no es un archivo no es un entregable: es `decision` o parte del archivo
-  de otro.
-- **No existen herramientas externas.** Nada de Figma, Photoshop ni Notion: el
-  equipo solo escribe archivos del proyecto. Está prohibido en el prompt de
-  reunión y `normalizeTargetFile()` descarta cualquier "archivo" que no lo sea.
-- Si la tarea tenía archivo y ese archivo **ya existía**, la corrida cierra como
-  hecha en vez de bloquearse: el trabajo estaba hecho, no fallado.
+- What is not a file is not a deliverable: it is a `decision` or part of someone else's file.
+- **External tools do not exist.** No Figma, Photoshop, or Notion: the team only writes project files. This is forbidden in the meeting prompt and `normalizeTargetFile()` discards any "file" that is not one.
+- If the task had a file and that file **already existed**, the run closes as done instead of blocking: the work was done, not failed.
 
-`tokens.css` es el único artefacto de coordinación que se conserva, porque evita
-que cada agente invente su paleta. Lo escribe el primero que construye, en su
-misma corrida. (Hubo un `PROYECTO.md` de varios KB: producirlo se comía una
-corrida entera y competía con el producto. Se eliminó.)
+`tokens.css` is the only coordination artifact preserved, because it prevents each agent from inventing their own palette. The first builder writes it in the same run. (There used to be a multi-KB `PROYECTO.md`: producing it consumed an entire run and competed with the product. It was removed.)
 
-`BITACORA.md` la escribe cada agente al terminar (`anotarEnBitacora`). Es el
-traspaso entre compañeros — sin ella, lo que aprendió el anterior se perdía,
-porque `lastObservation` solo vive dentro de una corrida.
+`BITACORA.md` is written by each agent at the end (`anotarEnBitacora`). It is the handoff between peers — without it, what the previous one learned was lost, because `lastObservation` only lives within a run.
 
-## El prompt de trabajo tiene un presupuesto
+## The work prompt has a budget
 
-El protocolo de acciones compite con todo lo demás que se le mete al prompt.
-Cuando la documentación llegó a 14.000 caracteres contra 1.500 de protocolo, el
-modelo **dejó de emitir acciones y empezó a responder en prosa markdown**,
-imitando lo que lo rodeaba: cuatro corridas seguidas quemaron 12 pasos cada una
-sin escribir un archivo.
+The action protocol competes with everything else injected into the prompt. When documentation reached 14,000 characters against 1,500 of protocol, the model **stopped emitting actions and started replying in markdown prose**, imitating what surrounded it: four runs in a row burned 12 steps each without writing a file.
 
-Por eso los playbooks son listas de una línea y no documentos. **Si agregás algo
-al prompt de trabajo, medí primero cuánto pesa.** A la tercera respuesta sin
-acción la corrida se corta y vuelve a la cola.
+That is why playbooks are one-line lists, not documents. **If you add something to the work prompt, measure how much it weighs first.** On the third response without an action the run is cut and returned to the queue.
 
-## verify.js: la pieza de mayor palanca
+## verify.js: the highest-leverage piece
 
-Verificación **determinista, sin LLM**, sobre lo que quedó escrito en disco.
-Corre antes de aceptar el `finish` y los hallazgos vuelven como observación del
-paso siguiente: el agente arregla dentro de la misma corrida, cuando todavía
-tiene el contexto entero.
+**Deterministic verification, no LLM**, on what ended up written to disk. It runs before accepting `finish` and findings return as the next step's observation: the agent fixes within the same run, while it still has full context.
 
-Mide: HTML balanceado, `<title>`/`<meta description>`/`lang`, un solo `<h1>`,
-`alt` en imágenes, enlaces `href="#"` muertos, `id` repetidos, referencias a
-archivos inexistentes, recursos remotos, placeholders, inglés en la interfaz,
-colores y tipografías fuera de `tokens.css`, y JS que no parsea.
+It checks: balanced HTML, `<title>`/`<meta description>`/`lang`, a single `<h1>`, `alt` on images, dead `href="#"` links, duplicate `id`s, references to missing files, remote resources, placeholders, stray English in the UI, colors and fonts outside `tokens.css`, and JS that does not parse.
 
-**Regla de oro de ese archivo: cero falsos positivos tolerables.** Un hallazgo
-inventado hace que el agente rompa algo que estaba bien. Ante la duda, no se
-reporta — por eso "chat", "email" o "software" no cuentan como inglés, y el
-negro, el blanco y `transparent` no cuentan como paleta propia.
+**Golden rule for that file: zero tolerable false positives.** An invented finding makes the agent break something that was fine. When in doubt, do not report — that's why "chat", "email", or "software" do not count as stray English, and black, white, and `transparent` do not count as a custom palette.
 
-Ese es el motivo de `noJuzgableComoScript`: `new Function` compila un **script
-clásico**, así que un módulo ES (`import`/`export`/`await` arriba de todo) y el
-JSX son `SyntaxError` ahí aunque estén perfectos. Se estaba marcando como roto un
-`theme.js` con `export const`, cualquier `<script type="module">` y todo el JSX de
-un proyecto React Native. Lo que no se puede juzgar en modo script no se reporta.
+That is why `noJuzgableComoScript` exists: `new Function` compiles a **classic script**, so an ES module (`import`/`export`/top-level `await`) and JSX are `SyntaxError` there even if perfect. A `theme.js` with `export const`, any `<script type="module">`, and all JSX in a React Native project were being marked as broken. What cannot be judged in script mode is not reported.
 
-## Los playbooks
+## Playbooks
 
-`server/playbooks/*.md`, cargados una vez al arrancar (`playbooks.js`):
+`server/playbooks/*.md`, loaded once at startup (`playbooks.js`):
 
-- `diseno.md` — el piso de diseño, con reglas **verificables** (múltiplos de 4,
-  contraste 4.5:1, duraciones 120–260 ms), no adjetivos. Es el piso **universal**:
-  no nombra CSS, HTML ni `var(--…)`, porque viaja a los cinco nichos.
-- `diseno-web.md` — lo que solo existe en una pantalla web (`var(--…)` desde
-  `tokens.css`, `alt`, `href="#"`, 70 caracteres de ancho). Entra **solo** en el
-  nicho `web`. Antes estaba dentro de `diseno.md` y llegaba igual a móvil: el
-  prompt le exigía `tokens.css` tres líneas debajo de "Estilos con
-  `StyleSheet.create`. Nada de CSS", que es exactamente cómo se cuela una web
-  disfrazada de app. `renderDesignStandard(stack)` compone las dos partes, y la
-  **revisión** también recibe el piso de su nicho.
-- `archivoDeTokens(stack)` es el nombre del archivo de tokens de cada nicho
-  (`tokens.css`, `src/theme.js`, `Tokens.kt`, o `null` en Python). El prompt de
-  trabajo lo usa para no pedirle a un dev de React Native que escriba CSS.
-- `<nicho>.md` (uno por `STACKS`) — qué tecnología usar en cada caso.
-- `flujo-<nicho>.md` — el **orden** de trabajo: qué se andamia primero, con qué
-  comando exacto se verifica antes del `finish`, los dos o tres errores que se
-  cometen siempre ahí, y cuándo NO iterar. Sin esto las corridas escribían cinco
-  archivos sin plan, dejaban el punto de entrada con la plantilla por defecto de
-  Expo mientras el trabajo vivía en `src/screens/`, y se quedaban sin pasos.
-- `roles.md` — qué hace y qué **no** hace cada oficio, y cuándo entra.
+- `diseno.md` — the design floor, with **verifiable** rules (multiples of 4, 4.5:1 contrast, 120–260 ms durations), not adjectives. It is the **universal** floor: it does not name CSS, HTML, or `var(--…)`, because it travels to all five niches.
+- `diseno-web.md` — what only exists on a web screen (`var(--…)` from `tokens.css`, `alt`, `href="#"`, 70-character line width). It enters **only** the `web` niche. Before it lived inside `diseno.md` and reached mobile too: the prompt required `tokens.css` three lines below "Styles with `StyleSheet.create`. No CSS.", which is exactly how a web page disguised as an app slips in. `renderDesignStandard(stack)` composes the two parts, and **review** also receives the floor for its niche.
+- `archivoDeTokens(stack)` is the token file name for each niche (`tokens.css`, `src/theme.js`, `Tokens.kt`, or `null` in Python). The work prompt uses it to avoid asking a React Native dev to write CSS.
+- `<niche>.md` (one per `STACKS`) — which technology to use in each case.
+- `flujo-<niche>.md` — the work **order**: what is scaffolded first, which exact command verifies before `finish`, the two or three mistakes always made there, and when NOT to iterate. Without this, runs wrote five files without a plan, left the entry point with Expo's default template while the work lived in `src/screens/`, and ran out of steps.
+- `roles.md` — what each role does and does **not** do, and when they come in.
 
-El flujo y los roles suman ~1,6 kB por paso, así que tienen **tope duro**: 900
-caracteres cada flujo, 700 `roles.md`, verificado en
-`tests/flujo-oficio.test.mjs`. Un nicho nuevo en `STACKS` sin su `flujo-` rompe
-ese test a propósito.
+The flow and roles add ~1.6 kB per step, so they have a **hard cap**: 900 characters per flow, 700 for `roles.md`, verified in `tests/flujo-oficio.test.mjs`. A new niche in `STACKS` without its `flujo-` breaks that test on purpose.
 
-Además, la documentación de oficio entera (`renderPlaybooks` + `renderFlujo` +
-`renderRoles`) tiene techo **medido** de 4.200 caracteres por nicho. Antes el
-guard comparaba dos bloques de documentación entre sí, que premiaba justo lo que
-hay que evitar: engordar el criterio para poder engordar el flujo. Lo que importa
-es el total contra el protocolo (~3.200 en el system), que es la relación que se
-midió cuando el modelo dejó de emitir acciones.
+Also, the entire craft documentation (`renderPlaybooks` + `renderFlujo` + `renderRoles`) has a **measured** ceiling of 4,200 characters per niche. Before, the guard compared two documentation blocks against each other, which rewarded exactly what must be avoided: inflating criteria to be able to inflate the flow. What matters is the total against the protocol (~3,200 in the system prompt), which is the ratio measured when the model stopped emitting actions.
 
-Van al prompt de **trabajo**, nunca al de conversación: en la reunión el agente
-habla como persona, no recita su manual.
+They go into the **work** prompt, never the conversation prompt: in a meeting the agent speaks as a person, not reciting its manual.
 
-Regla que atraviesa todo: **el equipo nunca le hace preguntas técnicas al
-usuario.** Decide y lo comunica en términos de lo que se va a ver.
+A rule that cuts across everything: **the team never asks the user technical questions.** They decide and communicate in terms of what will be seen.
 
-## Las apps móviles son apps, no webs
+## Mobile apps are apps, not websites
 
-Los nichos `android` y `movil-rn` entregan una **app nativa que compila**, no una
-página. `native-build.js` la compila de verdad antes de aceptar el `finish` y le
-devuelve los errores del compilador al agente, igual que `verify.js` con el HTML.
+The `android` and `movil-rn` niches deliver a **native app that compiles**, not a page. `native-build.js` actually compiles it before accepting `finish` and returns compiler errors to the agent, just like `verify.js` does with HTML.
 
-- **Android**: Gradle + AGP 9 + Kotlin 2.2 + Compose, `compileSdk` 36. Verificado
-  en esta máquina: compilación en frío de minutos, **en caliente ~5 s**, después
-  `adb install` y arranque en el emulador. Gradle sale de la caché de
-  `~/.gradle/wrapper/dists` porque los agentes no pueden escribir el jar binario
-  del wrapper. **AGP 9 ya trae Kotlin**: aplicar `org.jetbrains.kotlin.android`
-  aparte rompe la build.
-- **React Native**: se valida sin `npm install` (serían cientos de MB por
-  proyecto). `revisarReactNative()` chequea que sea una app móvil de verdad:
-  dependencia `react-native`, `app.json`, y **cero etiquetas HTML o APIs del
-  navegador** en el JSX — que es exactamente cómo se colaba una web disfrazada.
+- **Android**: Gradle + AGP 9 + Kotlin 2.2 + Compose, `compileSdk` 36. Verified on this machine: cold compile in minutes, **warm ~5 s**, then `adb install` and launch on the emulator. Gradle comes from `~/.gradle/wrapper/dists` cache because agents cannot write the wrapper binary jar. **AGP 9 already includes Kotlin**: applying `org.jetbrains.kotlin.android` separately breaks the build.
+- **React Native**: validated without `npm install` (that would be hundreds of MB per project). `revisarReactNative()` checks it is truly a mobile app: `react-native` dependency, `app.json`, and **zero HTML tags or browser APIs** in JSX — exactly how a web page disguised as an app slipped through.
 
-`CARPETAS_IGNORADAS` (build, .gradle, node_modules, dist, .expo, Pods) se
-excluye de **todos** los listados de archivos. No es cosmético: sin eso, después
-de la primera compilación el `list_files` del agente devolvía miles de rutas de
-intermedios y le arruinaba el contexto.
+`IGNORED_FOLDERS` (build, .gradle, node_modules, dist, .expo, Pods) are excluded from **all** file listings. Not cosmetic: without this, after the first compile the agent's `list_files` returned thousands of intermediate paths and ruined its context.
 
-## Paralelismo, olas y colaboración
+## Parallelism, waves, and collaboration
 
-**El cerrojo es por ARCHIVO, no por proyecto** (`puedeArrancar`/`tomarCerrojo`/
-`soltarCerrojo`). Dos agentes construyen el mismo proyecto a la vez si cada uno
-escribe lo suyo. Toman el proyecto ENTERO solamente las revisiones (leen todo) y
-las tareas sin `target_file` (no se sabe qué van a tocar).
+**The lock is per FILE, not per project** (`puedeArrancar`/`tomarCerrojo`/`soltarCerrojo`). Two agents build the same project at once if each writes their own file. The ENTIRE project is taken only by reviews (read everything) and tasks without `target_file` (unknown what they will touch).
 
-**Las olas (`tasks.phase`) son lo que reemplaza a la garantía que daba el
-candado viejo.** Ese candado no era solo un candado: era la FILA que aseguraba
-que el que entra ve lo que dejó el anterior. Sin ella, cuatro agentes arrancan
-sobre un proyecto vacío, ninguno ve `tokens.css` porque todavía no existe, y
-cada uno inventa su paleta. `store.faseAbierta(goalId)` devuelve la fase más
-baja con trabajo vivo; nadie de una ola posterior arranca hasta que cierre. Las
-tareas `blocked` no cuentan, así que una ola trabada se abre sola.
+**Waves (`tasks.phase`) replace the guarantee the old lock provided.** That lock was not just a lock: it was the QUEUE that ensured whoever enters sees what the previous one left. Without it, four agents start on an empty project, nobody sees `tokens.css` because it doesn't exist yet, and each invents their palette. `store.faseAbierta(goalId)` returns the lowest phase with live work; nobody from a later wave starts until it closes. `blocked` tasks do not count, so a stuck wave opens on its own.
 
-**Toda tarea encolada necesita `target_file`.** Sin él cae al modo exclusivo y
-el paralelismo se apaga solo. Los tres caminos que encolan lo asignan:
-`confirmMeetingClose` (lo decide la CEO), `startWorkNow` y el auto-encolado en
-vivo (los dos por `inferir-archivo.js`, determinista para no gastar una llamada
-al modelo por tarea).
+**Every queued task needs `target_file`.** Without it, it falls into exclusive mode and parallelism turns itself off. The three paths that enqueue assign it: `confirmMeetingClose` (decided by the CEO), `startWorkNow`, and live auto-enqueue (both via `inferir-archivo.js`, deterministic to avoid spending a model call per task).
 
-**Colaboración**: la acción `consultar` deja que un agente le pregunte a un
-compañero y reciba su respuesta con el criterio de esa persona, en el acto.
-Tope de 2 por corrida. Queda registrada como comentario, así se ve en Actividad.
+**Collaboration**: the `consultar` action lets an agent ask a peer and receive their answer with that person's criteria, immediately. Limit of 2 per run. Recorded as a comment so it shows in Activity.
 
-## La voz solo existe en el modo llamada
+## Voice only exists in call mode
 
-`MeetingSession.voiceEnabled` arranca en **false**. El cliente manda `set_voice`
-al entrar y salir de la llamada. Fuera de la llamada no se sintetiza una sola
-palabra — y, más importante, **no se toma el SpeakerGate**, que serializa a los
-agentes de a uno para un audio que nadie estaba escuchando.
+`MeetingSession.voiceEnabled` starts at **false**. The client sends `set_voice` when entering and leaving the call. Outside the call not a single word is synthesized — and more importantly, **the SpeakerGate is not taken**, which serializes agents one at a time for audio nobody was listening to.
 
-## Trampas que costaron y no son obvias
+## Traps that cost time and are not obvious
 
-- **`'renata'.includes('')` es `true`.** Una consulta sin destinatario caía
-  siempre en el primero de la lista en vez de en quien sabe. Hay guard.
-- **`yaExiste` era una foto del arranque.** Con varios agentes, un archivo que
-  un compañero creaba DURANTE tu corrida no estaba en la foto y `write_file` lo
-  borraba entero. Ahora se consulta el disco.
-- **`anotarEnBitacora` era read-modify-write.** Con dos `finish` simultáneos se
-  perdía una entrada en silencio. Ahora es `appendFile`.
-- **`completeGoalIfDone` anunciaba "meta cumplida"** cuando todas las tareas
-  quedaban trabadas. Ahora exige que además alguien haya entregado algo.
-- **Un selector de id `#cafe` se leía como color escrito a mano.** El verificador
-  solo mira valores de declaración, no selectores. Y `font-family: inherit` es
-  una palabra clave de CSS, no una tipografía.
-- **`construirApp(dir)` sin el stack no puede saber que ahí iba una app**: una
-  web entregada en un proyecto móvil pasaba derecho. Recibe `goal.stack`.
-- **`DELETE FROM tasks WHERE meeting_id = ?` sin `AND goal_id IS NULL`.** Una
-  reunión sin entregables cuelga una meta aparte de kind `acuerdo`; borrar el
-  proyecto vaciaba esas decisiones, que son de OTRA meta. El registro sobrevivía
-  pero quedaba en blanco.
-- **`reassignCeoDeliverables` con afinidad 0 dejaba el entregable en la CEO.**
-  Un pedido como habla cualquiera ("la landing del catálogo de plantas") no
-  nombra ninguna tecnología, así que empataba en 0 y la jefa terminaba
-  escribiendo el archivo — justo lo que esa función existe para evitar. El
-  desempate es por carga, pero se va igual de sus manos.
-- **El modelo manda VARIAS acciones en un mensaje.** No es prosa: quiere leer
-  tres archivos de una. El parser voraz (`\{[\s\S]*\}`) tomaba de la primera
-  llave a la última y quedaba JSON inválido — 21 pasos de una corrida
-  descartados como "sin JSON de acción" cuando la respuesta era perfecta.
-  `parseJsonObjects` extrae por llaves balanceadas y las lecturas se resuelven
-  todas en UN paso.
-- **El formato va repetido al FINAL de cada paso** (`RECORDATORIO_FORMATO`).
-  Con el protocolo solo arriba del system y 15.000 caracteres de contexto en el
-  medio, la recencia gana.
-- **Un marcador de heredoc truncado terminaba DENTRO del archivo.** Un
-  `theme.js` quedó terminado en `\n<<<`, el import rompía, y el equipo entero se
-  trabó sin entender por qué. `limpiarMarcadores` los saca de todas las vías.
-- **La validación de la app corría solo en el `finish`**, y las corridas casi
-  siempre terminan agotando pasos: un proyecto móvil sin `package.json` se daba
-  por entregado. Ahora también se valida en esa salida.
-- **`patch.title ?? goal.title` deja pasar el string vacío.** El PATCH manda
-  `title.trim()` sin validar, así que renombrar a espacios dejaba el proyecto
-  sin nombre. El alta sí lo rechaza con 400: las dos puertas tienen que
-  coincidir.
+- **`'renata'.includes('')` is `true`.** A consultation without a recipient always fell to the first in the list instead of whoever knows. There is a guard.
+- **`yaExiste` was a snapshot at start.** With multiple agents, a file a peer created DURING your run was not in the snapshot and `write_file` erased it entirely. Now the disk is consulted.
+- **`anotarEnBitacora` was read-modify-write.** With two simultaneous `finish`es one entry was silently lost. Now it is `appendFile`.
+- **`completeGoalIfDone` announced "goal completed"** when all tasks ended up blocked. Now it also requires that someone actually delivered something.
+- **An id selector `#cafe` was read as a handwritten color.** The verifier only looks at declaration values, not selectors. And `font-family: inherit` is a CSS keyword, not a font.
+- **`construirApp(dir)` without the stack cannot know an app was expected there**: a web delivered in a mobile project passed through. It receives `goal.stack`.
+- **`DELETE FROM tasks WHERE meeting_id = ?` without `AND goal_id IS NULL`.** A meeting without deliverables hangs a separate `acuerdo`-kind goal; deleting the project emptied those decisions, which belong to ANOTHER goal. The record survived but ended up blank.
+- **`reassignCeoDeliverables` with affinity 0 left the deliverable on the CEO.** A request phrased in plain language ("the plant catalog landing page") names no technology, so it tied at 0 and the boss ended up writing the file — exactly what that function exists to prevent. Tiebreak is by load, but it still leaves her hands.
+- **The model sends SEVERAL actions in one message.** Not prose: it wants to read three files at once. The greedy parser (`\{[\s\S]*\}`) took from the first brace to the last and produced invalid JSON — 21 steps of a run discarded as "no action JSON" when the response was perfect. `parseJsonObjects` extracts by balanced braces and reads are resolved all in ONE step.
+- **The format is repeated at the END of each step** (`RECORDATORIO_FORMATO`). With the protocol only at the top of the system prompt and 15,000 characters of context in the middle, recency wins.
+- **A truncated heredoc marker ended INSIDE the file.** A `theme.js` ended with `\n<<<`, the import broke, and the whole team got stuck without understanding why. `limpiarMarcadores` removes them from all paths.
+- **App validation ran only on `finish`**, and runs almost always end by exhausting steps: a mobile project without `package.json` was considered delivered. Now it is also validated on that exit.
+- **`patch.title ?? goal.title` lets an empty string through.** PATCH sends `title.trim()` without validation, so renaming to spaces left the project nameless. Creation rejects it with 400: both gates must match.
 
-## Entornos de trabajo reales
+## Real work environments
 
-Los agentes tienen **una terminal de verdad** dentro de la carpeta de su
-proyecto (`herramientas.js`, acción `comando`). Existe porque escribir el
-andamiaje a mano es la fuente principal de entregables roto: en FASA una app
-React Native quedó sin `package.json` ni `app.json`. Con la herramienta, un
-`npx create-expo-app` lo resuelve en un comando — verificado, el agente lo usó
-y salió un proyecto Expo completo con assets y splash.
+Agents have **a real terminal** inside their project folder (`herramientas.js`, `comando` action). It exists because writing scaffolding by hand is the main source of broken deliverables: in FASA a React Native app ended up without `package.json` or `app.json`. With the tool, `npx create-expo-app` solves it in one command — verified, the agent used it and produced a complete Expo project with assets and splash.
 
-Cualquier comando se permite. Los riesgosos (`rm`, `mv`, `kill`) piden que el
-agente explique el `porque`, y con eso se ejecutan. La lista de PROHIBIDO es
-corta y tiene un solo criterio: nada que salga de la carpeta del proyecto o
-deje la máquina peor de lo que estaba (`sudo`, `rm` a rutas absolutas, `git
-push`, `ssh`, leer `.ssh`/`.env`). No es desconfianza: es que un `rm -rf ~` no
-tiene vuelta atrás y ninguna tarea de producto lo necesita.
+Any command is allowed. Risky ones (`rm`, `mv`, `kill`) require the agent to explain `why`, and with that they run. The FORBIDDEN list is short and has a single criterion: nothing that leaves the project folder or leaves the machine worse off (`sudo`, `rm` on absolute paths, `git push`, `ssh`, reading `.ssh`/`.env`). Not distrust: `rm -rf ~` has no undo and no product task needs it.
 
-**Diseño: OpenPencil** (`openpencil.js`, MIT, github.com/ZSeven-W/openpencil).
-Un servidor headless por proyecto; la diseñadora diseña con `op design`, define
-tokens con `op design:upsert-vars` y exporta capturas. Su entregable es
-`diseno.op` (JSON versionable) más un `.png`. Los tokens se traducen SOLOS al
-lenguaje del nicho (`tokensComoCodigo`: `theme.js`, `Tokens.kt` o `tokens.css`)
-y el dev los recibe en su prompt: **implementa el diseño, no lo reinterpreta**.
-Se instala con `scripts/instalar-openpencil.sh` — no con brew, que compila desde
-fuente y falla con Command Line Tools viejas; y hay que sacarle la cuarentena y
-firmarlo o macOS lo mata con SIGKILL sin decir por qué.
+**Design: OpenPencil** (`openpencil.js`, MIT, github.com/ZSeven-W/openpencil). A headless server per project; the designer designs with `op design`, defines tokens with `op design:upsert-vars`, and exports screenshots. Their deliverable is `diseno.op` (versionable JSON) plus a `.png`. Tokens are translated AUTOMATICALLY to the niche's language (`tokensComoCodigo`: `theme.js`, `Tokens.kt`, or `tokens.css`) and the dev receives them in their prompt: **implement the design, do not reinterpret it**. Installed with `scripts/instalar-openpencil.sh` — not with brew, which compiles from source and fails with old Command Line Tools; and quarantine must be removed and it must be signed or macOS kills it with SIGKILL without explanation.
 
-## El tipo de tarea sale del oficio
+## Task type comes from the role
 
-`claseDeTareaPara`: el QA no recibe un archivo para escribir (sus revisiones las
-crea el motor cuando hay algo entregado), el de talento hace `refinamiento`, y
-quien diseña entrega `diseno.op`. Sin esto se les daba un archivo, agotaban los
-pasos buscando qué escribir y quedaban trabadas — la mitad de las tareas
-bloqueadas de FASA eran esto.
+`claseDeTareaPara`: QA does not receive a file to write (their reviews are created by the engine when something is delivered), talent does `refinement`, and whoever designs delivers `diseno.op`. Without this they were given a file, exhausted steps looking for what to write, and got blocked — half of FASA's blocked tasks were this.
 
-## El sandbox del workspace
+## Workspace sandbox
 
-Todo lo que produce la empresa vive en `workspace/<empresa>/<slug>/` y en ningún
-otro lado. `safeWorkspacePath()` es la única puerta de escritura y rechaza:
-rutas absolutas, `..`, segmentos ocultos, y extensiones fuera de la lista de
-formatos de entregable. **No relajar esa guardia.**
+Everything the company produces lives in `workspace/<company>/<slug>/` and nowhere else. `safeWorkspacePath()` is the only write gate and rejects: absolute paths, `..`, hidden segments, and extensions outside the deliverable format list. **Do not relax that guard.**
 
-`workspace/` está fuera del control de versiones.
+`workspace/` is outside version control.
 
-## Cosas que parecen bugs y no lo son
+## Things that look like bugs and are not
 
-- **El iframe de la vista previa usa `sandbox="allow-scripts"` SIN
-  `allow-same-origin`.** Es a propósito: los entregables necesitan que su JS
-  corra, y con los dos permisos juntos la página podría sacarse el sandbox sola.
-  (Antes tenía solo `allow-same-origin`, así que nada interactivo funcionaba.)
-- **`10.0.2.2` en `emulator.js`** es el loopback del host visto desde dentro del
-  emulador de Android. El simulador de iOS sí usa `127.0.0.1`.
-- **El intent genérico de Android no alcanza**: sin navegador por defecto,
-  `am start` sale con código 0 y no abre nada. Por eso se apunta a Chrome
-  explícitamente y después se verifica.
-- **Se verifica por `ResumedActivity`, no por `mCurrentFocus`.** Con la pantalla
-  recién encendida, `mCurrentFocus` se queda reportando `NotificationShade`
-  aunque Chrome ya esté al frente — daba un falso "no se abrió".
-- **Lo primero es despertar la pantalla** (`despertarPantalla`). Un dispositivo
-  dormido devuelve capturas **negras** y no deja que ninguna app tome el foco;
-  los dos síntomas se ven como bugs distintos y son el mismo.
-- **Varios proyectos viejos comparten el slug `general`** (herencia de la
-  migración v5). Por eso `deleteProject` consulta `slugSharedWithOthers` antes de
-  borrar la carpeta.
+- **The preview iframe uses `sandbox="allow-scripts"` WITHOUT `allow-same-origin`.** Intentional: deliverables need their JS to run, and with both permissions together the page could remove the sandbox itself. (Before it had only `allow-same-origin`, so nothing interactive worked.)
+- **`10.0.2.2` in `emulator.js`** is the host loopback as seen from inside the Android emulator. The iOS simulator does use `127.0.0.1`.
+- **The generic Android intent is not enough**: without a default browser, `am start` exits with code 0 and opens nothing. That's why it targets Chrome explicitly and then verifies.
+- **Verification uses `ResumedActivity`, not `mCurrentFocus`.** With the screen just woken up, `mCurrentFocus` keeps reporting `NotificationShade` even if Chrome is in front — it gave a false "did not open".
+- **First step is to wake the screen** (`despertarPantalla`). A sleeping device returns **black** captures and does not let any app take focus; both symptoms look like different bugs and are the same one.
+- **Several old projects share the slug `general`** (inheritance from migration v5). That's why `deleteProject` checks `slugSharedWithOthers` before deleting the folder.
 
-## Migraciones
+## Migrations
 
-`server/lib/db.js`, array `MIGRATIONS`, una por versión de `user_version`.
+`server/lib/db.js`, `MIGRATIONS` array, one per `user_version`.
 
-**Nunca editar una migración ya aplicada** — se agrega una nueva al final. (Pasó:
-la v9 se editó después de aplicada y el cambio nunca corrió; hubo que hacer una
-v10.)
+**Never edit an already-applied migration** — add a new one at the end. (It happened: v9 was edited after being applied and the change never ran; a v10 had to be added.)
 
-## Verificar cambios
+## Verify changes
 
 ```bash
-npm test          # node:test, sin red
+npm test          # node:test, no network
 npm run typecheck
-npm run doctor    # qué falta instalar y el comando exacto para arreglarlo
-npm run dev       # backend + cliente + voz + transcripción
+npm run doctor    # what is missing and the exact command to fix it
+npm run dev       # backend + client + voice + transcription
 
-# ¿lo que entregó el equipo es una app bien armada, o archivos sueltos?
-node scripts/auditar-app.mjs <carpeta> [stack]
-node scripts/auditar-app.mjs --workspace     # todo lo producido, con el stack de la base
+# is what the team delivered a well-formed app, or loose files?
+node scripts/auditar-app.mjs <folder> [stack]
+node scripts/auditar-app.mjs --workspace     # everything produced, with stack from DB
 ```
 
-`auditar-app.mjs` audita la **estructura**: que estén los archivos que el nicho
-exige y que encajen entre ellos (el `namespace` del módulo contra el `package` del
-código, el punto de entrada contra las pantallas de `src/`). El contenido lo
-siguen midiendo `verify.js` y `native-build.js` — el script los usa, no los
-reimplementa.
+`auditar-app.mjs` audits **structure**: that the files required by the niche exist and fit together (module `namespace` against code `package`, entry point against `src/` screens). Content is still measured by `verify.js` and `native-build.js` — the script uses them, it does not reimplement them.
 
-Los tests **no pueden depender de nombres de la plantilla** (Bruno, Renata…):
-las plantillas cambian. Se filtra por `role` y se usan los nombres reales.
+Tests **must not depend on template names** (Bruno, Renata…): templates change. Filter by `role` and use real names.
 
-## Mapa de archivos
+## File map
 
-| Archivo | Qué resuelve |
+| File | What it solves |
 |---|---|
-| `server/lib/db.js` | Esquema y migraciones |
-| `server/lib/store.js` | Único acceso a datos. Sin `fs`: el disco lo maneja quien llama |
-| `server/lib/workforce.js` | Motor de trabajo: cola, corridas, revisión, contrato |
-| `server/lib/verify.js` | Verificación determinista de entregables |
-| `server/lib/playbooks.js` | Carga de los criterios de oficio y diseño |
-| `server/lib/meeting-session.js` | Una reunión en vivo: turnos, ruteo, cierre |
-| `server/lib/agent-runtime.js` | Prompt de conversación y streaming por agente |
-| `server/lib/llm.js` | Cliente MiniMax/DeepSeek con rotación clave×modelo |
-| `server/lib/emulator.js` | Emulador de Android y simulador de iOS |
-| `src/main.ts` | Todo el cliente (vistas, WS, audio, render por regiones) |
+| `server/lib/db.js` | Schema and migrations |
+| `server/lib/store.js` | Single data access. No `fs`: disk is handled by the caller |
+| `server/lib/workforce.js` | Work engine: queue, runs, review, contract |
+| `server/lib/verify.js` | Deterministic deliverable verification |
+| `server/lib/playbooks.js` | Loading of craft and design criteria |
+| `server/lib/meeting-session.js` | One live meeting: turns, routing, closing |
+| `server/lib/agent-runtime.js` | Conversation prompt and per-agent streaming |
+| `server/lib/llm.js` | MiniMax/DeepSeek client with key×model rotation |
+| `server/lib/emulator.js` | Android emulator and iOS simulator |
+| `src/main.ts` | Entire client (views, WS, audio, region-based rendering) |

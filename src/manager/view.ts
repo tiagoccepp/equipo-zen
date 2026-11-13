@@ -1,7 +1,7 @@
-// T5 — Manager MCP/skills: vista pura. Main la monta en #view-manager.
-// Uso: import { mountManager } from './manager/view.ts'; import './manager/manager.css';
+// T5 — Manager MCP/skills: pure view. Main mounts it in #view-manager.
+// Usage: import { mountManager } from './manager/view.ts'; import './manager/manager.css';
 //   mountManager(el, { fetchJson: async (path, init) => (await fetch(path, init)).json() })
-// Endpoints (los cablea main en http.js): GET /api/mcp/status + POST /api/mcp/reconnect.
+// Endpoints (wired by main in http.js): GET /api/mcp/status + POST /api/mcp/reconnect.
 
 export interface McpServerStatus {
   name: string;
@@ -59,8 +59,8 @@ function isStatus(v: unknown): v is McpStatus {
 
 function pillFor(s: McpServerStatus): { cls: string; label: string } {
   if (!s.configured) return { cls: 'mgr-stale', label: 'stale' };
-  if (s.alive) return { cls: 'mgr-ok', label: 'vivo' };
-  return { cls: 'mgr-bad', label: 'caído' };
+  if (s.alive) return { cls: 'mgr-ok', label: 'live' };
+  return { cls: 'mgr-bad', label: 'down' };
 }
 
 function render(status: McpStatus | null, error: string): string {
@@ -69,14 +69,14 @@ function render(status: McpStatus | null, error: string): string {
   const gaps = status?.gaps ?? [];
 
   const serverRows = servers.length === 0
-    ? `<tr><td colspan="4" class="mgr-dim">Sin servers — configurá PABLO_MCP_SERVERS o ~/.config/equipo-mcp.json</td></tr>`
+    ? `<tr><td colspan="4" class="mgr-dim">No servers — set PABLO_MCP_SERVERS or ~/.config/equipo-mcp.json</td></tr>`
     : servers.map((s) => {
         const pill = pillFor(s);
         const tools = s.tools.length === 0
           ? '<span class="mgr-dim">—</span>'
           : s.tools.map((t) => `<code class="mgr-code">${esc(t)}</code>`).join(' ');
         return `<tr>
-          <td><strong>${esc(s.name)}</strong>${s.configured ? '' : ' <span class="mgr-dim">(no configurado)</span>'}</td>
+          <td><strong>${esc(s.name)}</strong>${s.configured ? '' : ' <span class="mgr-dim">(not configured)</span>'}</td>
           <td><span class="mgr-pill ${pill.cls}">${pill.label}</span></td>
           <td class="mgr-tools">${tools}</td>
           <td class="mgr-num">${s.tools.length}</td>
@@ -84,14 +84,14 @@ function render(status: McpStatus | null, error: string): string {
       }).join('');
 
   const skillItems = skills.length === 0
-    ? `<li class="mgr-dim">Sin skills cargadas.</li>`
+    ? `<li class="mgr-dim">No skills loaded.</li>`
     : skills.map((k) => {
         const scopes = k.scopes.map((sc) => `<span class="mgr-scope">${esc(sc)}</span>`).join(' ');
         return `<li><strong>${esc(k.name)}</strong> ${scopes}</li>`;
       }).join('');
 
   const gapItems = gaps.length === 0
-    ? `<li class="mgr-ok-text">Sin gaps — todo vivo. 🎉</li>`
+    ? `<li class="mgr-ok-text">No gaps — all live. 🎉</li>`
     : gaps.map((g) => `<li>${esc(g)}</li>`).join('');
 
   return `
@@ -101,16 +101,16 @@ function render(status: McpStatus | null, error: string): string {
         <p class="mgr-sub">${servers.length} server(s) · ${skills.length} skill(s) · ${gaps.length} gap(s)</p>
       </div>
       <div class="mgr-actions">
-        <button type="button" class="mgr-btn" data-act="refresh">↻ Actualizar</button>
-        <button type="button" class="mgr-btn mgr-primary" data-act="reconnect">⟳ Re-conectar MCP</button>
+        <button type="button" class="mgr-btn" data-act="refresh">↻ Refresh</button>
+        <button type="button" class="mgr-btn mgr-primary" data-act="reconnect">⟳ Reconnect MCP</button>
       </div>
     </div>
     ${error ? `<p class="mgr-error" role="alert">${esc(error)}</p>` : ''}
-    <section class="mgr-card" aria-label="Servers MCP">
+    <section class="mgr-card" aria-label="MCP servers">
       <h3>Servers</h3>
       <div class="mgr-table-wrap">
         <table class="mgr-table">
-          <thead><tr><th>Nombre</th><th>Estado</th><th>Tools</th><th>#</th></tr></thead>
+          <thead><tr><th>Name</th><th>Status</th><th>Tools</th><th>#</th></tr></thead>
           <tbody>${serverRows}</tbody>
         </table>
       </div>
@@ -121,7 +121,7 @@ function render(status: McpStatus | null, error: string): string {
         <ul class="mgr-list">${skillItems}</ul>
       </section>
       <section class="mgr-card" aria-label="Gaps">
-        <h3>Gaps honestos</h3>
+        <h3>Honest gaps</h3>
         <ul class="mgr-list mgr-gaps">${gapItems}</ul>
       </section>
     </div>
@@ -132,7 +132,7 @@ export function mountManager(container: HTMLElement, opts: ManagerOptions = {}):
   const fetchJson: FetchJson = opts.fetchJson ?? defaultFetchJson;
   container.classList.add('mgr');
   container.setAttribute('role', 'region');
-  container.setAttribute('aria-label', 'Manager MCP y skills');
+  container.setAttribute('aria-label', 'MCP manager and skills');
 
   let alive = true;
   let busy = false;
@@ -157,11 +157,11 @@ export function mountManager(container: HTMLElement, opts: ManagerOptions = {}):
         status = (data as Record<string, unknown>).status as McpStatus;
         error = '';
       } else {
-        error = 'Respuesta inesperada de /api/mcp/status.';
+        error = 'Unexpected response from /api/mcp/status.';
       }
     } catch (err) {
       if (!alive) return;
-      error = err instanceof Error ? `No se pudo cargar: ${err.message}` : 'No se pudo cargar el estado.';
+      error = err instanceof Error ? `Could not load: ${err.message}` : 'Could not load status.';
     } finally {
       busy = false;
       paint();
@@ -176,13 +176,13 @@ export function mountManager(container: HTMLElement, opts: ManagerOptions = {}):
     try {
       await fetchJson(RECONNECT_PATH, { method: 'POST' });
       if (!alive) return;
-      // Tras reconectar, el status fresco manda.
+      // After reconnecting, the fresh status wins.
       busy = false;
       await refresh();
       return;
     } catch (err) {
       if (!alive) return;
-      error = err instanceof Error ? `Re-conexión falló: ${err.message}` : 'Re-conexión falló.';
+      error = err instanceof Error ? `Reconnect failed: ${err.message}` : 'Reconnect failed.';
     } finally {
       busy = false;
       paint();

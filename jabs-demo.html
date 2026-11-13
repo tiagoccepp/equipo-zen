@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>J.A.B.S Ambient Demo</title>
+    <link rel="stylesheet" href="./src/jabs/jabs.css" />
+    <style>
+      body { margin: 0; padding: 20px; background: #0f1115; color: #e6e8eb; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; margin: 0 0 14px; color: #9aa3ad; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .demo { max-width: 1100px; margin: 0 auto; display: grid; gap: 14px; }
+      .row { display: grid; gap: 8px; }
+      .log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #9aa3ad; background: #1b1f25; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px; min-height: 56px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body class="jabs-shell">
+    <main class="demo">
+      <h1>J.A.B.S / Ambient features demo (synthetic data)</h1>
+
+      <section class="row">
+        <div class="jabs-panel-title">Mission pulse</div>
+        <div id="pulse"></div>
+      </section>
+
+      <section class="jabs-grid">
+        <div class="jabs-panel">
+          <div class="jabs-panel-title">Session brief</div>
+          <div id="brief"></div>
+          <div class="jabs-panel-title">Proactive nudges</div>
+          <div id="nudges"></div>
+        </div>
+        <div class="jabs-panel">
+          <div class="jabs-panel-title">One-keystroke actions (data model)</div>
+          <div id="actions"></div>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="jabs-panel-title">Action dispatch log</div>
+        <div id="log" class="log">Select an action to see its intent and payload.</div>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        synthesizePulse,
+        detectNudges,
+        buildSessionBrief,
+        deriveQuickActions,
+        renderPulse,
+        renderBrief,
+        renderNudges,
+        renderActions
+      } from './src/jabs/index.ts';
+
+      const NOW = Date.now();
+      const syntheticLive = [
+        {
+          meetingId: 'm-live-1',
+          companyId: 'co-aurora',
+          companyName: 'Aurora Labs',
+          goalTitle: 'Menu redesign',
+          lastActiveAt: new Date(NOW - 18 * 60_000).toISOString(),
+          team: [{ id: 'ag-renata', name: 'Renata' }, { id: 'ag-bruno', name: 'Bruno' }]
+        }
+      ];
+
+      const syntheticWork = {
+        company: { id: 'co-aurora', name: 'Aurora Labs' },
+        team: [{ id: 'ag-renata', name: 'Renata' }, { id: 'ag-bruno', name: 'Bruno' }],
+        goals: [
+          {
+            id: 'goal-menu',
+            title: 'Menu redesign',
+            status: 'active',
+            tasks: [
+              { id: 't-hero', text: 'Restore hero composition', status: 'blocked', blockedReason: 'awaiting image export' },
+              { id: 't-copy', text: 'Review landing copy', status: 'review' },
+              { id: 't-tokens', text: 'Align color tokens', status: 'in_progress', agentId: 'ag-renata' },
+              { id: 't-deploy', text: 'Prepare preview deploy', status: 'pending' }
+            ]
+          },
+          {
+            id: 'goal-app',
+            title: 'Android ordering flow',
+            status: 'active',
+            tasks: [
+              { id: 't-nav', text: 'Verify navigation graph', status: 'pending' }
+            ]
+          }
+        ]
+      };
+
+      const pulse = synthesizePulse({ live: syntheticLive, work: syntheticWork, now: NOW });
+      let nudges = detectNudges({ live: syntheticLive, work: syntheticWork, now: NOW, staleAfterMs: 10 * 60_000 });
+      const brief = buildSessionBrief({
+        lastSeenAt: NOW - 2.5 * 60 * 60_000,
+        now: NOW,
+        live: syntheticLive,
+        work: syntheticWork,
+        previousTaskStatus: { 't-copy': 'in_progress', 't-tokens': 'pending' }
+      });
+      const actionsList = deriveQuickActions({ live: syntheticLive, work: syntheticWork, now: NOW });
+
+      renderPulse(document.getElementById('pulse'), pulse);
+      renderBrief(document.getElementById('brief'), brief);
+      renderActions(document.getElementById('actions'), actionsList, (action) => {
+        const log = document.getElementById('log');
+        log.textContent = JSON.stringify({ intent: action.intent, label: action.label, payload: action.payload }, null, 2);
+      });
+
+      const nudgesEl = document.getElementById('nudges');
+      function paintNudges() {
+        renderNudges(nudgesEl, nudges, (key) => {
+          nudges = nudges.filter((n) => n.dismissKey !== key);
+          paintNudges();
+        });
+      }
+      paintNudges();
+    </script>
+  </body>
+</html>

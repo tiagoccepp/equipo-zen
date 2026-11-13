@@ -1,4 +1,4 @@
-// Pablo client ↔ Equipo backend (HTTP + WebSocket). Thin: UI lives in app.ts.
+// Pablo client ↔ backend (HTTP + WebSocket). Thin: UI lives in app.ts.
 
 import { desktopApiBase } from './lib/tauri.ts';
 import { audioTagFromEvent, type AudioTag } from './lib/heard-text.ts';
@@ -372,7 +372,7 @@ export class Client {
     ws.onclose = () => this.ev.onClose();
   }
 
-  // M-05: turnId de cliente para eco optimista + steer explícito.
+  // M-05: client turnId for optimistic echo + explicit steer.
   sendText(text: string, opts: { steer?: boolean } = {}): string {
     const turnId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
@@ -415,7 +415,7 @@ export class Client {
     this.ws?.send(JSON.stringify({ type: 'audio_stop' }));
   }
 
-  // M-06: hint semántico opcional {cls, text} para telemetría del servidor.
+  // M-06: optional semantic hint {cls, text} for server telemetry.
   interrupt(turnId?: string, agentId?: string, hint?: { cls: string; text: string }): void {
     this.ws?.send(JSON.stringify({ type: 'interrupt', reason: 'barge_in', turnId, agentId, ...(hint ? { hint } : {}) }));
   }

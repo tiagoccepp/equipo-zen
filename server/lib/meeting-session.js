@@ -51,6 +51,7 @@ import { listPending, resolveApproval } from './permissions.js';
 import { maybeResolvePlan, planStepsText } from './plan-mode.js';
 import { mergeTastes, renderTastesSection as renderTastes } from './tastes.js';
 import { CancellableTurnQueue, SpeakerGate, sentenceAudioPlan } from './turn-pipeline.js';
+import { spawnAgent } from './spawner.js';
 
 const MAX_SESSION_AGENTS = 8;
 // Paciencia: cuánto se espera tras el último fragmento antes de rutear.
@@ -628,52 +629,100 @@ export class MeetingSession {
         return;
       }
 
-      const id = name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
-
+      const normList = (v) => Array.isArray(v) ? v : String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
       const profile = {
-        id,
-        companyId: this.company.id,
         name,
         title,
         color: color || this.company.color || '#4c6ef5',
-        aliases: Array.isArray(aliases) ? aliases : (aliases || '').split(',').map(s => s.trim()).filter(Boolean),
-        domains: Array.isArray(domains) ? domains : (domains || '').split(',').map(s => s.trim()).filter(Boolean),
-        boundaries: Array.isArray(boundaries) ? boundaries : (boundaries || '').split(',').map(s => s.trim()).filter(Boolean),
+        aliases: normList(aliases),
+        domains: normList(domains),
+        boundaries: normList(boundaries),
         knowledge: knowledge || '',
         style: style || 'Standard, professional conversationalist.',
         voice: voice || 'M1'
       };
-
       const lowerName = profile.name.toLowerCase();
-      if (!profile.aliases.some(alias => alias.toLowerCase() === lowerName)) {
+      if (!profile.aliases.some((alias) => String(alias).toLowerCase() === lowerName)) {
         profile.aliases.push(lowerName);
       }
 
-      const stored = this.store.insertAgent(profile, 'custom', 'user');
-      this.store.addAgentToMeeting(this.meeting.id, id);
+      const inferRole = () => {
+        const hay = `${title} ${profile.domains.join(' ')}`.toLower();
+        if (/test|qa|quality/.test(hay)) return 'tester';
+        if (/design|dise/.test(hay)) return 'diseno';
+        if (/front|ui|css|html/.test(hay)) return 'frontend';
+        if (/devops|deploy|infra|ops/.test(hay)) return 'devops';
+        if (/data|anal/.test(hay)) return 'data';
+        if (/orquest|manager|lead/.test(hay)) return 'orquestador';
+        return 'backend';
+      };
+
+      let stored = null;
+      let spawnedId = null;
+      let spawnMeta = null;
+      if (this.project?.id) {
+        try {
+          const equipo = this.store.rosterForProject(this.project.id)
+            .filter((r) => r.agent_id)
+            .map((r) => ({ id: r.agent_id, role: r.role || r.roleWanted }));
+          const pedido = { rol: inferRole(), porque: `spawn_agent from meeting UI: ${title}` };
+          const spawned = await spawnAgent({ store: this.store, goalId: this.project.id, pedido, ctx: { companySlug: this.company?.id || null, equipo } });
+          if (spawned?.created) {
+            spawnedId = spawned.agent.id;
+            spawnMeta = spawned;
+            this.store.updateAgent(spawnedId, profile, 'user', 'spawn_agent UI customization');
+            stored = this.store.getAgent(spawnedId);
+          } else {
+            this.send({ type: 'error', message: spawned?.motivo || 'Could not spawn agent through spawner.' });
+            return;
+          }
+        } catch (error) {
+          this.send({ type: 'error', message: `Spawner failed: ${String(error?.message || error).slice(0, 240)}` });
+          return;
+        }
+      }
+
+      if (!stored) {
+        const id = name.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + nanoid(4);
+        stored = this.store.insertAgent({ id, companyId: this.company.id, ...profile }, 'custom', 'user');
+        spawnedId = id;
+      }
+
+      this.store.addAgentToMeeting(this.meeting.id, spawnedId);
+      if (this.project?.id) {
+        try { this.store.addAgentToProject(this.project.id, spawnedId, stored.role || inferRole(), 'spawn-ui'); } catch {}
+      }
 
       const tasks = (initialTasks || [])
-        .map(t => t.trim())
+        .map((t) => String(t || '').trim())
         .filter(Boolean)
         .map((t) => {
-          const taskId = this.store.insertTask(this.meeting.id, id, { text: t });
+          const taskId = this.store.insertTask(this.meeting.id, spawnedId, { text: t });
           return { id: taskId, text: t, completed: false, createdAt: new Date().toISOString() };
         });
 
       const newAgent = { ...stored, enabled: true, tasks };
-
       this.sessionAgents.push(newAgent);
-      this.agents.set(id, this.createAgentRuntime(newAgent));
-      this.logTelemetry('agent_spawned', { agentId: id, name, title, domains: newAgent.domains, taskCount: tasks.length });
+      this.agents.set(spawnedId, this.createAgentRuntime(newAgent));
+      if (this.agentBus) {
+        try { this.agentBus.setRoster(this.sessionAgents.map((a) => a.id)); } catch {}
+      }
+      if (this.router) {
+        try { this.router = new AgentRouter(this.sessionAgents); } catch {}
+      }
+      this.logTelemetry('agent_spawned', {
+        agentId: spawnedId, name: stored.name, title: stored.title,
+        domains: newAgent.domains, taskCount: tasks.length, spawned: Boolean(spawnMeta), smoke: spawnMeta?.smoke || null
+      });
 
       this.broadcastAgentsUpdated();
 
       const systemMsgId = nanoid(8);
-      this.memory.add('system', 'Orchestrator', `${name} (${title}) has joined the table.`, null, systemMsgId);
+      this.memory.add('system', 'Orchestrator', `${stored.name} (${stored.title}) has joined the table.`, null, systemMsgId);
       this.send({
         type: 'user_turn_received',
         turnId: systemMsgId,
-        text: `${name} (${title}) has joined the table.`,
+        text: `${stored.name} (${stored.title}) has joined the table.`,
         source: 'system'
       });
       return;

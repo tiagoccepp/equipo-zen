@@ -50,7 +50,7 @@ function mulberry32(seed: number): Rng {
 
 // ── Name normalization (mirror of server/lib/gestos.js) ──────────
 // Lowercase + no accents/ñ→n + spaces→underscore. "GUIÑO", "guino" and
-// "Guiño" all resolve to glyph `guiño`.
+// "Guiño" all resolve to the `guiño` glyph.
 
 export function foldGlyphName(name: string): string {
   return String(name ?? '')
@@ -221,7 +221,7 @@ function makeGlyph(name: string, tags: string[], draw: (out: number[], rng: Rng,
     points: (count: number, seed: number): Float32Array => {
       const total = Math.max(1, Math.round(count));
       if (!Number.isFinite(total)) {
-        throw new RangeError(`fx/glyphs-a ${name}: count inválido (${count})`);
+        throw new RangeError(`fx/glyphs-a ${name}: invalid count (${count})`);
       }
       const rng = mulberry32(((seed | 0) ^ salt) | 0);
       const out: number[] = [];

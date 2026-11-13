@@ -7,7 +7,7 @@
 //   const pal = mountPalette({
 //     actions: [
 //       { id: 'go-console', label: 'Go to Console', group: 'Views', kbd: '1' },
-//       { id: 'mic', label: 'Mic on/off', group: 'Voice', hint: 'sesión de voz' },
+//       { id: 'mic', label: 'Mic on/off', group: 'Voice', hint: 'voice session' },
 //     ],
 //     onAction: (id) => { … }
 //   });

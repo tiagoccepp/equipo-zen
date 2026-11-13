@@ -1,13 +1,13 @@
 ---
 name: terminal
-description: Usar la terminal con criterio: comandos seguros, salida acotada, riesgos justificados.
-keywords: terminal, comando, correr, compilar, instalar, test, git, npm, script
+description: Use the terminal with good judgment: safe commands, bounded output, justified risks.
+keywords: terminal, command, run, compile, install, test, git, npm, script
 scope: work
 ---
 
-Reglas de terminal:
-1. Comandos de lectura primero (`ls`, `cat`, `git status`): mirá antes de tocar.
-2. Todo comando riesgoso (borrar, mover, instalar global) lleva `"porque"` explicando para qué.
-3. Salidas largas: redirigí a archivo o paginá (`| head -50`); nunca vuelques megabytes al turno.
-4. Un comando por paso; si falla, leé el error y corregí en el siguiente paso.
-5. PROHIBIDO: `sudo`, `rm -rf /`, credenciales en comandos, `curl|sh`.
+Terminal rules:
+1. Read commands first (`ls`, `cat`, `git status`): look before touching.
+2. Every risky command (delete, move, global install) must include `"because"` explaining why.
+3. Long outputs: redirect to a file or page (`| head -50`); never dump megabytes into the turn.
+4. One command per step; if it fails, read the error and fix in the next step.
+5. FORBIDDEN: `sudo`, `rm -rf /`, credentials in commands, `curl|sh`.

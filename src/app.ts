@@ -758,13 +758,18 @@ function ctlState(btn: HTMLElement | null | undefined, label: string): void {
 function renderRail(): void {
   const host = document.getElementById('rail-people');
   if (!host) return;
-  const list = [...agents.values()].slice(0, 8);
+  let list = [...agents.values()];
+  if (isHomeSpace()) {
+    const pablo = list.find(a => a.name.toLowerCase() === 'pablo' || a.role === 'ceo');
+    list = pablo ? [pablo] : list.slice(0, 1);
+  }
+  const shown = list.slice(0, 8);
   const count = document.getElementById('rail-count');
-  if (count) count.textContent = String(agents.size);
+  if (count) count.textContent = String(list.length);
   const ctxAgents = document.getElementById('ctx-agents');
-  if (ctxAgents) ctxAgents.textContent = String(agents.size);
+  if (ctxAgents) ctxAgents.textContent = String(list.length);
   host.innerHTML = '';
-  for (const a of list) {
+  for (const a of shown) {
     const state = RAIL_STATE[visualStates.get(a.id) || 'idle'];
     const row = document.createElement('div');
     row.className = 'rail-row';
@@ -1417,16 +1422,28 @@ function connectTo(companyId: string, goalId: string): void {
 const companyNames = new Map<string, string>();
 const projectNames = new Map<string, string>();
 
+function isHomeSpace(): boolean {
+  const project = (projectNames.get(currentGoal) || '').toLowerCase();
+  const company = (companyNames.get(currentCompany) || '').toLowerCase();
+  return company === 'pablo' && (project === 'siempre' || project === 'always' || project === '');
+}
+
 function setRailProject(): void {
   const name = document.getElementById('rail-project-name');
   const meta = document.getElementById('rail-project-meta');
+  const label = document.getElementById('rail-context-label');
+  const workTitle = document.getElementById('work-title');
   const company = companyNames.get(currentCompany) || '';
   const project = projectNames.get(currentGoal) || '';
-  if (name) name.textContent = project || (currentGoal ? 'Project' : 'No project');
+  const home = isHomeSpace();
+  if (label) label.textContent = home ? 'Home' : 'Project';
+  if (workTitle) workTitle.textContent = home ? 'Home' : (project || 'Project');
+  if (name) name.textContent = home ? 'Pablo' : (project || (currentGoal ? 'Project' : 'No project'));
   if (meta) {
-    if (company && project) meta.textContent = company;
+    if (home) meta.textContent = 'Personal assistant';
+    else if (company && project) meta.textContent = company;
     else if (currentCompany) meta.textContent = company || 'Connected';
-    else meta.textContent = 'Create one in Settings';
+    else meta.textContent = 'Open Projects to start';
   }
 }
 
@@ -1458,6 +1475,73 @@ async function renderCompanies(): Promise<void> {
 }
 document.querySelector('.companies')?.addEventListener('toggle', (e) => {
   if ((e.target as HTMLDetailsElement).open) void renderCompanies();
+});
+
+
+// J.A.B.S: Projects view (dedicated teams per project). Home stays personal.
+async function renderProjectsView(): Promise<void> {
+  const grid = document.getElementById('projects-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="projects-empty">Loading projects…</div>';
+  if (!currentCompany) {
+    grid.innerHTML = '<div class="projects-empty">No workspace yet. Open Settings to set up a company.</div>';
+    return;
+  }
+  const data = await apiJson<{ projects: Array<{ id: string; title: string; slug?: string; stack?: string; access_level?: string; status?: string }> }>(
+    `/api/companies/${encodeURIComponent(currentCompany)}/projects`
+  ).catch(() => null);
+  const projects = data?.projects || [];
+  if (!projects.length) {
+    grid.innerHTML = '<div class="projects-empty">No projects yet. Create one to spin up a dedicated team for complex work.</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  for (const p of projects) {
+    projectNames.set(p.id, p.title);
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'project-card' + (p.id === currentGoal ? ' active' : '');
+    const title = document.createElement('div');
+    title.className = 'project-card-title';
+    title.textContent = p.title;
+    const meta = document.createElement('div');
+    meta.className = 'project-card-meta';
+    meta.textContent = [p.stack || 'project', p.access_level || 'auto'].join(' · ');
+    card.append(title, meta);
+    card.addEventListener('click', () => {
+      connectTo(currentCompany, p.id);
+      (document.getElementById('rail-context-label') as HTMLElement | null)!.textContent = 'Project';
+      (document.getElementById('work-title') as HTMLElement | null)!.textContent = p.title;
+      switchView('console');
+      setStatus(`Opened ${p.title}.`);
+      void renderProjectsView();
+    });
+    grid.appendChild(card);
+  }
+}
+document.getElementById('projects-create')?.addEventListener('click', () => {
+  void (async () => {
+    const input = document.getElementById('projects-title') as HTMLInputElement | null;
+    const title = input?.value.trim();
+    if (!title || !currentCompany) return;
+    try {
+      const created = await apiJson<{ project: { id: string; title: string } }>(
+        `/api/companies/${encodeURIComponent(currentCompany)}/projects`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }
+      );
+      if (input) input.value = '';
+      projectNames.set(created.project.id, created.project.title);
+      connectTo(currentCompany, created.project.id);
+      (document.getElementById('rail-context-label') as HTMLElement | null)!.textContent = 'Project';
+      (document.getElementById('work-title') as HTMLElement | null)!.textContent = created.project.title;
+      switchView('console');
+      setStatus(`Project ${created.project.title} created.`);
+      void renderProjectsView();
+      void renderProjects();
+    } catch {
+      setStatus('Could not create the project.');
+    }
+  })();
 });
 
 // E-02: Sección Proyectos — el proyecto es LA unidad de contexto.

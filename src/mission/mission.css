@@ -8,7 +8,7 @@
   margin: 0;
 }
 
-/* Badge conectividad (TC 09/11): barra fina sobre las tarjetas. */
+/* Connectivity badge (TC 09/11): thin bar above the cards. */
 .mc-conn {
   grid-column: 1 / -1;
   display: flex;

@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<!-- fx/webgl-probe.html — página de prueba WebGL2, CERO dependencias.
-     Servida por vite dev en /src/fx/webgl-probe.html.
-     Qué mirar (veredicto en el reporte del track visual-wow):
-       1. La línea "webgl2:" dice OK + el RENDERER (ej. Intel UHD / llvmpipe).
-       2. 1000 puntos blancos rotan sobre fondo #0a0a0a sin tirones.
-     Si esto anda, three.js Points (orb3d.ts) anda: usa el mismo contexto. -->
-<html lang="es">
+<!-- fx/webgl-probe.html — WebGL2 test page, ZERO dependencies.
+     Served by vite dev at /src/fx/webgl-probe.html.
+     What to look at (verdict in the visual-wow track report):
+       1. The "webgl2:" line says OK + the RENDERER (e.g. Intel UHD / llvmpipe).
+       2. 1000 white points rotate over a #0a0a0a background with no stutter.
+     If this works, three.js Points (orb3d.ts) works: it uses the same context. -->
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,7 +24,7 @@
 <body>
 <main>
   <h1>fx · webgl probe</h1>
-  <pre id="out">probando…</pre>
+  <pre id="out">probing…</pre>
   <canvas id="gl" width="720" height="360"></canvas>
 </main>
 <script>
@@ -34,14 +34,14 @@ try {
   const canvas = document.getElementById('gl');
   const gl = canvas.getContext('webgl2');
   if (!gl) {
-    log.push('webgl2: FAIL (getContext devolvió null) → usar OrbMorph 2D');
+    log.push('webgl2: FAIL (getContext returned null) → use OrbMorph 2D');
   } else {
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
     const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
     log.push('webgl2: OK');
     log.push('renderer: ' + renderer);
     log.push('dpr: ' + (window.devicePixelRatio || 1));
-    // 1000 puntos en esfera Fibonacci, rotando (mismo espíritu que call-orbs).
+    // 1000 points on a Fibonacci sphere, rotating (same spirit as call-orbs).
     const N = 1000, GA = Math.PI * (3 - Math.sqrt(5)), pos = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
       const y = 1 - (2 * i + 1) / N, r = Math.sqrt(1 - y * y), t = i * GA;

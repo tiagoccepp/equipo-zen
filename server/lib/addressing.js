@@ -1,4 +1,4 @@
-// ── Contextual addressing (Equipo v2, Phase 1 / track T1) ─────────────────
+// ── Contextual addressing (v2, Phase 1 / track T1) ─────────────────────────
 // Decides whom each turn talks to: talking to me (Pablo), thinking aloud,
 // talking to someone else, or noise? Primary Jev-free, Groq fallback,
 // fail-open heuristic. Shadow by default: logs and returns legacy.

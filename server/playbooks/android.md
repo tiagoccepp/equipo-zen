@@ -1,25 +1,25 @@
-QUÉ ENTREGÁS: una APP ANDROID NATIVA que compila y corre en el emulador.
-NO una web, NO una maqueta HTML. Kotlin + Jetpack Compose, con su proyecto Gradle.
+WHAT YOU DELIVER: a NATIVE ANDROID APP that compiles and runs on the emulator.
+NOT a web page, NOT an HTML mockup. Kotlin + Jetpack Compose, with its Gradle project.
 
-ESTRUCTURA OBLIGATORIA (respetá estas rutas exactas, el motor compila con ellas):
+REQUIRED STRUCTURE (respect these exact paths, the engine compiles with them):
   settings.gradle.kts
   build.gradle.kts
   gradle.properties
   app/build.gradle.kts
   app/src/main/AndroidManifest.xml
-  app/src/main/java/<paquete>/MainActivity.kt
-  app/src/main/java/<paquete>/ui/*.kt      (pantallas y tema)
+  app/src/main/java/<package>/MainActivity.kt
+  app/src/main/java/<package>/ui/*.kt      (screens and theme)
 
-REGLAS DE LA COMPILACIÓN (si las rompés, no compila y la tarea vuelve):
-- AGP 9 ya trae Kotlin: NO apliques org.jetbrains.kotlin.android, choca.
-  Plugins: com.android.application y org.jetbrains.kotlin.plugin.compose.
+BUILD RULES (if you break them, it won't compile and the task comes back):
+- AGP 9 already includes Kotlin: do NOT apply org.jetbrains.kotlin.android, it conflicts.
+  Plugins: com.android.application and org.jetbrains.kotlin.plugin.compose.
 - compileSdk 36, minSdk 26, targetSdk 36. jvmToolchain(17).
-- Compose por BOM: platform("androidx.compose:compose-bom:2024.09.00").
-- Toda función @Composable necesita sus imports; Modifier y dp también.
-- El paquete del código y el namespace del módulo tienen que coincidir.
+- Compose via BOM: platform("androidx.compose:compose-bom:2024.09.00").
+- Every @Composable function needs its imports; Modifier and dp too.
+- The code package and the module namespace must match.
 
-DISEÑO (además del piso de calidad de abajo, que ya vale acá):
-- Material 3 con tema propio: roles de color, no colores sueltos, así el modo
-  oscuro sale solo. Modo oscuro obligatorio. Área táctil mínima 48.dp.
-- Un solo objeto inmutable de estado por pantalla, con remember/mutableStateOf.
-- Rotar no puede perder el estado. Nada pesado en el hilo principal.
+DESIGN (in addition to the quality floor below, which already applies here):
+- Material 3 with its own theme: color roles, not loose colors, so dark mode comes for free.
+  Dark mode required. Minimum touch target 48.dp.
+- A single immutable state object per screen, with remember/mutableStateOf.
+- Rotation must not lose state. Nothing heavy on the main thread.

@@ -1,12 +1,12 @@
 ---
 name: investigacion-web
-description: Buscar y citar información de la web con la acción web.
-keywords: buscar, precio, docs, documentación, web, investigar, buscar en internet, averiguar
+description: Search and cite web information using the web action.
+keywords: search, price, docs, documentation, web, research, search the internet, find out
 scope: all
 ---
 
-Cuando necesites datos frescos (precios, docs, noticias, referencias):
-1. Usá `{"action":"web","url":"https://…"}` con URLs directas y confiables (oficiales primero).
-2. Citá la fuente en tu respuesta: de dónde salió cada dato.
-3. Si la página falla, probá otra fuente antes de rendirte; nunca inventes datos.
-4. Máximo 3 lecturas por duda: si no aparece, decilo y seguí.
+When you need fresh data (prices, docs, news, references):
+1. Use `{"action":"web","url":"https://…"}` with direct, reliable URLs (official first).
+2. Cite the source in your response: where each piece of data came from.
+3. If the page fails, try another source before giving up; never invent data.
+4. Maximum 3 reads per question: if it doesn't show up, say so and move on.

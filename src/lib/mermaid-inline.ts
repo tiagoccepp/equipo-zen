@@ -1,6 +1,6 @@
-// QW-06: Mermaid inline en el chat — bloques ```mermaid validados y
-// renderizados como diagrama, con error accionable + copiar código.
-// Sin fence de mermaid el mensaje se muestra como texto plano (igual que antes).
+// QW-06: Mermaid inline in chat — validated ```mermaid blocks rendered
+// as diagrams, with actionable errors + copy code.
+// Without a mermaid fence the message renders as plain text (same as before).
 
 import { defaultFigureQueue } from './figure-queue.ts';
 
@@ -10,7 +10,7 @@ export type Segment = { t: 'text'; text: string } | { t: 'mmd'; code: string };
 
 const FENCE_RE = /```[ \t]*mermaid[ \t]*\r?\n([\s\S]*?)(?:```|$)/gi;
 
-/** Parte el mensaje en texto / bloques mermaid. Fence sin cerrar → texto. */
+/** Splits the message into text / mermaid blocks. Unclosed fence → text. */
 export function splitSegments(text: string): Segment[] {
   const out: Segment[] = [];
   let last = 0;
@@ -19,7 +19,7 @@ export function splitSegments(text: string): Segment[] {
   while ((m = FENCE_RE.exec(text)) !== null) {
     const closed = m[0].endsWith('```');
     if (!closed) {
-      // Sin cerrar: no es un bloque válido, queda como texto literal.
+      // Unclosed: not a valid block, stays as literal text.
       break;
     }
     if (m.index > last) {
@@ -34,7 +34,7 @@ export function splitSegments(text: string): Segment[] {
   if (out.length === 0) {
     out.push({ t: 'text', text });
   }
-  // Fusiona textos adyacentes (p.ej. fence sin cerrar tras uno válido).
+  // Merges adjacent text (e.g. an unclosed fence after a valid one).
   const merged: Segment[] = [];
   for (const s of out) {
     const prev = merged[merged.length - 1];
@@ -53,28 +53,28 @@ export interface MermaidErrorInfo {
   hint: string;
 }
 
-/** Error de mermaid → mensaje accionable (línea + causa probable + arreglo). */
+/** Mermaid error → actionable message (line + likely cause + fix). */
 export function mermaidErrorInfo(err: unknown, code: string): MermaidErrorInfo {
   const raw = String((err as { message?: unknown })?.message ?? err ?? '').trim();
   const lineMatch = raw.match(/line\s+(\d+)/i);
   const line = lineMatch ? Number(lineMatch[1]) : null;
   const codeLine = line && line >= 1 ? code.split('\n')[line - 1]?.trim() : '';
-  let hint = 'Revisá la sintaxis del diagrama: cada línea suele ser NodoA --> NodoB, con nombres sin espacios ni tildes.';
+  let hint = 'Check the diagram syntax: each line is usually NodeA --> NodeB, with names without spaces or accents.';
   if (/parse error|syntax/i.test(raw)) {
-    hint = 'Error de sintaxis: fijate en flechas (-->), corchetes sin cerrar o caracteres raros en los nombres. Los textos con espacios van entre comillas: A["Mi texto"].';
+    hint = 'Syntax error: check the arrows (-->), unclosed brackets or odd characters in names. Text with spaces goes in quotes: A["My text"].';
   } else if (/unknown|no diagram|diagram type/i.test(raw)) {
-    hint = 'Falta o falla la primera línea: tiene que declarar el tipo, p.ej. "graph TD", "sequenceDiagram" o "pie".';
+    hint = 'The first line is missing or broken: it must declare the type, e.g. "graph TD", "sequenceDiagram" or "pie".';
   } else if (/render|svg|dom/i.test(raw)) {
-    hint = 'Falló el dibujado (no la sintaxis): probá copiar el código y reenviarlo, o achicar el diagrama.';
+    hint = 'Rendering failed (not the syntax): try copying the code and sending it again, or make the diagram smaller.';
   }
   return {
-    title: line ? `El diagrama tiene un error en la línea ${line}` : 'No pude dibujar este diagrama',
-    detail: [codeLine ? `Línea ${line}: ${codeLine}` : '', raw.slice(0, 220)].filter(Boolean).join('\n'),
+    title: line ? `The diagram has an error on line ${line}` : 'Could not draw this diagram',
+    detail: [codeLine ? `Line ${line}: ${codeLine}` : '', raw.slice(0, 220)].filter(Boolean).join('\n'),
     hint
   };
 }
 
-/** Clipboard con fallback para webviews sin navigator.clipboard. */
+/** Clipboard with fallback for webviews without navigator.clipboard. */
 export async function copyText(text: string): Promise<boolean> {
   try {
     const nav = globalThis.navigator as Navigator | undefined;
@@ -83,7 +83,7 @@ export async function copyText(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // cae al fallback
+    // fall through to the fallback
   }
   try {
     const doc = globalThis.document;
@@ -102,7 +102,7 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-// ── Montaje DOM (inyectable para tests) ───────────────────────────────
+// ── DOM mount (injectable for tests) ──────────────────────────────────
 
 export interface MermaidApi {
   render: (id: string, code: string) => Promise<{ svg: string }>;
@@ -111,7 +111,7 @@ export interface MermaidApi {
 export interface MermaidMountCtx {
   loadMermaid: () => Promise<MermaidApi>;
   copy?: (text: string) => Promise<boolean>;
-  // M-11: cola de renders pesados (diagramas de a uno por idle).
+  // M-11: heavy render queue (diagrams one at a time while idle).
   deferHeavy?: (fn: () => void) => void;
 }
 
@@ -125,19 +125,19 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text = '
 }
 
 function copyButton(code: string, copy: (text: string) => Promise<boolean>): HTMLButtonElement {
-  const btn = el('button', 'mmd-copy', '⧉ Copiar código');
+  const btn = el('button', 'mmd-copy', '⧉ Copy code');
   btn.type = 'button';
   btn.addEventListener('click', async () => {
     const ok = await copy(code);
-    btn.textContent = ok ? '✓ Copiado' : '✗ No se pudo copiar';
+    btn.textContent = ok ? '✓ Copied' : '✗ Could not copy';
     setTimeout(() => {
-      btn.textContent = '⧉ Copiar código';
+      btn.textContent = '⧉ Copy code';
     }, 1600);
   });
   return btn;
 }
 
-/** Monta un bloque mermaid en `host`: diagrama, o error accionable + copiar. */
+/** Mounts a mermaid block in `host`: diagram, or actionable error + copy. */
 export function mountMermaid(host: HTMLElement, code: string, ctx: MermaidMountCtx): void {
   const box = el('div', 'mmd');
   const copy = ctx.copy ?? copyText;
@@ -145,13 +145,13 @@ export function mountMermaid(host: HTMLElement, code: string, ctx: MermaidMountC
     const info = mermaidErrorInfo(new Error('empty diagram'), code);
     box.classList.add('mmd-error');
     box.appendChild(el('div', 'mmd-title', info.title));
-    box.appendChild(el('div', 'mmd-hint', 'El bloque mermaid llegó vacío.'));
+    box.appendChild(el('div', 'mmd-hint', 'The mermaid block was empty.'));
     box.appendChild(copyButton(code, copy));
     host.appendChild(box);
     return;
   }
-  // M-11: skeleton con shimmer (el texto queda para lectores de pantalla).
-  const loading = el('div', 'mmd-loading fig-skeleton', '⋯ dibujando diagrama…');
+  // M-11: skeleton with shimmer (the text stays for screen readers).
+  const loading = el('div', 'mmd-loading fig-skeleton', '⋯ drawing diagram…');
   loading.setAttribute('aria-busy', 'true');
   box.appendChild(loading);
   box.appendChild(copyButton(code, copy));
@@ -163,7 +163,7 @@ export function mountMermaid(host: HTMLElement, code: string, ctx: MermaidMountC
     .then(({ svg }) => {
       loading.remove();
       const wrap = el('div', 'mmd-svg');
-      // SVG generado por la lib (securityLevel strict): único innerHTML del chat.
+      // SVG generated by the lib (securityLevel strict): the only innerHTML in chat.
       wrap.innerHTML = svg;
       box.insertBefore(wrap, box.firstChild);
     })
@@ -186,7 +186,7 @@ export function mountMermaid(host: HTMLElement, code: string, ctx: MermaidMountC
 
 let mermaidApiPromise: Promise<MermaidApi> | null = null;
 
-/** Carga diferida: mermaid (~1MB) solo se baja cuando aparece un diagrama. */
+/** Lazy load: mermaid (~1MB) is only fetched when a diagram appears. */
 export function loadMermaidReal(): Promise<MermaidApi> {
   if (!mermaidApiPromise) {
     mermaidApiPromise = import('mermaid').then((mod) => {
@@ -203,13 +203,13 @@ export function loadMermaidReal(): Promise<MermaidApi> {
   return mermaidApiPromise;
 }
 
-/** Texto → nodos: texto plano + diagramas. Sin mermaid, idéntico a antes. */
+/** Text → nodes: plain text + diagrams. Without mermaid, identical to before. */
 export function renderRichMessage(div: HTMLElement, text: string, ctx?: MermaidMountCtx): void {
   if (!/```[ \t]*mermaid/i.test(text)) {
     div.appendChild(document.createTextNode(text));
     return;
   }
-  // M-11: por defecto los diagramas del chat también van por la cola idle.
+  // M-11: by default chat diagrams also go through the idle queue.
   const mount = ctx ?? { loadMermaid: loadMermaidReal, deferHeavy: defaultDeferHeavy };
   for (const seg of splitSegments(text)) {
     if (seg.t === 'text') {

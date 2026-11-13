@@ -1,6 +1,6 @@
-// Voz Pablo: loop dinámico upstream (VAD continuo + barge-in + ducking).
-// Salida: PCM/MP3 con AnalyserNode real. Entrada: mic continuo con VAD
-// local, pre-buffer, hints ASR-navegador y barge-in (barge-in.ts verbatim).
+// Pablo voice: dynamic upstream loop (continuous VAD + barge-in + ducking).
+// Output: PCM/MP3 with a real AnalyserNode. Input: continuous mic with local
+// VAD, pre-buffer, browser-ASR hints and barge-in (barge-in.ts verbatim).
 
 import { evaluateBargeIn, idleBargeInState, trimPreBuffer, type BargeInState } from './lib/barge-in.ts';
 
@@ -15,8 +15,8 @@ function base64ToBytes(base64: string): Uint8Array {
 
 export class VoiceOut {
   onDrained: (() => void) | null = null;
-  // QW-07: se dispara al agendar cada chunk (inicio audible real ≈ +20ms).
-  // El tag viaja opaco (el servidor etiqueta oraciones con sIdx/sText).
+  // QW-07: fires when each chunk is scheduled (real audible start ≈ +20ms).
+  // The tag travels opaque (the server tags sentences with sIdx/sText).
   onChunkStart: ((tag: unknown) => void) | null = null;
   levelAvailable = false;
 
@@ -26,12 +26,12 @@ export class VoiceOut {
   private frame: Float32Array<ArrayBuffer> | null = null;
   private active = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
-  // TF fluidez: cadena de reproducción en orden de llegada. Sin esto, dos
-  // MP3 seguidos se decodifican en paralelo y el más corto se agenda
-  // primero (orden roto + baches). Todo decode+schedule pasa por acá.
+  // TF fluency: playback chain in arrival order. Without this, two
+  // back-to-back MP3s decode in parallel and the shorter one gets scheduled
+  // first (broken order + gaps). All decode+schedule goes through here.
   private playChain: Promise<void> = Promise.resolve();
-  // Época anti-stale: flush() (barge-in) la avanza y lo que ya estaba
-  // encolado/decodificando se descarta en vez de sonar tarde.
+  // Anti-stale epoch: flush() (barge-in) advances it and whatever was already
+  // queued/decoding is dropped instead of playing late.
   private epoch = 0;
 
   private ensure(): AudioContext {
@@ -40,7 +40,7 @@ export class VoiceOut {
     }
     const ctx = new AudioContext();
     this.master = ctx.createGain();
-    // Analizador DESPUÉS del gain: el ducking también aplaca la UI.
+    // Analyser AFTER the gain: ducking also quiets the UI.
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 512;
     this.analyser.smoothingTimeConstant = 0;
@@ -81,7 +81,7 @@ export class VoiceOut {
     for (let i = 0; i < samples.length; i += 1) {
       channel[i] = Math.max(-1, Math.min(1, samples[i] / 32768));
     }
-    if (at !== this.epoch) return; // flush() en el medio: descartar.
+    if (at !== this.epoch) return; // flush() in the middle: drop it.
     this.schedule(buffer, tag);
   }
 
@@ -104,7 +104,7 @@ export class VoiceOut {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     const buffer = await ctx.decodeAudioData(copy.buffer);
-    if (at !== this.epoch) return; // flush() en el medio: descartar.
+    if (at !== this.epoch) return; // flush() in the middle: drop it.
     this.schedule(buffer, tag);
   }
 
@@ -127,7 +127,7 @@ export class VoiceOut {
       try {
         this.onChunkStart?.(tag);
       } catch {
-        // El revelado de texto jamás rompe el audio.
+        // Text reveal must never break the audio.
       }
     }
   }
@@ -140,7 +140,7 @@ export class VoiceOut {
     return this.active.size > 0;
   }
 
-  /** Amplitud REAL (0..1). Curva medida del TTS: voz 0.03-0.06, énfasis 0.09. */
+  /** REAL amplitude (0..1). Measured TTS curve: voice 0.03-0.06, emphasis 0.09. */
   level(): number {
     if (!this.analyser || !this.frame || this.context?.state !== 'running') {
       return 0;
@@ -157,26 +157,26 @@ export class VoiceOut {
     return Math.min(1, Math.pow(rms / 0.09, 0.7));
   }
 
-  /** Corta TODO sin cerrar el contexto (barge-in). No dispara onDrained. */
+  /** Cuts EVERYTHING without closing the context (barge-in). Does not fire onDrained. */
   flush(): void {
     for (const source of this.active) {
       source.onended = null;
       try {
         source.stop();
       } catch {
-        // Ya detenido.
+        // Already stopped.
       }
     }
     this.active.clear();
-    this.epoch += 1; // lo encolado/decodificando queda stale y se descarta.
+    this.epoch += 1; // queued/decoding work goes stale and is dropped.
     if (this.context) {
       this.nextStart = this.context.currentTime;
     }
   }
 
-  /** QW-09: earcon "trabajando" — dos senos suaves, sin tocar la cadena de
-   *  habla (no consume nextStart ni entra a `active`: jamás dispara
-   *  onDrained ni mueve el gate). */
+  /** QW-09: "working" earcon — two soft sine tones, without touching the
+   *  speech chain (doesn't consume nextStart or enter `active`: never fires
+   *  onDrained or moves the gate). */
   playWorkingEarcon(): void {
     try {
       const ctx = this.ensure();
@@ -199,14 +199,14 @@ export class VoiceOut {
         osc.stop(t0 + offset + 0.25);
       }
     } catch {
-      // Sin audio: silencio, nunca una excepción.
+      // No audio: silence, never an exception.
     }
   }
 
   duck(): void {
-    // Duck suave (0.5, no 0.2) y transiciones lentas: el duck profundo y
-    // rápido se escuchaba como si Pablo se alejara y acercara al micrófono
-    // cada vez que el ambiente rozaba el umbral.
+    // Gentle duck (0.5, not 0.2) and slow transitions: deep, fast ducking
+    // sounded like Pablo moving away from and back toward the mic
+    // every time the room noise touched the threshold.
     if (this.master && this.context) {
       this.master.gain.setTargetAtTime(0.5, this.context.currentTime, 0.08);
     }
@@ -233,8 +233,8 @@ export interface TurnVoiceStats {
   bargeInterrupts: number;
   floor: number;
   startEff: number;
-  // Fase 1 (§3a): los completa app.ts al resolver la gracia, cuando ya
-  // se sabe si el habla se reabrió dentro de la ventana.
+  // Phase 1 (§3a): app.ts fills these in when resolving the grace period,
+  // once it knows whether speech reopened inside the window.
   reopened?: boolean;
   hintEnd?: string;
 }
@@ -253,67 +253,67 @@ export interface LiveMicOptions {
   isAgentSpeaking: () => boolean;
   hintText: () => string;
   resetHint: () => void;
-  // Endpointing adaptativo (§3a): ¿hubo barge/interrupt en los últimos
-  // 2 turnos? Lo lleva app.ts (ve los dos caminos de corte). Sin esto,
-  // el VAD asume que no (default conservador).
+  // Adaptive endpointing (§3a): were there barge/interrupt events in the last
+  // 2 turns? app.ts tracks it (it sees both cutoff paths). Without this,
+  // the VAD assumes no (conservative default).
   recentBarge?: () => boolean;
 }
 
 export interface MicTuning {
   sensitivity: number;
   endSilenceMs: number;
-  // Puerta de descarte: bajo esto y sin hint el turno se tira como ruido.
-  // 250 ms porque una sílaba ("sí", "no", "dale": 200-400 ms acústicos)
-  // menos el onset (4 frames × 30 ms = 120 ms) cuenta 150-300 ms; con 600
-  // el desktop (sin Web Speech API → sin hint) era sordo a toda respuesta
-  // corta. El juez real del ruido es Silero en el servidor (~12 ms medidos),
-  // esto solo evita viajes inútiles. NO confundir con CONFIRM_SPEECH_MS.
+  // Discard gate: below this and without a hint the turn is dropped as noise.
+  // 250 ms because one syllable (e.g. "yes", "no", "ok": ~200-400 ms acoustic)
+  // minus the onset (4 frames × 30 ms = 120 ms) counts 150-300 ms; with 600
+  // the desktop (no Web Speech API → no hint) was deaf to any short
+  // answer. The real noise judge is Silero on the server (~12 ms measured),
+  // this only avoids useless round trips. Do NOT confuse with CONFIRM_SPEECH_MS.
   minSpeechMs: number;
 }
 
 export const MIC_NORMAL: MicTuning = { sensitivity: 55, endSilenceMs: 800, minSpeechMs: 250 };
 
-// Habla sostenida para confirmar (cortar al agente / dar el turno por real).
-// Queda en 600: una tos (150-250 ms) jamás debe interrumpir. Desacoplado de
-// minSpeechMs (09/11: descarte 600→250) para no abrir cortes fantasma.
+// Sustained speech to confirm (cut the agent / treat the turn as real).
+// Stays at 600: a cough (150-250 ms) must never interrupt. Decoupled from
+// minSpeechMs (09/11: discard 600→250) to avoid phantom cutoffs.
 export const CONFIRM_SPEECH_MS = 600;
 
-// ── Endpointing adaptativo (§3a) ────────────────────────────────────
-// Decisión pura y testeable: cuánto silencio cierra el habla y cuánta
-// gracia espera después, según lo que se lleva escuchado del turno.
-// Base 800/1000 (endSilence histórico; gracia recortada de 1200 el 09/11
-// tras medir que la espera VAD+gracia era el 85% del stop→transcript).
-// Solo se mueve el umbral cuando la señal es clara. Ante la duda, no cortar.
+// ── Adaptive endpointing (§3a) ──────────────────────────────────────
+// Pure, testable decision: how much silence closes speech and how much
+// grace it waits afterwards, based on what has been heard this turn.
+// Base 800/1000 (historical endSilence; grace trimmed from 1200 on 09/11
+// after measuring VAD+grace wait was 85% of stop→transcript).
+// The threshold only moves when the signal is clear. When in doubt, don't cut.
 
 export const END_SILENCE_BASE_MS = 800;
 export const END_SILENCE_FAST_MS = 575;
-// Lento 1100→900 (09/11): la gracia con reapertura ya protege los cortes,
-// y 900+1000=1900 ms de pausa tolerada sigue 3× sobre la pausa fluida
-// (<600 ms). Ahorra 200 ms en cada turno corto, que es el caso común.
+// Slow 1100→900 (09/11): grace with reopening already protects cutoffs,
+// and 900+1000=1900 ms of tolerated pause is still 3× the fluent pause
+// (<600 ms). Saves 200 ms on every short turn, which is the common case.
 export const END_SILENCE_SLOW_MS = 900;
-// Gracia 1200→1000 (09/11): mismo argumento (medido: 85% del stop→transcript
-// era espera VAD+gracia, no STT). app.ts la consume vía computeEndpointing;
-// su fallback local GRACE_MS quedó alineado a 1000 en el ship.
+// Grace 1200→1000 (09/11): same argument (measured: 85% of stop→transcript
+// was VAD+grace wait, not STT). app.ts consumes it via computeEndpointing;
+// its local GRACE_MS fallback was aligned to 1000 at ship time.
 export const GRACE_BASE_MS = 1000;
 export const GRACE_FAST_MS = 600;
 
-// Habla clara para acortar: RMS muy por encima del piso y con nivel mínimo.
+// Clear speech to shorten: RMS well above the floor and with a minimum level.
 const FAST_MIN_SNR = 3;
 const FAST_MIN_MAX_RMS = 0.05;
 const FAST_MAX_FLOOR = 0.025;
-// Piso alto: el silencio medido es poco fiable, no se acorta nada.
+// High floor: measured silence is unreliable, nothing gets shortened.
 const FLOOR_HIGH = 0.03;
-// Palabras de cierre: la frase ya está completa aunque no haya punto.
+// Closing words: the sentence is complete even without a period.
 const CLOSING_WORDS = new Set(['gracias', 'chau', 'dale']);
-// Funcionales: la frase está a medio armar, seguro sigue.
+// Function words: the sentence is half-built, it surely continues.
 const FUNCTION_WORDS = new Set(['el', 'la', 'de', 'que', 'y', 'para', 'un']);
 
-/** Últimos 20 chars del hint: telemetría compacta para calibrar. */
+/** Last 20 chars of the hint: compact telemetry for calibration. */
 export function hintTail(hint: string): string {
   return hint.slice(-20);
 }
 
-// Normaliza para comparar palabras (el ASR a veces manda "si" sin tilde).
+// Normalizes for word comparison (ASR sometimes sends "si" without the accent).
 function normWord(word: string): string {
   return word
     .normalize('NFD')
@@ -326,7 +326,7 @@ function tailWords(hintEnd: string): string[] {
   return hintEnd.trim().split(/\s+/).map(normWord).filter(Boolean);
 }
 
-/** ¿El hint suena a frase terminada? Punto/signo, cierre o sí-no aislado. */
+/** Does the hint sound like a finished sentence? Punctuation, closing word or isolated yes/no. */
 export function isTerminalHint(hintEnd: string): boolean {
   const trimmed = hintEnd.trim();
   if (!trimmed) {
@@ -343,11 +343,11 @@ export function isTerminalHint(hintEnd: string): boolean {
   if (CLOSING_WORDS.has(last)) {
     return true;
   }
-  // sí/no aislado: el turno entero es la respuesta.
+  // isolated yes/no: the whole turn is the answer.
   return words.length === 1 && (last === 'si' || last === 'no');
 }
 
-/** ¿El hint quedó en palabra funcional? La frase sigue, no cortar. */
+/** Did the hint end on a function word? The sentence continues, don't cut. */
 export function endsFunctional(hintEnd: string): boolean {
   const words = tailWords(hintEnd);
   if (words.length === 0) {
@@ -370,16 +370,16 @@ export interface EndpointingDecision {
 }
 
 /**
- * Umbrales de cierre para el turno en curso. Rápido solo cuando TODO
- * acompaña (turno largo + frase completa + habla clara); lento ante
- * cualquier duda (turno corto, frase a medias, cortes recientes o ruido).
+ * Closing thresholds for the current turn. Fast only when EVERYTHING
+ * lines up (long turn + complete sentence + clear speech); slow on
+ * any doubt (short turn, half sentence, recent cutoffs or noise).
  */
 export function computeEndpointing(input: EndpointingInput): EndpointingDecision {
   const { speechMs, hintEnd, floor, maxRms, recentBarge } = input;
   const terminal = isTerminalHint(hintEnd);
   const longTurn = speechMs > 2500;
 
-  // Lento gana: ante la duda, no cortar.
+  // Slow wins: when in doubt, don't cut.
   const slow = speechMs < 1500
     || endsFunctional(hintEnd)
     || recentBarge
@@ -388,15 +388,15 @@ export function computeEndpointing(input: EndpointingInput): EndpointingDecision
     return { endSilenceMs: END_SILENCE_SLOW_MS, graceMs: GRACE_BASE_MS };
   }
 
-  // Rápido solo con habla clara además de frase completa + turno largo.
+  // Fast only with clear speech on top of a complete sentence + long turn.
   const clearSpeech = floor <= FAST_MAX_FLOOR
     && maxRms >= FAST_MIN_MAX_RMS
     && maxRms >= floor * FAST_MIN_SNR;
   if (longTurn && terminal && clearSpeech) {
     return { endSilenceMs: END_SILENCE_FAST_MS, graceMs: GRACE_FAST_MS };
   }
-  // Gracia corta con frase completa + turno largo aunque el audio no sea
-  // nítido: el VAD ya cerró, solo se acorta la espera posterior.
+  // Short grace with a complete sentence + long turn even if the audio isn't
+  // crisp: the VAD already closed, only the following wait is shortened.
   if (longTurn && terminal) {
     return { endSilenceMs: END_SILENCE_BASE_MS, graceMs: GRACE_FAST_MS };
   }
@@ -410,10 +410,10 @@ function thresholds(sensitivity: number): { start: number; cont: number } {
 }
 
 /**
- * Micrófono continuo upstream: queda prendido; el VAD abre/cierra turnos
- * por RMS. Mientras un agente habla, cada frame pasa por el barge-in:
- * duck reversible → interrupt confirmado. Pre-buffer de 640 ms para que
- * la frase que corta llegue entera.
+ * Continuous upstream mic: stays on; the VAD opens/closes turns
+ * by RMS. While an agent speaks, every frame goes through barge-in:
+ * reversible duck → confirmed interrupt. 640 ms pre-buffer so the
+ * interrupting phrase arrives whole.
  */
 export class LiveMic {
   private opts: LiveMicOptions;
@@ -456,7 +456,7 @@ export class LiveMic {
     return this.speaking;
   }
 
-  /** Vuelve el barge-in a reposo (el orbe usa bargePhase para la energía). */
+  /** Returns barge-in to rest (the orb uses bargePhase for energy). */
   resetBarge(): void {
     this.barge = idleBargeInState();
     this.bargePhase = 'idle';
@@ -479,7 +479,7 @@ export class LiveMic {
       try {
         await ctx.resume();
       } catch {
-        // Sin gesto previo; igual seguimos.
+        // No prior gesture; continue anyway.
       }
     }
     try {
@@ -508,8 +508,8 @@ export class LiveMic {
     this.calib = [];
     this.floor = 0;
     this.lastFrameAt = performance.now();
-    // Watchdog: si los frames se cortan (o el turno se eterniza) hablando,
-    // se fuerza el cierre. Sin esto, WebKit trabado = "grabando" eterno.
+    // Watchdog: if frames stop (or the turn drags on) while speaking,
+    // closing is forced. Without this, a stuck WebKit = eternal "recording".
     if (this.watchdog !== null) {
       window.clearInterval(this.watchdog);
     }
@@ -557,7 +557,7 @@ export class LiveMic {
 
   private handlePcm(buf: ArrayBuffer): void {
     const pcm = new Int16Array(buf);
-    // RMS normalizado (misma escala que el worklet upstream).
+    // Normalized RMS (same scale as the upstream worklet).
     let sum = 0;
     for (let i = 0; i < pcm.length; i += 1) {
       const v = pcm[i] / 32768;
@@ -565,25 +565,25 @@ export class LiveMic {
     }
     const rms = pcm.length > 0 ? Math.sqrt(sum / pcm.length) : 0;
     this.lastFrameAt = performance.now();
-    // Piso de ruido adaptativo: arranque rápido (20 frames) + seguimiento
-    // lento del ambiente mientras no hay habla ni agente sonando. Sin esto,
-    // el autoGain del mic y los cambios de ambiente dejaban el umbral
-    // clavado y cualquier ruido cortaba al agente.
+    // Adaptive noise floor: fast start (20 frames) + slow tracking
+    // of the room while there is no speech or agent sound. Without this,
+    // mic autoGain and room changes left the threshold pinned
+    // and any noise cut the agent.
     if (!this.speaking && !this.opts.isAgentSpeaking()) {
       if (this.calib.length < 20) {
         this.calib.push(rms);
         if (this.calib.length === 20) {
           const sorted = [...this.calib].sort((a, b) => a - b);
-          // Tope: si el usuario habló durante la calibración, no arruinar el próximo turno.
+          // Cap: if the user spoke during calibration, don't ruin the next turn.
           this.floor = Math.min(sorted[17] * 2.2, 0.04);
         }
       } else {
-        // Seguidor lento (tau ~6s): sube y baja con el ambiente real.
+        // Slow tracker (tau ~6s): rises and falls with the actual room.
         this.floor = Math.min(0.04, Math.max(0, this.floor + (rms - this.floor) * 0.01));
       }
     }
     const durationMs = (pcm.length / 16000) * 1000;
-    // Base64 del PCM crudo.
+    // Base64 of the raw PCM.
     const bytes = new Uint8Array(buf);
     let bin = '';
     for (let i = 0; i < bytes.length; i += 8192) {
@@ -592,7 +592,7 @@ export class LiveMic {
     const data = btoa(bin);
 
     const { start, cont } = thresholds(this.tuning.sensitivity);
-    // El piso ambiente manda si supera al umbral teórico (mic ruidoso).
+    // The room floor wins if it exceeds the theoretical threshold (noisy mic).
     const contEff = Math.max(cont, this.floor);
     const startEff = Math.max(start, this.floor * 1.4);
     const now = performance.now();
@@ -602,7 +602,7 @@ export class LiveMic {
       this.opts.onMeter?.(rms, this.speaking);
     }
 
-    // Barge-in: el mic sigue vivo mientras el agente habla.
+    // Barge-in: the mic stays live while the agent speaks.
     const decision = evaluateBargeIn(this.barge, {
       rms,
       durationMs,
@@ -617,7 +617,7 @@ export class LiveMic {
       this.bargePhase = 'cut';
       this.opts.onDuck(false);
       this.opts.onInterrupt();
-      // Sigue el flujo normal: este chunk abre el turno de la persona.
+      // Normal flow continues: this chunk opens the person's turn.
     } else if (decision.duck) {
       this.totalDuckFrames += 1;
       this.bargePhase = 'listening';
@@ -635,8 +635,8 @@ export class LiveMic {
     if (!this.speaking) {
       this.preBuffer.push({ data, durationMs });
       this.preBuffer = trimPreBuffer(this.preBuffer);
-      // Confirmación de arranque: el habla real sostiene el nivel varios
-      // frames; un click de teclado es 1-3 frames y muere acá.
+      // Onset confirmation: real speech holds the level for several
+      // frames; a keyboard click is 1-3 frames and dies here.
       if (rms >= startEff) {
         this.onsetFrames += 1;
       } else {
@@ -652,7 +652,7 @@ export class LiveMic {
         this.turnStartEff = startEff;
         this.opts.resetHint();
         this.opts.onSpeechStart();
-        // Flush del pre-buffer: no se pierde el ataque.
+        // Flush the pre-buffer: the attack is not lost.
         for (const buffered of this.preBuffer) {
           this.opts.onChunk(buffered.data);
         }
@@ -664,9 +664,9 @@ export class LiveMic {
     this.opts.onChunk(data);
     this.speechMs += durationMs;
     if (rms > this.turnMaxRms) this.turnMaxRms = rms;
-    // Habla sostenida: el turno ya es real (CONFIRM no lo va a frenar y
-    // minSpeechMs no lo va a descartar) — avisar una vez para que el
-    // interrupt corte acá y no con cualquier tos que apenas abre el VAD.
+    // Sustained speech: the turn is real now (CONFIRM won't stop it and
+    // minSpeechMs won't discard it) — notify once so the
+    // interrupt cuts here and not on any cough that barely opens the VAD.
     if (!this.confirmed && this.speechMs >= CONFIRM_SPEECH_MS) {
       this.confirmed = true;
       this.opts.onSpeechConfirmed(Math.round(this.speechMs));
@@ -677,9 +677,9 @@ export class LiveMic {
       this.silenceMs = 0;
     }
 
-    // Endpointing adaptativo (§3a): el silencio que cierra se decide por
-    // frame según habla acumulada + hint + piso. La base (800) es idéntica
-    // a MIC_NORMAL; solo se mueve con señal clara.
+    // Adaptive endpointing (§3a): the closing silence is decided per
+    // frame from accumulated speech + hint + floor. The base (800) is identical
+    // to MIC_NORMAL; it only moves with a clear signal.
     const endpointing = computeEndpointing({
       speechMs: this.speechMs,
       hintEnd: hintTail(this.opts.hintText()),
@@ -692,7 +692,7 @@ export class LiveMic {
     }
   }
 
-  /** Cierre único del turno (VAD, watchdog o tope): idempotente. */
+  /** Single turn close (VAD, watchdog or cap): idempotent. */
   private endSpeech(hint: string): void {
     if (!this.speaking) {
       return;
@@ -702,7 +702,7 @@ export class LiveMic {
     this.opts.onMeter?.(0, false);
     const speechMs = Math.round(this.speechMs);
     this.speechMs = 0;
-    // Stats del turno para telemetría (afinar umbrales con datos reales).
+    // Turn stats for telemetry (tune thresholds with real data).
     this.opts.onTurnStats?.({
       speechMs,
       maxRms: Math.round(this.turnMaxRms * 10000) / 10000,
@@ -711,8 +711,8 @@ export class LiveMic {
       floor: Math.round(this.floor * 10000) / 10000,
       startEff: Math.round(this.turnStartEff * 10000) / 10000
     });
-    // Descarte: sin hint y bajo minSpeechMs (250) es un ruidito (clicks mueren
-    // en el onset; toses cortas acá). Lo más largo va al servidor y decide Silero.
+    // Discard: no hint and below minSpeechMs (250) is a tiny noise (clicks die
+    // at onset; short coughs here). Anything longer goes to the server and Silero decides.
     if (!hint && speechMs < this.tuning.minSpeechMs) {
       this.opts.resetHint();
       this.opts.onDiscarded();
@@ -722,7 +722,7 @@ export class LiveMic {
   }
 }
 
-// ── ASR del navegador (red de seguridad: hint para el STT) ────────────
+// ── Browser ASR (safety net: hint for the STT) ────────────────────────
 
 export class BrowserSpeech {
   private recognition: any = null;

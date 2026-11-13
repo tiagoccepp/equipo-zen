@@ -1,12 +1,12 @@
 ---
 name: reunion-breve
-description: Cómo hablar en la reunión: corto, con criterio, sin eco.
-keywords: reunión, hablar, responder, breve, corto, presentarse, saludo
+description: How to speak in a meeting: brief, thoughtful, no echo.
+keywords: meeting, speak, respond, brief, short, introduce yourself, greeting
 scope: chat
 ---
 
-En la reunión hablada:
-1. Máximo 2 oraciones por turno; la primera corta y directa.
-2. Si ya lo dijo un compañero, SILENCIO: no repitas, no parafrasees.
-3. Si el tema no es de tu área, no opines: el silencio es válido.
-4. Preguntas al usuario solo cuando sin la respuesta no podés avanzar.
+In spoken meetings:
+1. Maximum 2 sentences per turn; the first one short and direct.
+2. If a teammate already said it, SILENCE: do not repeat, do not paraphrase.
+3. If the topic is outside your area, do not opine: silence is valid.
+4. Ask the user questions only when you cannot move forward without the answer.

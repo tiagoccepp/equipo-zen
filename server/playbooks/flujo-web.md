@@ -1,15 +1,15 @@
-FLUJO (este orden, sin saltear):
-1. Si no hay tokens.css, escribilo primero: paleta, escala, espaciado, radios.
-2. index.html COMPLETO de una vez: estructura, contenido real y CSS. No por partes.
-3. Recién después la interacción y lo que falte, con edit_file sobre lo que ya está.
-4. ANTES de finish: si separaste el JS, comando `node --check app.js`; y read_file del
-   principal, que no queden marcadores, secciones vacías ni relleno.
-5. finish con el resumen y los archivos.
+FLOW (this order, do not skip):
+1. If tokens.css does not exist, write it first: palette, scale, spacing, radii.
+2. index.html COMPLETE in one go: structure, real content, and CSS. Not in parts.
+3. Only after that add interaction and what's missing, using edit_file on what exists.
+4. BEFORE finish: if you separated JS, run `node --check app.js`; and read_file the
+   main file to ensure no markers, empty sections, or placeholders.
+5. finish with the summary and files.
 
-ERRORES DE SIEMPRE:
-- Crear index2.html o pagina-nueva.html en vez de editar el que ya existe.
-- Colores o medidas a mano teniendo tokens.css: van con var(--…).
-- Dejar href="#", "Lorem ipsum" o "Servicio 1": el verificador los rechaza.
+COMMON MISTAKES:
+- Creating index2.html or new-page.html instead of editing the existing one.
+- Hardcoded colors or measurements when tokens.css exists: use var(--…).
+- Leaving href="#", "Lorem ipsum", or "Service 1": the verifier rejects them.
 
-NO ITERAR: si la sección cumple el piso de diseño y tiene contenido real, está lista.
-No la rehagas porque la harías distinta: gastás los pasos que faltan para cerrar.
+DO NOT ITERATE: if the section meets the design floor and has real content, it's ready.
+Don't redo it because you'd make it different: you waste steps needed to close.

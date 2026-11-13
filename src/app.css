@@ -77,10 +77,10 @@ body {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(70rem 30rem at 50% -12%, rgba(120, 140, 160, 0.055), transparent 68%),
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 40px),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 40px);
-  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.35) 55%, transparent 100%);
+    radial-gradient(70rem 30rem at 50% -12%, rgba(95, 180, 156, 0.06), transparent 68%),
+    repeating-linear-gradient(0deg, rgba(95, 180, 156, 0.018) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(95, 180, 156, 0.018) 0 1px, transparent 1px 40px);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.4) 60%, transparent 100%);
 }
 
 /* ── Top bar ── */
@@ -1404,7 +1404,8 @@ body .fx-palette .fx-foot {
 
   .orbs {
     flex: none;
-    width: 170px;
+    width: 340px;
+    max-width: 54vw;
     min-height: 0;
     height: 100%;
   }
@@ -1540,7 +1541,20 @@ body .fx-palette .fx-foot {
 
   .orbs {
     width: 100%;
-    height: 92px;
+    max-width: none;
+    height: 124px;
+  }
+
+  .stage-text {
+    padding: 4px 14px 10px;
+  }
+
+  .orb-cell {
+    gap: 4px;
+  }
+
+  .orb-name {
+    font-size: 8.5px;
   }
 
   .stage-text {
@@ -1566,3 +1580,35 @@ body .fx-palette .fx-foot {
   .view { animation: none; }
   * { transition: none !important; }
 }
+
+/* J.A.B.S — Projects view */
+.view-projects { padding: 20px 24px; overflow: auto; }
+.projects-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.view-title { margin: 0; font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.02em; }
+.view-lead { margin: 4px 0 0; color: var(--muted); font-size: 13px; max-width: 60ch; }
+.project-new-inline { display: flex; gap: 8px; align-items: center; }
+.project-new-inline input { min-width: 240px; }
+.send-compact { padding: 8px 12px; font-size: 12px; }
+.projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.project-card { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 14px 12px; cursor: pointer; color: var(--ink); transition: border-color .15s ease, transform .15s ease, background .15s ease; }
+.project-card:hover { border-color: var(--accent-dim, #3d7466); background: var(--panel-2); transform: translateY(-1px); }
+.project-card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.project-card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.project-card-meta { font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.projects-empty { color: var(--muted); font-size: 13px; padding: 24px 4px; grid-column: 1 / -1; }
+.rail-act[data-goto="projects"] { background: transparent; border: 0; color: var(--muted); font: inherit; cursor: pointer; padding: 0; }
+.rail-act[data-goto="projects"]:hover { color: var(--ink); }
+
+/* J.A.B.S — Settings layout */
+.settings-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 20px 24px 8px; flex-wrap: wrap; }
+.settings-head .settings-tools { margin: 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 8px 24px 24px; align-content: start; }
+.settings-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+.settings-card-wide { grid-column: 1 / -1; }
+.settings-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.settings-card-head h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: 0.01em; }
+.settings-card-head span { font-size: 12px; color: var(--muted); }
+.settings-card details.companies { margin: 8px 0 0; }
+.settings-note { color: var(--muted); font-size: 12px; line-height: 1.5; padding: 8px 2px 2px; }
+.view-settings { overflow: auto; }
+@media (max-width: 1020px) { .settings-grid { grid-template-columns: 1fr; } .settings-card-wide { grid-column: auto; } }

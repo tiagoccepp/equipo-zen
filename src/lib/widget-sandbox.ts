@@ -1,7 +1,7 @@
 // F-10b: widgets sandbox (cliente) — iframe aislado para HTML de agentes.
 // sandbox="" (sin scripts/same-origin/forms) + sanitize en ambos lados.
 
-// F-10b (núcleo compartido): sanitize de widgets para servidor y cliente.
+// F-10b (shared core): widget sanitizer for server and client.
 
 export const WIDGET_MAX_HTML = 8 * 1024;
 

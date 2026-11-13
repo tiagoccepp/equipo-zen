@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>J.A.B.S Presence Demo</title>
+    <link rel="stylesheet" href="/src/presence/presence.css" />
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0e1013;
+        color: #e8eaed;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .demo-bar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #24282f;
+        background: #13161a;
+      }
+      .demo-left { display: flex; align-items: center; gap: 10px; }
+      .demo-title { font-size: 12px; color: #9ba3ad; letter-spacing: 0.06em; }
+      .demo-controls { display: inline-flex; gap: 8px; }
+      .demo-controls button {
+        appearance: none;
+        border: 1px solid #24282f;
+        background: #0e1013;
+        color: #e8eaed;
+        font: inherit;
+        font-size: 11px;
+        padding: 6px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .demo-controls button.active,
+      .demo-controls button:hover { border-color: #5fb49c; color: #5fb49c; }
+      .demo-body { padding: 18px 14px 40px; max-width: 900px; }
+      .demo-note { color: #9ba3ad; font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
+      pre {
+        margin: 0;
+        padding: 12px;
+        border: 1px solid #24282f;
+        background: #13161a;
+        border-radius: 6px;
+        color: #9ba3ad;
+        font-size: 12px;
+        overflow: auto;
+      }
+      .presence-briefing { position: absolute; top: 56px; right: 14px; }
+      .demo-stage { position: relative; min-height: 520px; }
+    </style>
+  </head>
+  <body>
+    <header class="demo-bar">
+      <div class="demo-left">
+        <div class="demo-title">J.A.B.S PRESENCE DEMO</div>
+        <div id="hud-mount"></div>
+      </div>
+      <div class="demo-controls" aria-label="Scenarios">
+        <button type="button" data-scenario="calm" class="active">Calm</button>
+        <button type="button" data-scenario="attention">Attention</button>
+        <button type="button" data-scenario="blocker">Blocker</button>
+      </div>
+    </header>
+    <main class="demo-body demo-stage">
+      <div id="briefing-mount"></div>
+      <p class="demo-note">Synthetic scenarios for the HUD and briefing panel. Switch states to inspect calm, attention, and blocker conditions. No backend required.</p>
+      <pre id="scenario-json"></pre>
+    </main>
+    <script type="module">
+      import { createPresenceHud } from '/src/presence/hud.ts';
+      import { createBriefingPanel } from '/src/presence/briefing.ts';
+      import { detectSignals, summarize } from '/src/presence/signals.ts';
+
+      const NOW = Date.parse('2026-11-13T12:00:00.000Z');
+      const LAST_SEEN = NOW - 42 * 60 * 1000;
+
+      const scenarios = {
+        calm: {
+          now: NOW,
+          fetchedAt: NOW,
+          latencyMs: 96,
+          live: { live: [] },
+          work: { team: [{ id: 'a1', name: 'Pablo', status: 'idle' }], goals: [{ id: 'g1', title: 'Ops', tasks: [{ id: 't1', text: 'Watch queue', status: 'done', completedAt: NOW - 3 * 60 * 60 * 1000 }] }], runs: [] },
+          jobs: [],
+          approvals: [],
+          connectivity: { status: 'online', checks: [{ name: 'api', ok: true, ms: 84 }] },
+          autoWorkOn: false,
+          queueDepth: 0,
+          lastActivityAt: NOW - 3 * 60 * 60 * 1000
+        },
+        attention: {
+          now: NOW,
+          fetchedAt: NOW,
+          latencyMs: 520,
+          live: { live: [] },
+          work: { team: [{ id: 'a1', name: 'Pablo', status: 'idle' }], goals: [{ id: 'g1', title: 'Ops', tasks: [{ id: 't1', text: 'Queue processor', status: 'queued' }, { id: 't2', text: 'Long sync', status: 'in_progress', startedAt: NOW - 26 * 60 * 1000, agentId: 'a1' }] }], runs: [] },
+          jobs: [{ id: 'j1', estado: 'queued', brief: { objetivo: 'Nightly digest' } }],
+          approvals: [],
+          connectivity: { status: 'degraded', checks: [{ name: 'api', ok: true, ms: 520 }] },
+          autoWorkOn: true,
+          queueDepth: 2,
+          lastActivityAt: NOW - 8 * 60 * 1000
+        },
+        blocker: {
+          now: NOW,
+          fetchedAt: NOW,
+          latencyMs: 1440,
+          live: { live: [{ meetingId: 'm1', companyName: 'Equipo', team: [{ id: 'a1', name: 'Pablo', status: 'idle' }] }] },
+          work: { team: [{ id: 'a1', name: 'Pablo', status: 'idle' }], goals: [{ id: 'g1', title: 'Release', tasks: [{ id: 't1', text: 'Publish artifacts', status: 'blocked', blockedReason: 'missing signing key' }, { id: 't2', text: 'Generate changelog', status: 'completed', completedAt: NOW - 20 * 60 * 1000 }] }], runs: [] },
+          jobs: [{ id: 'j1', estado: 'failed', brief: { objetivo: 'Build release package' }, motivo: 'exit 1' }],
+          approvals: [{ id: 'ap1', status: 'pending', title: 'Approve production deploy' }],
+          connectivity: { status: 'degraded', checks: [{ name: 'api', ok: true, ms: 1440 }] },
+          autoWorkOn: true,
+          queueDepth: 1,
+          lastActivityAt: NOW - 2 * 60 * 1000
+        }
+      };
+
+      const hud = createPresenceHud({
+        mount: document.getElementById('hud-mount'),
+        now: () => NOW,
+        onBriefingToggle: (open) => { if (open) panel.open(); else panel.close(); }
+      });
+      const panel = createBriefingPanel({ mount: document.getElementById('briefing-mount'), now: () => NOW });
+      const jsonEl = document.getElementById('scenario-json');
+
+      function deriveHud(snapshot, signals) {
+        const team = snapshot.work?.team || [];
+        const activeStates = new Set(['working', 'busy', 'active', 'in_progress', 'speaking', 'thinking']);
+        const agentsWorking = team.filter((a) => activeStates.has(String(a.status || a.state || '').toLowerCase())).length;
+        const liveTeam = new Set();
+        for (const m of snapshot.live?.live || []) for (const a of m.team || []) liveTeam.add(a.id || a.name);
+        const agentsOnline = Math.max(team.length, liveTeam.size);
+        return {
+          agentsOnline,
+          agentsWorking,
+          queueDepth: snapshot.queueDepth ?? 0,
+          lastActivityAt: snapshot.lastActivityAt ?? null,
+          latencyMs: snapshot.latencyMs ?? null,
+          latencyOk: (snapshot.latencyMs ?? 0) <= 400
+        };
+      }
+
+      function apply(name) {
+        document.querySelectorAll('[data-scenario]').forEach((btn) => btn.classList.toggle('active', btn.dataset.scenario === name));
+        const snapshot = scenarios[name];
+        const signals = detectSignals(snapshot);
+        const briefing = summarize(snapshot, LAST_SEEN);
+        hud.update(deriveHud(snapshot, signals));
+        hud.setSignals(signals);
+        panel.setBriefing(briefing);
+        jsonEl.textContent = JSON.stringify({ scenario: name, signals, briefing }, null, 2);
+      }
+
+      document.querySelectorAll('[data-scenario]').forEach((btn) => {
+        btn.addEventListener('click', () => apply(btn.dataset.scenario));
+      });
+
+      apply('calm');
+      panel.open();
+      hud.setBriefingOpen(true);
+    </script>
+  </body>
+</html>

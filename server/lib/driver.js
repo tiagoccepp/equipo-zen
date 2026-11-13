@@ -36,6 +36,7 @@ import { CHECKLISTS_ROL, revisar } from './critic.js';
 import { juzgar, PERSONAS_POR_TIPO, planDePrueba } from './tester.js';
 import { contextoPrevio, registrarLearningsDeLaburo } from './learning.js';
 import { getTool } from './manos.js';
+import { listCheckpoints, loadCheckpoint, saveCheckpoint } from './checkpoints.js';
 
 export const JOB_TIMEOUT_MS_DEFAULT = 20 * 60 * 1000;
 export const TURN_TIMEOUT_MS_DEFAULT = 120000;
@@ -245,10 +246,71 @@ function setFase(prep, fase) {
   prep.entry.progreso.actualizadoEn = Date.now();
 }
 
+function jobCheckpointIds(prep) {
+  const companyId = prep.session?.company?.id || prep.jobs?.slug || slugForJob(prep.session, prep.entry?.briefClon || {}, {});
+  const slug = prep.jobs?.slug || slugForJob(prep.session, prep.entry?.briefClon || {}, {});
+  return { companyId, slug, scope: 'job', key: prep.entry?.id || prep.job?.id || 'unknown' };
+}
+
+function persistJobCheckpoint(prep, phase, extra = {}, { recordEvent = true } = {}) {
+  try {
+    if (!prep?.entry?.id) return null;
+    const ids = jobCheckpointIds(prep);
+    const state = {
+      phase,
+      jobId: prep.entry.id,
+      estado: prep.entry.estado,
+      progreso: prep.entry.progreso ? { ...prep.entry.progreso } : null,
+      planFases: Array.isArray(prep.entry.planFases) ? prep.entry.planFases : [],
+      entregas: Array.isArray(prep.entry.entregas) ? prep.entry.entregas : [],
+      testResultados: Array.isArray(prep.entry.testResultados) ? prep.entry.testResultados : [],
+      preguntas: prep.entry.preguntas || null,
+      escalado: prep.entry.escalado || null,
+      motivo: prep.entry.motivo || null,
+      brief: detachBrief(prep.entry.briefClon || {}),
+      plan: prep.job?.plan || null,
+      completedFases: Array.isArray(prep.entry.entregas) ? [...new Set(prep.entry.entregas.map((e) => e.fase))] : [],
+      extra
+    };
+    const file = saveCheckpoint({ ...ids, state });
+    if (recordEvent) record(prep, { tipo: 'checkpoint', phase, file });
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+export function listJobCheckpoints({ jobId, slug = null, companyId = null, session = null } = {}) {
+  const id = String(jobId || '').trim();
+  if (!id) return [];
+  const candidates = [];
+  if (companyId && slug) candidates.push({ companyId, slug });
+  if (slug) candidates.push({ companyId: slug, slug });
+  if (companyId) candidates.push({ companyId, slug: slug || 'general' });
+  if (session?.company?.id) candidates.push({ companyId: session.company.id, slug: slug || session.company.id });
+  candidates.push({ companyId: slug || 'general', slug: slug || 'general' });
+  const out = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    for (const f of listCheckpoints(c)) {
+      const name = String(f);
+      if (!name.includes(id)) continue;
+      const p = `${c.companyId}::${c.slug}::${name}`;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const loaded = loadCheckpoint({ ...c, scope: 'job', key: id });
+      out.push({ file: name, companyId: c.companyId, slug: c.slug, checkpoint: loaded });
+    }
+  }
+  return out;
+}
+
 // ── Prepare (síncrono: intake ya, para que POST devuelva jobId real) ─────
 
 function prepareJob(session, brief, opts = {}) {
   const merged = { ...defaultJobOpts, ...(opts || {}) };
+  const resumeState = merged.resumeCheckpoint?.state || merged.resumeCheckpoint || merged.resumeState || null;
+  const effectiveBrief = (resumeState?.brief && typeof resumeState.brief === 'object') ? resumeState.brief : (brief || {});
   const turnTimeoutMs = Number(merged.turnTimeoutMs) > 0 ? Number(merged.turnTimeoutMs) : TURN_TIMEOUT_MS_DEFAULT;
   const jobTimeoutMs = Number(merged.timeoutMs) > 0 ? Number(merged.timeoutMs) : JOB_TIMEOUT_MS_DEFAULT;
   const maxRondas = Number(merged.maxRondas) > 0 ? Number(merged.maxRondas) : MAX_RONDAS_DEFAULT;
@@ -269,14 +331,14 @@ function prepareJob(session, brief, opts = {}) {
   // Sin announce inyectado: el orquestador es máquina de estado pura y el
   // driver anuncia TODO vía session.announceTeamEvent (A-voz).
   const orc = new Orchestrator({ fetchUrl, requestSpawn, maxRondas });
-  const intake = orc.intake(brief || {});
+  const intake = orc.intake(effectiveBrief || {});
   const job = intake.job || null;
   const entry = {
     id: job?.id || `job-${Date.now().toString(36)}`,
     estado: intake.estado === 'preguntas' ? 'preguntas' : 'brief_ok',
     motivo: null,
     fase: intake.estado === 'preguntas' ? 'preguntas' : 'intake',
-    objetivo: trunc(brief?.objetivo || '', 200),
+    objetivo: trunc(effectiveBrief?.objetivo || '', 200),
     preguntas: intake.estado === 'preguntas' ? [...intake.preguntas] : null,
     progreso: {
       estado: intake.estado === 'preguntas' ? 'preguntas' : 'brief_ok',
@@ -294,28 +356,49 @@ function prepareJob(session, brief, opts = {}) {
     testResultados: [],
     escalado: null,
     dead: false,
-    briefClon: brief && typeof brief === 'object' ? { ...brief } : {}
+    briefClon: effectiveBrief && typeof effectiveBrief === 'object' ? { ...effectiveBrief } : {}
   };
   if (job) {
     // El registry usa el id del orquestador como id único del job.
     entry.id = job.id;
   }
+  if (resumeState && !merged.resumeAsNew && (resumeState.jobId || merged.resumeJobId)) {
+    entry.id = String(merged.resumeJobId || resumeState.jobId);
+  }
+  if (resumeState) {
+    entry.estado = resumeState.estado || entry.estado;
+    entry.motivo = resumeState.motivo || null;
+    entry.fase = resumeState.phase || resumeState.progreso?.fase || entry.fase;
+    if (resumeState.progreso && typeof resumeState.progreso === 'object') {
+      entry.progreso = { ...entry.progreso, ...resumeState.progreso, actualizadoEn: Date.now() };
+    }
+    if (Array.isArray(resumeState.entregas)) entry.entregas = [...resumeState.entregas];
+    if (Array.isArray(resumeState.testResultados)) entry.testResultados = [...resumeState.testResultados];
+    if (Array.isArray(resumeState.planFases)) entry.planFases = [...resumeState.planFases];
+    if (resumeState.escalado) entry.escalado = resumeState.escalado;
+  }
   registry.set(entry.id, entry);
   const prep = {
     entry, orc, job, session, equipo, store, fetchUrl,
     controller, turnTimeoutMs, jobTimeoutMs, maxRondas,
-    preguntas: intake.estado === 'preguntas'
+    preguntas: resumeState ? false : intake.estado === 'preguntas',
+    resumeState: resumeState || null
   };
+  if (resumeState?.plan && prep.job) {
+    prep.job.plan = resumeState.plan;
+  }
   // T4: historial en disco SOLO si se pide explícito (rutas HTTP pasan
   // recordHistory:true) o con baseDir inyectado (tests). Sin esto: cero
   // writes, conducta idéntica a antes.
   prep.jobs = (merged.recordHistory === true || merged.jobsBaseDir)
-    ? { slug: slugForJob(session, brief, merged), baseDir: merged.jobsBaseDir || null }
+    ? { slug: slugForJob(session, effectiveBrief, merged), baseDir: merged.jobsBaseDir || null }
     : null;
-  record(prep, { tipo: 'brief', texto: trunc(entry.objetivo || 'brief', 200) }, { brief: detachBrief(brief) });
+  record(prep, { tipo: resumeState ? 'resume' : 'brief', texto: trunc(entry.objetivo || 'brief', 200) }, { brief: detachBrief(effectiveBrief) });
   if (prep.preguntas) {
     decir(prep, { tipo: 'preguntas', preguntas: entry.preguntas },
       `Intake: faltan datos — ${entry.preguntas.length} pregunta(s). Pablo las habla con Tito.`);
+  } else if (resumeState) {
+    persistJobCheckpoint(prep, 'resume-loaded', { from: resumeState.phase || 'checkpoint' });
   }
   return prep;
 }
@@ -572,9 +655,13 @@ async function ejecutarDispatches(prep) {
   prep.entry.progreso.fasesTotal = orden.length;
   prep.entry.progreso.dispatches.total = orden.length;
   setFase(prep, 'dispatch');
+  const resumeCompleted = new Set((prep.resumeState?.completedFases || []).map((n) => Number(n)).filter(Number.isFinite));
 
   for (const fase of orden) {
     checkVivo(prep);
+    if (resumeCompleted.has(fase.n)) {
+      continue;
+    }
     const dispatch = prep.orc.dispatchFase(prep.job.id, fase.n);
     const { miembro, nota } = resolverEjecutor(prep, dispatch.para);
     decir(prep,
@@ -628,6 +715,7 @@ async function ejecutarDispatches(prep) {
         `Re-entrega fase ${fase.n} (${dispatch.para}, post-review): ${trunc(reTexto, 200)}`);
     }
     setFase(prep, 'dispatch');
+    persistJobCheckpoint(prep, 'dispatch', { completedFase: fase.n });
   }
 }
 
@@ -673,10 +761,12 @@ async function ejecutarRondaTest(prep, producto, ronda) {
 }
 
 async function ejecutarTesterLoop(prep, producto) {
-  const arreglados = [];
-  for (let ronda = 1; ronda <= prep.maxRondas; ronda += 1) {
+  const arreglados = Array.isArray(prep.resumeState?.arreglados) ? [...prep.resumeState.arreglados] : [];
+  const startRonda = Math.max(1, Number(prep.resumeState?.nextTestRonda || 1));
+  for (let ronda = startRonda; ronda <= prep.maxRondas; ronda += 1) {
     checkVivo(prep);
     const resultados = await ejecutarRondaTest(prep, producto, ronda);
+    persistJobCheckpoint(prep, 'test', { ronda, arreglados });
     const juicio = juzgar(resultados, { ronda, arregladoEnRondas: [...arreglados] });
 
     if (juicio.veredicto === 'aprobado') {
@@ -690,6 +780,7 @@ async function ejecutarTesterLoop(prep, producto) {
           limitaciones: (aprob.limitaciones || []).join('; ')
         },
         `APROBADO ronda ${ronda}: ${t.pasadas}/${t.celdas} en verde (${t.mecanicas} mecánicos + ${t.turnos} turnos). ${juicio.resumenVoz}`);
+      persistJobCheckpoint(prep, 'approved', { ronda }, { recordEvent: false });
       return { estado: 'aprobado', juicio };
     }
 
@@ -704,6 +795,7 @@ async function ejecutarTesterLoop(prep, producto) {
       decir(prep,
         { tipo: 'devolucion', items: dev.items.length, persona: primero.persona || 'tester', resumen: res.escalado.motivo, ronda },
         `ESCALADO: ${res.escalado.motivo}`);
+      persistJobCheckpoint(prep, 'escalado', { ronda }, { recordEvent: false });
       return { estado: 'escalado', juicio };
     }
 
@@ -743,12 +835,14 @@ async function ejecutarTesterLoop(prep, producto) {
         { tipo: 'entrega', de: red.para, resumen: trunc(reTexto, 220), tarea: red.tarea },
         `Re-entrega (${red.para}): ${trunc(reTexto, 200)}`);
     }
+    persistJobCheckpoint(prep, 'rework', { ronda, nextTestRonda: ronda + 1, arreglados });
   }
   // Inalcanzable: devolver() escala en maxRondas. Defensa por si maxRondas
   // cambia bajo los pies.
   prep.entry.estado = 'escalado';
   prep.entry.progreso.estado = 'escalado';
   setFase(prep, 'escalado');
+  persistJobCheckpoint(prep, 'escalado', { capped: true }, { recordEvent: false });
   return { estado: 'escalado', juicio: null };
 }
 
@@ -787,27 +881,43 @@ async function executeJob(prep) {
   if (!prep.job) throw new Error('job sin intake (brief inválido)');
   if (prep.equipo.length === 0) throw new Error('sin roster: no hay agentes en la sesión');
 
-  // 1. Fases + plan + research (FALTA:* se resuelve vía spawner real).
-  setFase(prep, 'plan');
-  const { fases, origen } = await resolverFases(prep, brief);
-  checkVivo(prep);
-  await prep.orc.planificar(prep.job.id, fases, { research: true });
-  checkVivo(prep);
-  const plan = prep.job.plan;
-  prep.entry.progreso.fasesTotal = plan.fases.length;
-  // T4: snapshot del plan para el historial (fases + dueños + done). Aditivo.
-  prep.entry.planFases = plan.fases.map((f) => ({ titulo: f.titulo, dueño: f.dueño, doneCriteria: f.doneCriteria }));
-  const researchUsado = plan.research.some(
-    (r) => r.decision !== 'se construye desde cero' && r.hallazgo !== 'sin pre-hecho usable encontrado'
-  );
-  decir(prep,
-    {
-      tipo: 'plan_listo',
-      fases: plan.fases.length,
-      researchUsado,
-      resumen: plan.fases.map((f) => `${f.titulo} (${f.dueño})`).join(' → ')
-    },
-    `Plan listo (${origen}): ${plan.fases.map((f) => `${f.titulo}→${f.dueño}`).join(' → ')}${researchUsado ? ' [con pre-hecho]' : ''}`);
+  const resume = prep.resumeState || null;
+  if (resume?.plan && !prep.job.plan) {
+    prep.job.plan = resume.plan;
+  }
+  if (resume?.plan && Array.isArray(resume.planFases) && resume.planFases.length) {
+    prep.entry.planFases = resume.planFases;
+    prep.entry.progreso.fasesTotal = resume.plan?.fases?.length || resume.planFases.length || prep.entry.progreso.fasesTotal;
+  }
+
+  const planReady = Boolean(prep.job.plan);
+  if (!planReady) {
+    // 1. Fases + plan + research (FALTA:* se resuelve vía spawner real).
+    setFase(prep, 'plan');
+    const { fases, origen } = await resolverFases(prep, brief);
+    checkVivo(prep);
+    await prep.orc.planificar(prep.job.id, fases, { research: true });
+    checkVivo(prep);
+    const plan = prep.job.plan;
+    prep.entry.progreso.fasesTotal = plan.fases.length;
+    // T4: snapshot del plan para el historial (fases + dueños + done). Aditivo.
+    prep.entry.planFases = plan.fases.map((f) => ({ titulo: f.titulo, dueño: f.dueño, doneCriteria: f.doneCriteria }));
+    const researchUsado = plan.research.some(
+      (r) => r.decision !== 'se construye desde cero' && r.hallazgo !== 'sin pre-hecho usable encontrado'
+    );
+    decir(prep,
+      {
+        tipo: 'plan_listo',
+        fases: plan.fases.length,
+        researchUsado,
+        resumen: plan.fases.map((f) => `${f.titulo} (${f.dueño})`).join(' → ')
+      },
+      `Plan listo (${origen}): ${plan.fases.map((f) => `${f.titulo}→${f.dueño}`).join(' → ')}${researchUsado ? ' [con pre-hecho]' : ''}`);
+    persistJobCheckpoint(prep, 'plan', { origen, researchUsado });
+  } else {
+    decir(prep, { tipo: 'resume', desde: 'checkpoint' }, `Resume desde checkpoint (${resume?.phase || 'plan listo'}).`);
+    persistJobCheckpoint(prep, 'resume', { from: resume?.phase || 'plan' });
+  }
 
   // 2. Dispatches secuenciales en orden de dependencias + peer review.
   await ejecutarDispatches(prep);
@@ -825,6 +935,9 @@ async function executeJob(prep) {
     decir(prep,
       { tipo: 'aprobado', resumen: `laburo cerrado (${learn.creados} learnings nuevos, ${learn.reforzados} reforzados)` },
       `Cierre: learnings ${learn.creados} nuevos / ${learn.reforzados} reforzados.`);
+    persistJobCheckpoint(prep, 'done', { learn }, { recordEvent: false });
+  } else {
+    persistJobCheckpoint(prep, salida?.estado || prep.entry.estado || 'fallo', { learn }, { recordEvent: false });
   }
   return salida;
 }
@@ -866,21 +979,29 @@ export async function runJob(session, brief, opts = {}) {
   return getJob(prep.entry.id);
 }
 
+export function loadLatestJobCheckpoint({ jobId, slug = null, companyId = null, session = null } = {}) {
+  const items = listJobCheckpoints({ jobId, slug, companyId, session });
+  if (items.length === 0) return null;
+  // listCheckpoints returns filenames; loaded checkpoint has at timestamp.
+  items.sort((a, b) => String(b.checkpoint?.at || '').localeCompare(String(a.checkpoint?.at || '')));
+  return items[0]?.checkpoint || null;
+}
+
 // Encola el job para correr async (rutas HTTP). Intake YA (síncrono) para
 // devolver jobId real; la ejecución va por setImmediate.
 export function enqueueJob(session, brief, opts = {}) {
   const prep = prepareJob(session, brief, opts);
   if (prep.preguntas) return { jobId: prep.entry.id, estado: 'preguntas' };
-  prep.entry.estado = 'encolado';
-  prep.entry.progreso.estado = 'encolado';
-  record(prep, { tipo: 'encolado', texto: trunc(prep.entry.objetivo || 'job encolado', 200) });
+  prep.entry.estado = opts?.resumeCheckpoint ? (prep.entry.estado || 'encolado') : 'encolado';
+  prep.entry.progreso.estado = prep.entry.estado;
+  record(prep, { tipo: opts?.resumeCheckpoint ? 'resume-enqueued' : 'encolado', texto: trunc(prep.entry.objetivo || 'job encolado', 200) });
   setImmediate(() => {
     withJobTimeout(executeJob(prep), prep).catch((error) => {
       if (error?.code !== 'JOB_MUERTO') markFallo(prep, error);
       else markFallo(prep, new Error('timeout job (cancelado entre pasos)'));
     }).finally(() => flushJobHistory().catch(() => {}));
   });
-  return { jobId: prep.entry.id, estado: 'encolado' };
+  return { jobId: prep.entry.id, estado: prep.entry.estado || 'encolado' };
 }
 
 // ── Historial de jobs en disco (T4, aditivo) ─────────────────────────────

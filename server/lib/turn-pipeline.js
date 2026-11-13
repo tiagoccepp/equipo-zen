@@ -5,11 +5,11 @@ import { consult as salaConsult, runSalaV2 } from './sala.js';
 import { getSalaV2 } from './settings.js';
 
 // ── SpeakerGate ─────────────────────────────────────────────────────────
-// Garantiza que UN solo agente emite audio a la vez, a nivel servidor.
-// El productor hace acquire() (espera su turno), sendChunk() por cada
-// chunk PCM y finish(); la liberación espera el ack playback_complete del
-// cliente o un timeout basado en la duración enviada. flush() corta al
-// dueño actual (barge-in).
+// Guarantees that only ONE agent emits audio at a time, at the server level.
+// The producer calls acquire() (waits for its turn), sendChunk() for each
+// PCM chunk, and finish(); release waits for the client's playback_complete ack
+// or a timeout based on the sent duration. flush() cuts off the
+// current owner (barge-in).
 // F-08: ms estimados de una oración sintetizada (PCM base64 16-bit mono).
 // Puro: base para el karaoke (reparto por palabra en el cliente).
 export function sentenceAudioMs(prepared, sampleRate = 24000) {

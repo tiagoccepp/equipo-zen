@@ -161,7 +161,7 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
 // Capture pre-buffer: the frames before speech onset that get
 // sent to the server when VAD confirms voice. It must cover the whole
 // barge-in confirmation window; otherwise the interrupting phrase arrives
-// cut off ("…dón, pará" instead of "perdón, pará").
+// cut off ("…ry, stop" instead of "sorry, stop").
 export function trimPreBuffer<T extends { durationMs: number }>(
   chunks: T[],
   budgetMs: number = BARGE_IN.preBufferMs

@@ -1,11 +1,11 @@
-// M-06: turn-taking semántico — decidir si el habla del usuario CORTA al
-// agente según QUÉ dice, no solo que hay energía. backchannel (mm, sí, dale)
-// = seguir hablando; stop explícito o contenido nuevo = cortar.
+// M-06: semantic turn-taking — decide whether user speech CUTS the
+// agent based on WHAT it says, not just that there is energy. Backchannel (e.g. "mm", "yes", "ok")
+// = keep talking; explicit stop or new content = cut.
 
 export type InterruptionClass = 'backchannel' | 'barge' | 'content' | 'unclear';
 
 const BACKCHANNEL = new Set([
-  // ES rioplatense
+  // Spanish (Rioplatense) - functional recognition tokens
   'si', 'sí', 'aja', 'ajá', 'aha', 'mhm', 'mm', 'mmm', 'dale', 'ok', 'okay',
   'claro', 'entiendo', 'ya', 'veo', 'bien', 'perfecto', 'exacto', 'bueno',
   'genial', 'joya', 'ta', 'está', 'esta', 'uh', 'ajja',
@@ -31,20 +31,20 @@ function norm(s: string): string {
     .trim();
 }
 
-/** Clasifica la interrupción del usuario. Vacío/ruido → 'unclear'. */
+/** Classifies the user interruption. Empty/noise → 'unclear'. */
 export function classifyInterruption(text: string): InterruptionClass {
   const clean = norm(text);
   if (!clean || clean.length < 2) {
     return 'unclear';
   }
-  // Stop explícito gana (aunque venga con más palabras).
+  // Explicit stop wins (even when it comes with more words).
   for (const b of BARGE) {
     if (clean === b || clean.startsWith(`${b} `) || clean.endsWith(` ${b}`) || clean.includes(` ${b} `)) {
       return 'barge';
     }
   }
   const words = clean.split(' ');
-  // Backchannel = CORTO y todo-filler. Largo con fillers adentro = contenido.
+  // Backchannel = SHORT and all filler. Long with fillers inside = content.
   if (words.length <= 4 && words.every((w) => BACKCHANNEL.has(w))) {
     return 'backchannel';
   }
@@ -53,12 +53,12 @@ export function classifyInterruption(text: string): InterruptionClass {
     return 'backchannel';
   }
   if (words.length <= 2 && words.every((w) => w.length <= 3 || BACKCHANNEL.has(w))) {
-    return 'unclear'; // "eh", "ah si": ruido, esperar más.
+    return 'unclear'; // "eh", "ah si": noise, wait for more.
   }
   return 'content';
 }
 
-/** ¿Corta al agente? backchannel/unclear = no (unclear = esperar más texto). */
+/** Does it cut the agent? backchannel/unclear = no (unclear = wait for more text). */
 export function shouldCut(cls: InterruptionClass): boolean {
   return cls === 'barge' || cls === 'content';
 }

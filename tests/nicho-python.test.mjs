@@ -119,7 +119,7 @@ test("the python stack normalizes and brings ITS criteria, not web's", () => {
   assert.match(criterio, /main\.py/);
   assert.match(criterio, /venv/);
   assert.match(criterio, /pytest/);
-  assert.match(criterio, /SIN RED/);
+  assert.match(criterio, /NO NETWORK/);
   // The web criteria (an index.html with embedded CSS) must not be there:
   // if it leaks, the team ships a page instead of a program.
   assert.ok(!/index\.html con el CSS embebido/.test(criterio), 'no se cuela el criterio de web');

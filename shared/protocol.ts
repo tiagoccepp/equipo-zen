@@ -6,16 +6,16 @@ export const VOICES = ['M1', 'M2', 'M3', 'M4', 'M5', 'F1', 'F2', 'F3', 'F4', 'F5
 export type VoiceName = (typeof VOICES)[number];
 
 export const VOICE_LABELS: Record<VoiceName, string> = {
-  M1: 'Martín (grave y sereno)',
-  M2: 'Bruno (canchero)',
-  M3: 'Ricardo (maduro)',
-  M4: 'Andrés (neutro)',
-  M5: 'Facundo (enérgico)',
-  F1: 'Tomasa (cálida)',
-  F2: 'Valentina (clara)',
-  F3: 'Carla (vendedora)',
-  F4: 'Sofía (suave)',
-  F5: 'Marta (precisa)'
+  M1: 'Martín (deep and calm)',
+  M2: 'Bruno (laid-back)',
+  M3: 'Ricardo (mature)',
+  M4: 'Andrés (neutral)',
+  M5: 'Facundo (energetic)',
+  F1: 'Tomasa (warm)',
+  F2: 'Valentina (clear)',
+  F3: 'Carla (salesy)',
+  F4: 'Sofía (soft)',
+  F5: 'Marta (precise)'
 };
 
 export const LIMITS = {
@@ -319,7 +319,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     try {
       value = JSON.parse(raw);
     } catch {
-      return { ok: false, error: 'JSON inválido.' };
+      return { ok: false, error: 'Invalid JSON.' };
     }
   }
 
@@ -341,7 +341,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       // dropped it and the meeting was born orphaned.
       const goalId = optionalCappedString(value.goalId, 40);
       if (meetingId === null || companyId === null || goalId === null) {
-        return { ok: false, error: 'hello inválido.' };
+        return { ok: false, error: 'Invalid hello.' };
       }
       return { ok: true, message: { type: 'hello', meetingId, companyId, goalId } };
     }
@@ -351,7 +351,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const turnId = optionalCappedString(value.turnId, 40);
       const agentId = optionalCappedString(value.agentId, 80);
       if (turnId === null || agentId === null) {
-        return { ok: false, error: 'interrupt inválido.' };
+        return { ok: false, error: 'Invalid interrupt.' };
       }
       const playedMs = typeof value.playedMs === 'number' && Number.isFinite(value.playedMs)
         ? Math.max(0, value.playedMs)
@@ -377,12 +377,12 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const patch: AgentPatch = {};
       if (raw.name !== undefined) {
         const name = cappedString(raw.name, LIMITS.agentName);
-        if (!name || !name.trim()) return { ok: false, error: 'Nombre inválido.' };
+        if (!name || !name.trim()) return { ok: false, error: 'Invalid name.' };
         patch.name = name.trim();
       }
       if (raw.title !== undefined) {
         const title = cappedString(raw.title, LIMITS.agentTitle);
-        if (!title || !title.trim()) return { ok: false, error: 'Título inválido.' };
+        if (!title || !title.trim()) return { ok: false, error: 'Invalid title.' };
         patch.title = title.trim();
       }
       if (raw.style !== undefined) {
@@ -397,13 +397,13 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       }
       if (raw.color !== undefined) {
         const color = cappedString(raw.color, 20);
-        if (!color || !/^#[0-9a-fA-F]{3,8}$/.test(color)) return { ok: false, error: 'Color inválido.' };
+        if (!color || !/^#[0-9a-fA-F]{3,8}$/.test(color)) return { ok: false, error: 'Invalid color.' };
         patch.color = color;
       }
       if (raw.voice !== undefined) {
         const voice = cappedString(raw.voice, 30);
         if (!voice || !(VOICES as readonly string[]).includes(voice)) {
-          return { ok: false, error: `Voz inválida. Opciones: ${VOICES.join(', ')}.` };
+          return { ok: false, error: `Invalid voice. Options: ${VOICES.join(', ')}.` };
         }
         patch.voice = voice;
       }
@@ -411,12 +411,12 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         if (raw[field] !== undefined) {
           const maxLength = field === 'boundaries' ? LIMITS.boundaryLength : LIMITS.listItemLength;
           const list = toStringList(raw[field], LIMITS.listItems, maxLength);
-          if (!list) return { ok: false, error: `Lista de ${field} inválida o demasiado larga.` };
+          if (!list) return { ok: false, error: `Invalid or too long ${field} list.` };
           patch[field] = list;
         }
       }
       if (Object.keys(patch).length === 0) {
-        return { ok: false, error: 'El patch no tiene cambios válidos.' };
+        return { ok: false, error: 'The patch has no valid changes.' };
       }
       return { ok: true, message: { type: 'update_agent', agentId, patch } };
     }
@@ -453,7 +453,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     case 'user_turn': {
       const text = cappedString(value.text, LIMITS.turnText);
       if (text === null) {
-        return { ok: false, error: `Texto de turno inválido o mayor a ${LIMITS.turnText} caracteres.` };
+        return { ok: false, error: `Invalid turn text or longer than ${LIMITS.turnText} characters.` };
       }
       return { ok: true, message: { type: 'user_turn', text } };
     }
@@ -468,11 +468,11 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     case 'audio_chunk': {
       const data = cappedString(value.data, LIMITS.audioChunkBase64);
       if (data === null || data.length === 0) {
-        return { ok: false, error: 'Chunk de audio inválido o demasiado grande.' };
+        return { ok: false, error: 'Invalid or too large audio chunk.' };
       }
       const mimeType = optionalCappedString(value.mimeType, 80);
       if (mimeType === null) {
-        return { ok: false, error: 'mimeType inválido.' };
+        return { ok: false, error: 'Invalid mimeType.' };
       }
       return { ok: true, message: { type: 'audio_chunk', data, mimeType } };
     }
@@ -498,12 +498,12 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const stats: Record<string, number | string | boolean> = {};
       for (const key of keys) {
         if (cappedString(key, 64) === null) {
-          return { ok: false, error: 'client_stats con clave inválida.' };
+          return { ok: false, error: 'client_stats with invalid key.' };
         }
         const val = (value.stats as Record<string, unknown>)[key];
         if (typeof val === 'number') {
           if (!Number.isFinite(val)) {
-            return { ok: false, error: 'client_stats con número no finito.' };
+            return { ok: false, error: 'client_stats with non-finite number.' };
           }
           stats[key] = val;
         } else if (typeof val === 'string') {
@@ -514,7 +514,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
         } else if (typeof val === 'boolean') {
           stats[key] = val;
         } else {
-          return { ok: false, error: 'client_stats solo acepta número|string|boolean.' };
+          return { ok: false, error: 'client_stats only accepts number|string|boolean.' };
         }
       }
       return { ok: true, message: { type: 'client_stats', stats } };
@@ -523,7 +523,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
     case 'audio_cancel': {
       const reason = optionalCappedString(value.reason, 80);
       if (reason === null) {
-        return { ok: false, error: 'reason inválido.' };
+        return { ok: false, error: 'Invalid reason.' };
       }
       const speechMs = typeof value.speechMs === 'number' && Number.isFinite(value.speechMs)
         ? value.speechMs
@@ -551,17 +551,17 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       }
       const color = optionalCappedString(agent.color, 20);
       if (color === null || (color !== undefined && !/^#[0-9a-fA-F]{3,8}$/.test(color))) {
-        return { ok: false, error: 'Color inválido.' };
+        return { ok: false, error: 'Invalid color.' };
       }
       const voice = optionalCappedString(agent.voice, 30);
       if (voice === null || (voice !== undefined && !(VOICES as readonly string[]).includes(voice))) {
-        return { ok: false, error: `Voz inválida. Opciones: ${VOICES.join(', ')}.` };
+        return { ok: false, error: `Invalid voice. Options: ${VOICES.join(', ')}.` };
       }
       const aliases = toStringList(agent.aliases, LIMITS.listItems, LIMITS.listItemLength);
       const domains = toStringList(agent.domains, LIMITS.listItems, LIMITS.listItemLength);
       const boundaries = toStringList(agent.boundaries, LIMITS.listItems, LIMITS.boundaryLength);
       if (!aliases || !domains || !boundaries) {
-        return { ok: false, error: 'Listas de alias/dominios/límites inválidas o demasiado largas.' };
+        return { ok: false, error: 'Invalid or too long alias/domain/limit lists.' };
       }
       const initialTasksRaw = agent.initialTasks === undefined || agent.initialTasks === null
         ? []
@@ -569,13 +569,13 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
           ? agent.initialTasks
           : null;
       if (initialTasksRaw === null || initialTasksRaw.length > LIMITS.initialTasks) {
-        return { ok: false, error: 'Lista de tareas iniciales inválida.' };
+        return { ok: false, error: 'Invalid initial task list.' };
       }
       const initialTasks: string[] = [];
       for (const task of initialTasksRaw) {
         const clean = cappedString(task, LIMITS.taskText);
         if (clean === null) {
-          return { ok: false, error: `Cada tarea inicial debe ser texto de hasta ${LIMITS.taskText} caracteres.` };
+          return { ok: false, error: `Each initial task must be text of up to ${LIMITS.taskText} characters.` };
         }
         if (clean.trim()) {
           initialTasks.push(clean.trim());
@@ -594,7 +594,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const agentId = cappedString(value.agentId, 80);
       const text = cappedString(value.text, LIMITS.taskText);
       if (!agentId || !text || !text.trim()) {
-        return { ok: false, error: 'Tarea inválida.' };
+        return { ok: false, error: 'Invalid task.' };
       }
       return { ok: true, message: { type: 'add_task', agentId, text } };
     }
@@ -603,7 +603,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const agentId = cappedString(value.agentId, 80);
       const taskId = cappedString(value.taskId, 80);
       if (!agentId || !taskId) {
-        return { ok: false, error: 'Referencia de tarea inválida.' };
+        return { ok: false, error: 'Invalid task reference.' };
       }
       return { ok: true, message: { type: 'toggle_task', agentId, taskId, completed: Boolean(value.completed) } };
     }
@@ -612,7 +612,7 @@ export function parseClientMessage(raw: unknown): ParseResult<ClientMessage> {
       const agentId = cappedString(value.agentId, 80);
       const taskId = cappedString(value.taskId, 80);
       if (!agentId || !taskId) {
-        return { ok: false, error: 'Referencia de tarea inválida.' };
+        return { ok: false, error: 'Invalid task reference.' };
       }
       return { ok: true, message: { type: 'delete_task', agentId, taskId } };
     }
@@ -650,7 +650,7 @@ export function parseAgentToolEvent(raw: unknown): ParseResult<AgentToolEvent> {
     try {
       value = JSON.parse(raw);
     } catch {
-      return { ok: false, error: 'JSON inválido.' };
+      return { ok: false, error: 'Invalid JSON.' };
     }
   }
   if (!isRecord(value) || (value.type !== 'agent_tool_call' && value.type !== 'agent_tool_done')) {
@@ -675,7 +675,7 @@ export function parseAgentToolEvent(raw: unknown): ParseResult<AgentToolEvent> {
   }
   const ms = value.ms;
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) {
-    return { ok: false, error: 'agent_tool_done requiere ms numérico ≥ 0.' };
+    return { ok: false, error: 'agent_tool_done requires a numeric ms ≥ 0.' };
   }
   return { ok: true, message: { type: 'agent_tool_done', turnId, agentId, tool, ok: value.ok, ms, outputPreview: preview } };
 }

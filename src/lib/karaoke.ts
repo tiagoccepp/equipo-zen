@@ -1,7 +1,7 @@
-// F-08: karaoke — resalta palabra por palabra al ritmo del audio.
-// Sin timings reales (Piper no los da): reparto proporcional al largo de
-// cada palabra sobre sDurMs. Con sTimes reales: se usan tal cual.
-// Puro y testeable; el DOM lo maneja app.ts.
+// F-08: karaoke — highlights word by word in time with the audio.
+// Without real timings (Piper doesn't provide them): proportional split by the
+// length of each word over sDurMs. With real sTimes: they are used as-is.
+// Pure and testable; the DOM is handled by app.ts.
 
 export const KARAOKE_FALLBACK_MS_PER_WORD = 400;
 export const KARAOKE_MIN_MS_PER_WORD = 120;
@@ -28,7 +28,7 @@ export function buildCues(text: string, opts: { durMs?: number; sTimes?: number[
   const total = Number.isFinite(opts.durMs) && (opts.durMs as number) > 0
     ? Math.round(opts.durMs as number)
     : words.length * KARAOKE_FALLBACK_MS_PER_WORD;
-  // Reparto proporcional al largo (las largas suenan más).
+  // Proportional share by length (longer ones take longer to say).
   const weights = words.map((w) => Math.max(2, w.length));
   const wSum = weights.reduce((a, b) => a + b, 0) || 1;
   const starts: number[] = [];
@@ -40,7 +40,7 @@ export function buildCues(text: string, opts: { durMs?: number; sTimes?: number[
   return { words, starts, durMs: total };
 }
 
-/** Índice de palabra activa a `elapsedMs` (-1 = ninguna, p.ej. terminado). */
+/** Active word index at `elapsedMs` (-1 = none, e.g. finished). */
 export function activeWord(cue: KaraokeCue, elapsedMs: number): number {
   if (cue.words.length === 0 || elapsedMs < 0) {
     return -1;
@@ -54,7 +54,7 @@ export function activeWord(cue: KaraokeCue, elapsedMs: number): number {
     }
   }
   if (elapsedMs > cue.durMs + 500) {
-    return -1; // terminó hace rato: soltar el resaltado
+    return -1; // finished a while ago: release the highlight
   }
   return idx;
 }

@@ -24,7 +24,7 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 //   mulberry32(seed): stateful, for sequential fills.
 
 // Same idea as call-orbs.ts: avalanche hash, not linear sequences
-// (linear + golden angle draws meridians / visible moiré).
+// (linear + golden angle draws meridians / visible moiré pattern).
 function hashUnit(index: number, seed: number) {
   let hash = Math.imul((index | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(Math.round(seed * 1e6) | 0, 0xc2b2ae35);
   hash ^= hash >>> 15;
@@ -46,7 +46,7 @@ export function mulberry32(seed: number) {
 function checkCount(count: number) {
   const total = Math.max(1, Math.round(count));
   if (!Number.isFinite(total) || total < 1) {
-    throw new RangeError(`fx/morph: count inválido (${count})`);
+    throw new RangeError(`fx/morph: invalid count (${count})`);
   }
   return total;
 }
@@ -167,7 +167,7 @@ export function text(count: number, value: string): Float32Array {
   }
   const label = (value || '').trim();
   if (!label) {
-    throw new Error('fx/morph text(): string vacío');
+    throw new Error('fx/morph text(): empty string');
   }
   const total = checkCount(count);
   const W = 160;

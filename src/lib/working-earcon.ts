@@ -1,6 +1,6 @@
-// QW-09: sonido "trabajando" no verbal. Si el agente arranca a trabajar
-// (turno/tools) y en ~1s no hubo audio, suena un earcon suave para que se
-// note que algo pasa. Se cancela al sonar la voz; cooldown entre earcons.
+// QW-09: non-verbal "working" sound. If the agent starts working
+// (turn/tools) and there is no audio for ~1s, a soft earcon plays so it's
+// noticeable that something is happening. It cancels when voice plays; cooldown between earcons.
 
 export const WORKING_EARCON_DELAY_MS = 1000;
 export const WORKING_EARCON_COOLDOWN_MS = 8000;
@@ -28,7 +28,7 @@ export class WorkingEarcon {
     this.now = now;
   }
 
-  /** Arma el earcon para el agente (si no hay uno pendiente). */
+  /** Arms the earcon for the agent (if there isn't one pending). */
   arm(agentId: string, delayMs = WORKING_EARCON_DELAY_MS): void {
     if (!agentId || this.pending.has(agentId)) {
       return;
@@ -43,13 +43,13 @@ export class WorkingEarcon {
       try {
         this.play(agentId);
       } catch {
-        // El earcon jamás rompe el turno.
+        // The earcon must never break the turn.
       }
     }, delayMs);
     this.pending.set(agentId, handle);
   }
 
-  /** Cancela el pendiente (llegó audio / terminó / se interrumpió). */
+  /** Cancels the pending earcon (audio arrived / finished / interrupted). */
   cancel(agentId?: string): void {
     if (agentId) {
       const handle = this.pending.get(agentId);

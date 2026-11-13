@@ -79,7 +79,7 @@ test('each flow states what to verify and with which exact command, before finis
       flujo.includes(VERIFICACION[stack]),
       `el flujo de ${stack} tiene que nombrar el comando exacto que verifica (${VERIFICACION[stack]})`
     );
-    assert.ok(/antes de finish/i.test(flujo), `el flujo de ${stack} tiene que decir qué se verifica ANTES del finish`);
+    assert.ok(/before finish/i.test(flujo), `el flujo de ${stack} tiene que decir qué se verifica BEFORE finish`);
     assert.ok(/\bfinish\b/.test(flujo), `el flujo de ${stack} termina en finish, y tiene que decirlo`);
   }
 });
@@ -109,10 +109,10 @@ test('each flow is a numbered list with no gaps: the order is the content', () =
 test('each flow names the niche\'s usual errors and when not to iterate', () => {
   for (const stack of STACKS) {
     const flujo = leerPlaybook(`flujo-${stack}`);
-    const errores = flujo.split(/ERRORES DE SIEMPRE:/)[1] || '';
+    const errores = flujo.split(/COMMON MISTAKES:/)[1] || '';
     const listados = [...errores.matchAll(/^- /gm)];
     assert.ok(listados.length >= 2, `el flujo de ${stack} tiene que nombrar 2 o 3 errores típicos`);
-    assert.ok(/NO ITERAR/.test(flujo), `el flujo de ${stack} tiene que decir qué dar por bueno y dejar quieto`);
+    assert.ok(/DO NOT ITERATE/.test(flujo), `el flujo de ${stack} tiene que decir qué dar por bueno y dejar quieto`);
   }
 });
 
@@ -121,7 +121,7 @@ test('each niche\'s errors belong to THAT niche, not generic warnings', () => {
   // being useful: the agent already has the technical judgment for the general.
   const propios = {
     web: ['tokens.css', 'href="#"'],
-    automatizacion: ['datos de ejemplo', 'credenciales'],
+    automatizacion: ['sample data', 'credentials'],
     'movil-rn': ['App.js', 'Expo'],
     android: ['kotlin.android', 'imports'],
     python: ['input()', 'requirements.txt']
@@ -139,15 +139,15 @@ test('roles.md mentions the crafts that really exist in the templates', () => {
   // Crafts derive from templates by role and title, never by proper name:
   // Renata may be called something else tomorrow.
   const clases = [
-    { oficio: 'quien coordina', esta: (e) => e.role === 'ceo', menciones: ['ceo', 'coordina'] },
-    { oficio: 'quien afina perfiles', esta: (e) => e.role === 'contratista', menciones: ['contratista', 'afina perfiles'] },
-    { oficio: 'quien diseña', esta: (e) => /disen|arte/.test(normalizar(e.title)), menciones: ['disena'] },
+    { oficio: 'quien coordina', esta: (e) => e.role === 'ceo', menciones: ['ceo', 'coordinates'] },
+    { oficio: 'quien afina perfiles', esta: (e) => e.role === 'contratista', menciones: ['contractor', 'refines profiles', 'adjusts team profiles'] },
+    { oficio: 'quien diseña', esta: (e) => /disen|arte/.test(normalizar(e.title)), menciones: ['designs'] },
     {
       oficio: 'quien construye',
       esta: (e) => /desarrollad|arquitect|plataforma/.test(normalizar(e.title)),
-      menciones: ['construye', 'dev']
+      menciones: ['builds', 'dev']
     },
-    { oficio: 'quien prueba', esta: (e) => /\bqa\b|calidad/.test(normalizar(e.title)), menciones: ['qa', 'prueba'] }
+    { oficio: 'quien prueba', esta: (e) => /\bqa\b|calidad/.test(normalizar(e.title)), menciones: ['qa', 'tests'] }
   ];
   const empleados = companyTemplates.templates.flatMap((t) => t.employees);
   const roles = normalizar(renderRoles());
@@ -164,10 +164,10 @@ test('roles.md mentions the crafts that really exist in the templates', () => {
 
 test('roles.md states what each craft does NOT do and when it steps in', () => {
   const roles = leerPlaybook('roles');
-  const negaciones = [...roles.matchAll(/\bNO\b/g)];
-  assert.ok(negaciones.length >= 5, `cada oficio necesita su límite: hay ${negaciones.length} "NO" y son 5 oficios`);
-  assert.ok(/entra/i.test(roles), 'roles.md tiene que decir cuándo entra cada uno');
-  assert.ok(/consultar|consultale/i.test(roles), 'si algo es de otro oficio, se consulta en vez de invadirlo');
+  const negaciones = [...roles.matchAll(/\bNOT\b/g)];
+  assert.ok(negaciones.length >= 5, `cada oficio necesita su límite: hay ${negaciones.length} "NOT" y son 5 oficios`);
+  assert.ok(/goes first|comes after|starts/i.test(roles), 'roles.md tiene que decir cuándo entra cada uno');
+  assert.ok(/consult/i.test(roles), 'si algo es de otro oficio, se consulta en vez de invadirlo');
 });
 
 test('an unknown stack falls back to the web flow, like the rest of the playbooks', () => {

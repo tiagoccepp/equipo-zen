@@ -1,9 +1,9 @@
-// Orbe minimizado: MISMO OrbField upstream, vivo en tarjeta glass.
-// Clic (sin arrastrar) = hablar, ⤢ = abrir Pablo, arrastrar = mover.
-// V3 modelo-manda: orbe SIEMPRE orbe; el estado solo modula vibración via
-// energía (nivel de audio real + piso por estado). Sin figuras forzadas.
-// La energía es audio real: la ventana main la reporta vía orb_report y
-// acá se lee con orb_poll (estados del protocolo: idle/escuchando/hablando/pensando).
+// Minimized orb: SAME upstream OrbField, alive in a glass card.
+// Click (without dragging) = talk, ⤢ = open Pablo, drag = move.
+// V3 model-driven: orb is ALWAYS an orb; state only modulates vibration via
+// energy (real audio level + per-state floor). No forced figures.
+// Energy is real audio: the main window reports it via orb_report and
+// it is read here with orb_poll (protocol states: idle/escuchando/hablando/pensando).
 
 import { invoke } from '@tauri-apps/api/core';
 import { OrbField } from './lib/call-orbs.ts';
@@ -13,7 +13,7 @@ const card = document.getElementById('orb-card') as HTMLElement;
 const statusEl = document.getElementById('orb-status') as HTMLElement;
 const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
 
-// Solo la etiqueta visible va en inglés; las claves son protocolo Rust.
+// Only the visible label is in English; the keys are Rust protocol.
 const STATUS_LABEL: Record<string, string> = {
   idle: 'Pablo',
   escuchando: '● Listening',
@@ -22,9 +22,9 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 let level = 0;
-// V3: piso de vibración por estado (espejo de STATE_VIBRATION en
-// orb-morph.ts). El nivel real manda; el piso evita un orbe muerto si el
-// main reporta un estado activo con nivel 0 (ej. pensando sin audio).
+// V3: per-state vibration floor (mirror of STATE_VIBRATION in
+// orb-morph.ts). The real level wins; the floor avoids a dead orb if
+// main reports an active state with level 0 (e.g. thinking with no audio).
 const VIB_FLOOR: Record<string, number> = {
   idle: 0,
   escuchando: 0.12,
@@ -56,7 +56,7 @@ async function poll(): Promise<void> {
     statusEl.textContent = STATUS_LABEL[estado] || 'Pablo';
     micBtn.classList.toggle('live', estado === 'escuchando');
   } catch {
-    // Núcleo aún no listo.
+    // Core not ready yet.
   }
 }
 window.setInterval(() => void poll(), 250);
@@ -70,7 +70,7 @@ document.getElementById('expandBtn')?.addEventListener('click', () => {
 });
 
 // Arrastre desde cualquier punto de la tarjeta (fondo glass incluido);
-// clic sin arrastre fuera de los botones = hablar (umbral 6px).
+// click without dragging outside the buttons = talk (6px threshold).
 let downAt: { x: number; y: number } | null = null;
 let dragging = false;
 card.addEventListener('pointerdown', (e) => {

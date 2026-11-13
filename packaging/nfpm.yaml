@@ -3,7 +3,7 @@ name: equipo
 arch: amd64
 version: 0.1.0
 maintainer: Tito
-description: Equipo — tu equipo IA en el escritorio (orbe, voz, permisos)
+description: J.A.B.S (Just A Better System) — local-first AI team desktop app (orb, voice, permissions)
 license: UNLICENSED
 contents:
   - src: /tmp/deb-tree/usr/bin/equipo

@@ -1,17 +1,17 @@
-FLUJO (este orden, sin saltear):
-1. ANDAMIÁ con la herramienta oficial, nunca a mano:
-   comando `npx create-expo-app@latest . --template blank`
-2. src/theme.js: colores, tipografía y espaciado. Fuente única.
-3. Las pantallas en src/screens/, lo reutilizable en src/components/.
-4. Recién ahí el punto de entrada (App.js/App.jsx): borrá lo de la plantilla y
-   montá TUS pantallas.
-5. ANTES de finish: comando `npx tsc --noEmit`. Si falla, arreglá y repetilo.
-6. finish con el resumen y los archivos.
+FLOW (this order, do not skip):
+1. SCAFFOLD with the official tool, never by hand:
+   command `npx create-expo-app@latest . --template blank`
+2. src/theme.js: colors, typography, and spacing. Single source.
+3. Screens in src/screens/, reusable parts in src/components/.
+4. Only then the entry point (App.js/App.jsx): delete the template content and
+   mount YOUR screens.
+5. BEFORE finish: run `npx tsc --noEmit`. If it fails, fix and repeat.
+6. finish with the summary and files.
 
-ERRORES DE SIEMPRE:
-- Dejar App.js con la pantalla por defecto de Expo mientras el trabajo vive en
-  src/screens/: se abre la app y se ve el cartel de Expo, no el producto.
-- div, span o className: esto no es una web y no arranca.
-- Estilos sueltos en vez de StyleSheet.create con valores de theme.js.
+COMMON MISTAKES:
+- Leaving App.js with the default Expo screen while the work lives in
+  src/screens/: the app opens and shows the Expo banner, not the product.
+- div, span, or className: this is not a web page and it won't run.
+- Loose styles instead of StyleSheet.create with values from theme.js.
 
-NO ITERAR: si compila, navega y usa el tema, está lista. Nada de librerías extra.
+DO NOT ITERATE: if it compiles, navigates, and uses the theme, it's ready. No extra libraries.

@@ -1,6 +1,6 @@
-// Vista de Jobs: historial del equipo + replay (track T4).
-// Se monta en #view-jobs desde app.ts (main). Sin imports de app.ts:
-// solo recibe { fetchJson } y el elemento contenedor.
+// Jobs view: team history + replay (track T4).
+// Mounted into #view-jobs from app.ts (main). No imports from app.ts:
+// it only receives { fetchJson } and the container element.
 
 import './jobs.css';
 
@@ -69,13 +69,13 @@ function relTime(ts: unknown): string {
   const t = Number(ts);
   if (!t) return '—';
   const d = Date.now() - t;
-  if (d < 0) return 'ahora';
+  if (d < 0) return 'now';
   const m = Math.floor(d / 60000);
-  if (m < 1) return 'ahora mismo';
-  if (m < 60) return `hace ${m} min`;
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `hace ${h} h`;
-  return `hace ${Math.floor(h / 24)} d`;
+  if (h < 24) return `${h} h ago`;
+  return `${Math.floor(h / 24)} d ago`;
 }
 
 const ESTADO_ICON: Record<string, string> = {
@@ -109,15 +109,15 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
     <div class="jobs-head">
       <div>
         <h2>Jobs</h2>
-        <p class="jobs-sub">Historial del equipo · paso a paso · replay</p>
+        <p class="jobs-sub">Team history · step by step · replay</p>
       </div>
-      <button class="jobs-refresh" type="button" title="Actualizar lista">↻ Actualizar</button>
+      <button class="jobs-refresh" type="button" title="Refresh list">↻ Refresh</button>
     </div>
     <p class="jobs-error" hidden></p>
     <div class="jobs-body">
-      <ul class="jobs-list" aria-label="Historial de jobs"></ul>
+      <ul class="jobs-list" aria-label="Job history"></ul>
       <div class="jobs-detail" aria-live="polite">
-        <p class="jobs-empty">Elegí un job para ver el paso a paso.</p>
+        <p class="jobs-empty">Pick a job to see the step-by-step view.</p>
       </div>
     </div>`;
 
@@ -140,7 +140,7 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
   function renderList(): void {
     if (dead) return;
     if (jobs.length === 0) {
-      listEl.innerHTML = '<li class="jobs-none">Sin jobs todavía. Cuando el equipo labure, aparecen acá.</li>';
+      listEl.innerHTML = '<li class="jobs-none">No jobs yet. When the team gets to work, they show up here.</li>';
       return;
     }
     listEl.innerHTML = jobs.map((j) => `
@@ -170,26 +170,26 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
     const estado = job.estado || summary.estado;
 
     const fasesHtml = fases.length === 0
-      ? '<p class="jobs-muted">Sin snapshot de fases.</p>'
+      ? '<p class="jobs-muted">No phase snapshot.</p>'
       : `<ol class="jobs-fases">${fases.map((f, i) => `
           <li>
-            <strong>${i + 1}. ${esc(f.titulo || 'fase')}</strong>
+            <strong>${i + 1}. ${esc(f.titulo || 'phase')}</strong>
             <span class="jobs-muted">→ ${esc(f.dueño || '?')} · done: ${esc(f.doneCriteria || '—')}</span>
           </li>`).join('')}</ol>`;
 
     const entregasHtml = entregas.length === 0
-      ? '<p class="jobs-muted">Sin entregas registradas.</p>'
+      ? '<p class="jobs-muted">No deliveries recorded.</p>'
       : `<ul class="jobs-entregas">${entregas.map((e) => `
           <li>
-            <span class="jobs-tag">fase ${esc(String(e.fase ?? '?'))} · ${esc(e.para || '?')}${e.rework ? ' · rework' : ''}</span>
+            <span class="jobs-tag">phase ${esc(String(e.fase ?? '?'))} · ${esc(e.para || '?')}${e.rework ? ' · rework' : ''}</span>
             <p>${esc(e.resumen || '')}</p>
           </li>`).join('')}</ul>`;
 
     const historyHtml = history.length === 0
-      ? '<p class="jobs-muted">Sin eventos.</p>'
+      ? '<p class="jobs-muted">No events.</p>'
       : `<ol class="jobs-history">${history.map((h) => `
           <li>
-            <span class="jobs-tag">${esc(h.tipo || 'evento')}</span>
+            <span class="jobs-tag">${esc(h.tipo || 'event')}</span>
             <span>${esc(h.texto || '')}</span>
           </li>`).join('')}</ol>`;
 
@@ -197,21 +197,21 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
       <div class="jobs-detail-head">
         <div>
           <h3>${esc(objetivo)}</h3>
-          <p class="jobs-muted jobs-idline"><code>${esc(summary.id)}</code> · ${esc(estado)}${job.fromDisk ? ' · en disco' : ''}${job.motivo ? ` · ${esc(job.motivo)}` : ''}</p>
+          <p class="jobs-muted jobs-idline"><code>${esc(summary.id)}</code> · ${esc(estado)}${job.fromDisk ? ' · on disk' : ''}${job.motivo ? ` · ${esc(job.motivo)}` : ''}</p>
         </div>
         <button class="jobs-replay" type="button" ${busy ? 'disabled' : ''}>↻ Replay</button>
       </div>
-      ${resumen.escalado?.motivo ? `<p class="jobs-escalado">⚠ Escalado: ${esc(resumen.escalado.motivo)}</p>` : ''}
+      ${resumen.escalado?.motivo ? `<p class="jobs-escalado">⚠ Escalated: ${esc(resumen.escalado.motivo)}</p>` : ''}
       <div class="jobs-stats">
-        <span>Fases: <strong>${esc(String(progreso.fasesTotal ?? fases.length ?? 0))}</strong></span>
-        <span>Ronda: <strong>${esc(String(progreso.ronda ?? resumen.rondas ?? 0))}</strong></span>
+        <span>Phases: <strong>${esc(String(progreso.fasesTotal ?? fases.length ?? 0))}</strong></span>
+        <span>Round: <strong>${esc(String(progreso.ronda ?? resumen.rondas ?? 0))}</strong></span>
         <span>Tests: <strong>${tests && typeof tests.celdas === 'number' ? `${Number(tests.pasadas || 0)}/${Number(tests.celdas || 0)}` : '—'}</strong></span>
       </div>
-      <h4>Fases</h4>
+      <h4>Phases</h4>
       ${fasesHtml}
-      <h4>Entregas</h4>
+      <h4>Deliveries</h4>
       ${entregasHtml}
-      <h4>Paso a paso</h4>
+      <h4>Step by step</h4>
       ${historyHtml}`;
 
     const replayBtn = detailEl.querySelector('.jobs-replay') as HTMLButtonElement | null;
@@ -230,7 +230,7 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
       if (selectedId && !jobs.some((j) => j.id === selectedId)) selectedId = null;
       renderList();
     } catch (err) {
-      showError(`No se pudo cargar el historial: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`Could not load history: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       busy = false;
       refreshBtn.disabled = false;
@@ -241,17 +241,17 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
     if (dead) return;
     selectedId = id;
     renderList();
-    detailEl.innerHTML = '<p class="jobs-muted">Cargando detalle…</p>';
+    detailEl.innerHTML = '<p class="jobs-muted">Loading detail…</p>';
     clearError();
     try {
       const q = slug ? `?slug=${encodeURIComponent(slug)}` : '';
       const payload = (await deps.fetchJson(`/api/team/jobs/${encodeURIComponent(id)}${q}`)) as JobDetailPayload;
       if (dead || selectedId !== id) return;
-      const summary = jobs.find((j) => j.id === id) || { id, slug, estado: payload.job?.estado || 'desconocido' };
+      const summary = jobs.find((j) => j.id === id) || { id, slug, estado: payload.job?.estado || 'unknown' };
       renderDetail(payload, summary);
     } catch (err) {
       if (dead || selectedId !== id) return;
-      detailEl.innerHTML = `<p class="jobs-error-inline">No se pudo cargar el detalle: ${esc(err instanceof Error ? err.message : String(err))}</p>`;
+      detailEl.innerHTML = `<p class="jobs-error-inline">Could not load detail: ${esc(err instanceof Error ? err.message : String(err))}</p>`;
     }
   }
 
@@ -262,7 +262,7 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
     const btn = detailEl.querySelector('.jobs-replay') as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = true;
-      btn.textContent = 'Re-encolando…';
+      btn.textContent = 'Re-queueing…';
     }
     try {
       const data = (await deps.fetchJson(`/api/team/jobs/${encodeURIComponent(summary.id)}/replay`, {
@@ -272,13 +272,13 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
       })) as { jobId?: string; estado?: string };
       if (dead) return;
       detailEl.insertAdjacentHTML('afterbegin',
-        `<p class="jobs-replay-ok">↻ Re-encolado como <code>${esc(data?.jobId || '?')}</code> (${esc(data?.estado || '?')}).</p>`);
+        `<p class="jobs-replay-ok">↻ Re-queued as <code>${esc(data?.jobId || '?')}</code> (${esc(data?.estado || '?')}).</p>`);
       busy = false;
       await loadList();
       if (data?.jobId && !dead) await select(data.jobId, summary.slug || '');
     } catch (err) {
       busy = false;
-      showError(`Replay falló: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`Replay failed: ${err instanceof Error ? err.message : String(err)}`);
       if (btn) {
         btn.disabled = false;
         btn.textContent = '↻ Replay';

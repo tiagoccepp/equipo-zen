@@ -1,23 +1,23 @@
-QUÉ ENTREGÁS: una APP MÓVIL MULTIPLATAFORMA de verdad, en React Native (Expo),
-que corre en el emulador de Android y en el simulador de iPhone.
-NO una web, NO una maqueta HTML.
+WHAT YOU DELIVER: a real CROSS-PLATFORM MOBILE APP in React Native (Expo),
+that runs on the Android emulator and iPhone simulator.
+NOT a web page, NOT an HTML mockup.
 
-ESTRUCTURA OBLIGATORIA (rutas exactas, el motor instala y corre con ellas):
-  package.json          (expo, react, react-native, expo-router si hace falta)
+REQUIRED STRUCTURE (exact paths, the engine installs and runs with them):
+  package.json          (expo, react, react-native, expo-router if needed)
   app.json              (name, slug, orientation, icon, splash)
-  App.jsx               (punto de entrada)
-  src/screens/*.jsx     (una pantalla por archivo)
-  src/components/*.jsx  (lo reutilizable)
-  src/theme.js          (colores, tipografía y espaciado: fuente única)
+  App.jsx               (entry point)
+  src/screens/*.jsx     (one screen per file)
+  src/components/*.jsx  (reusable parts)
+  src/theme.js          (colors, typography, and spacing: single source)
 
-REGLAS (si las rompés, no arranca):
-- Componentes de react-native: View, Text, Pressable, FlatList, ScrollView.
-  NUNCA div, span ni etiquetas HTML: esto no es una web.
-- Estilos con StyleSheet.create y valores de src/theme.js. Nada de CSS.
-- Listas largas con FlatList (virtualizada), nunca .map() dentro de un ScrollView.
-- Navegación por pila para flujos, pestañas abajo para secciones paralelas.
-- Solo dependencias del núcleo de Expo. Nada exótico.
+RULES (if you break them, it won't start):
+- react-native components: View, Text, Pressable, FlatList, ScrollView.
+  NEVER div, span, or HTML tags: this is not a web page.
+- Styles with StyleSheet.create and values from src/theme.js. No CSS.
+- Long lists with FlatList (virtualized), never .map() inside a ScrollView.
+- Stack navigation for flows, bottom tabs for parallel sections.
+- Only core Expo dependencies. Nothing exotic.
 
-DISEÑO (además del piso de calidad de abajo, que ya vale acá):
-- Respetá las zonas seguras (SafeAreaView). El texto escala con el sistema: nada de alturas fijas.
-- Animaciones con la API Animated y AccessibilityInfo.isReduceMotionEnabled().
+DESIGN (in addition to the quality floor below, which already applies here):
+- Respect safe areas (SafeAreaView). Text scales with the system: no fixed heights.
+- Animations with the Animated API and AccessibilityInfo.isReduceMotionEnabled().

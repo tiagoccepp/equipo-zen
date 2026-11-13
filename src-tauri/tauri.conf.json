@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Equipo",
+  "productName": "J.A.B.S",
   "version": "0.1.0",
   "identifier": "com.tiagoccepp.equipo",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Pablo — At your service",
+        "title": "J.A.B.S — Pablo at your service",
         "url": "index.html",
         "width": 1280,
         "height": 860,
@@ -59,10 +59,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["../server", "../node_modules", "../shared", "../models"],
+    "resources": ["../server", "../node_modules", "../shared", "../models", "../dist"],
     "externalBin": ["binaries/equipo-node"],
     "category": "Productivity",
-    "shortDescription": "Your AI team on the desktop",
-    "longDescription": "Equipo: talk by voice or text with AI employees. Floating orb, tray, tiered permissions and computer control."
+    "shortDescription": "Just A Better System — your local-first AI team on the desktop",
+    "longDescription": "J.A.B.S (Just A Better System): talk by voice or text with AI agent teams. Projects, parallel work with verification, a 3D stage, floating orb, tray, tiered permissions, and computer control — local-first."
   }
 }

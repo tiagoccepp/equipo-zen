@@ -1,5 +1,5 @@
-// M-11: cola de renders pesados — un diagrama por tick idle (evita jank
-// cuando un turno trae varios). Scheduler inyectable para tests.
+// M-11: heavy render queue — one diagram per idle tick (avoids jank
+// when a turn brings several). Injectable scheduler for tests.
 
 export type IdleSchedule = (fn: () => void) => void;
 

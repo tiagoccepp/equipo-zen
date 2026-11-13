@@ -1,26 +1,26 @@
-// QW-07: heard-text progresivo — el texto del agente se revela al ritmo
-// del audio que suena, nunca antes (no spoiler). Cada chunk de audio llega
-// etiquetado con sIdx (índice de oración); el primero de cada oración trae
-// además sText. Sin audio (modo texto / voz apagada) se muestra todo junto,
-// igual que antes.
+// QW-07: progressive heard-text — the agent's text is revealed in time with
+// the audio that plays, never earlier (no spoilers). Each audio chunk arrives
+// tagged with sIdx (sentence index); the first chunk of each sentence also
+// carries sText. Without audio (text mode / voice off) everything shows at once,
+// same as before.
 
 export interface AudioTag {
   turnId: string;
   agentId: string;
   sIdx: number;
   sText?: string;
-  // F-08: karaoke — duración estimada (ms) + timings reales si los hay.
+  // F-08: karaoke — estimated duration (ms) + real timings when available.
   sDurMs?: number;
   sTimes?: number[];
 }
 
-/** Estado de revelado de un turno: oraciones observadas + hasta dónde se mostró. */
+/** Reveal state for a turn: observed sentences + how far it has been shown. */
 export class HeardTurn {
   private sentences = new Map<number, string>();
   private revealedUpTo = -1;
   private ended = false;
 
-  /** Un chunk con sIdx empezó a sonar → textos newly-revealed, en orden. */
+  /** A chunk with sIdx started playing → newly-revealed texts, in order. */
   observe(tag: AudioTag): string[] {
     if (this.ended) return [];
     const idx = Math.max(0, Math.floor(Number(tag.sIdx) || 0));
@@ -28,8 +28,8 @@ export class HeardTurn {
       this.sentences.set(idx, tag.sText);
     }
     const fresh: string[] = [];
-    // Regla ≤: si una oración no tuvo audio propio (silenciosa), se revela
-    // junto con la siguiente audible — nunca queda un hueco.
+    // Rule ≤: if a sentence had no audio of its own (silent), it is revealed
+    // together with the next audible one — never leaves a gap.
     for (let i = this.revealedUpTo + 1; i <= idx; i += 1) {
       const text = this.sentences.get(i);
       if (text !== undefined) {
@@ -40,7 +40,7 @@ export class HeardTurn {
     return fresh;
   }
 
-  /** ¿Ya se reveló algo? (decide si el turno va en modo progresivo). */
+  /** Has anything been revealed yet? (decides if the turn uses progressive mode). */
   get progressive(): boolean {
     return this.revealedUpTo >= 0;
   }

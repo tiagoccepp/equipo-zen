@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0e1013" />
-    <title>Equipo — Your AI team</title>
+    <title>J.A.B.S — Just A Better System</title>
   </head>
   <body>
     <a class="skip-link" href="#prompt">Skip to composer</a>
@@ -19,6 +19,7 @@
       </div>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button type="button" role="tab" id="tab-console" aria-controls="view-console" data-view="console" aria-selected="true">Console</button>
+        <button type="button" role="tab" id="tab-projects" aria-controls="view-projects" data-view="projects" aria-selected="false" tabindex="-1">Projects</button>
         <button type="button" role="tab" id="tab-jobs" aria-controls="view-jobs" data-view="jobs" aria-selected="false" tabindex="-1">Jobs</button>
         <button type="button" role="tab" id="tab-manager" aria-controls="view-manager" data-view="manager" aria-selected="false" tabindex="-1">Manager</button>
         <button type="button" role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings" aria-selected="false" tabindex="-1">Settings</button>
@@ -34,14 +35,14 @@
 
     <main class="shell">
       <section id="view-console" class="view view-console" role="tabpanel" aria-labelledby="tab-console" aria-label="Console" tabindex="0">
-        <aside class="rail" aria-label="Project and team">
-          <div class="rail-block">
+        <aside class="rail" aria-label="Context and team">
+          <div class="rail-block" id="rail-home-block">
             <div class="rail-head">
-              <span>Project</span>
-              <button type="button" class="rail-act" data-goto="settings" title="Manage projects">Manage</button>
+              <span id="rail-context-label">Home</span>
+              <button type="button" class="rail-act" data-goto="projects" title="Open projects">Projects</button>
             </div>
-            <div class="rail-project" id="rail-project-name">No project</div>
-            <div class="rail-project-meta" id="rail-project-meta">Create one in Settings</div>
+            <div class="rail-project" id="rail-project-name">Pablo</div>
+            <div class="rail-project-meta" id="rail-project-meta">Personal assistant</div>
           </div>
 
           <div class="rail-block rail-grow">
@@ -64,7 +65,7 @@
               <button id="btn-voice" class="ctl on" type="button" aria-pressed="true" title="Spoken replies">
                 <span class="ctl-label">Voice</span><span class="ctl-state" aria-hidden="true">on</span>
               </button>
-              <button id="btn-autowork" class="ctl on" type="button" aria-pressed="true" title="Agents keep working on the project on their own">
+              <button id="btn-autowork" class="ctl on" type="button" aria-pressed="true" title="Agents keep working on their own">
                 <span class="ctl-label">Auto</span><span class="ctl-state" aria-hidden="true">on</span>
               </button>
             </div>
@@ -73,7 +74,7 @@
 
         <section class="work" aria-label="Activity">
           <div class="work-head">
-            <h2 class="work-title">Activity</h2>
+            <h2 class="work-title" id="work-title">Home</h2>
             <span class="work-sub" id="work-sub">live</span>
           </div>
           <section class="stream" id="stream" aria-live="polite" aria-label="Messages" tabindex="-1"><div class="stream-empty" id="stream-empty">
@@ -86,7 +87,7 @@
             <textarea
               id="prompt"
               rows="1"
-              placeholder="Message Pablo or the team…"
+              placeholder="Message Pablo…"
             ></textarea>
             <div class="composer-actions">
               <span class="composer-hint"><kbd>Enter</kbd> send<kbd class="hint-alt">Shift Enter</kbd> newline</span>
@@ -102,8 +103,8 @@
               <div class="orb-cells" id="orb-cells"></div>
             </div>
             <div class="stage-text">
-              <h1 class="greet" id="greet">Team console</h1>
-              <p class="status" id="status" role="status">Connecting…</p>
+              <h1 class="greet" id="greet">J.A.B.S</h1>
+              <p class="status" id="status" role="status">Pablo online. Ready.</p>
             </div>
           </section>
 
@@ -118,57 +119,101 @@
         </aside>
       </section>
 
+      <section id="view-projects" class="view view-projects" role="tabpanel" aria-labelledby="tab-projects" aria-label="Projects" tabindex="0" hidden>
+        <div class="projects-head">
+          <div>
+            <h2 class="view-title">Projects</h2>
+            <p class="view-lead">Start a project when work needs a dedicated team. Home stays personal with Pablo.</p>
+          </div>
+          <div class="project-new project-new-inline">
+            <input id="projects-title" type="text" maxlength="120" placeholder="New project name…" aria-label="New project name" />
+            <button id="projects-create" type="button" class="send send-compact">Create project</button>
+          </div>
+        </div>
+        <div id="projects-grid" class="projects-grid" aria-live="polite"></div>
+      </section>
+
       <section id="view-jobs" class="view" role="tabpanel" aria-labelledby="tab-jobs" aria-label="Jobs" tabindex="0" hidden></section>
 
       <section id="view-manager" class="view" role="tabpanel" aria-labelledby="tab-manager" aria-label="Manager" tabindex="0" hidden></section>
 
       <section id="view-settings" class="view view-settings" role="tabpanel" aria-labelledby="tab-settings" aria-label="Settings" tabindex="0" hidden>
-        <details class="companies" open>
-          <summary>Companies</summary>
-          <div id="companies-list"></div>
-        </details>
-
-        <details class="companies" id="projects-box" open>
-          <summary>Projects</summary>
-          <div id="projects-list"></div>
-          <div class="project-new">
-            <input id="project-title" type="text" maxlength="120" placeholder="New project…" aria-label="New project" />
-            <button id="project-create" type="button">Create</button>
+        <div class="settings-head">
+          <div>
+            <h2 class="view-title">Settings</h2>
+            <p class="view-lead">Models, voice, devices, permissions, and system controls for J.A.B.S.</p>
           </div>
-        </details>
-
-        <details class="companies" id="perms-box" hidden>
-          <summary>Computer permissions</summary>
-          <div id="perms-list"></div>
-        </details>
-
-        <details class="companies" id="approvals-box">
-          <summary>Pending approvals</summary>
-          <div id="approvals-list"></div>
-        </details>
-
-        <details class="companies" id="prohib-box">
-          <summary>Prohibitions</summary>
-          <div id="prohib-list"></div>
-          <div class="project-new">
-            <select id="prohib-kind" aria-label="Type">
-              <option value="tool">tool</option>
-              <option value="cmd">cmd</option>
-              <option value="path">path</option>
-              <option value="url">url</option>
-            </select>
-            <input id="prohib-pattern" type="text" maxlength="300" placeholder="Pattern (glob or /regex/)" aria-label="Pattern" />
-            <button id="prohib-add" type="button">Prohibit</button>
+          <div class="settings-tools">
+            <button class="chip" type="button" id="btn-test-voice">Voice check</button>
           </div>
-        </details>
+        </div>
 
-        <details class="companies" id="settings-box" open>
-          <summary>Settings</summary>
-          <div id="settings-list"></div>
-        </details>
+        <div class="settings-grid">
+          <section class="settings-card" aria-label="AI, voice and runtime">
+            <div class="settings-card-head"><h3>AI, voice and runtime</h3><span>LLM, STT, TTS, audio, sidecars, energy</span></div>
+            <details class="companies" id="settings-box" open>
+              <summary>Runtime configuration</summary>
+              <div id="settings-list"></div>
+            </details>
+          </section>
 
-        <div class="settings-tools">
-          <button class="chip" type="button" id="btn-test-voice">Voice check</button>
+          <section class="settings-card" aria-label="Workspace">
+            <div class="settings-card-head"><h3>Workspace</h3><span>Companies and projects</span></div>
+            <details class="companies" open>
+              <summary>Companies</summary>
+              <div id="companies-list"></div>
+            </details>
+            <details class="companies" id="projects-box" open>
+              <summary>Projects</summary>
+              <div id="projects-list"></div>
+              <div class="project-new">
+                <input id="project-title" type="text" maxlength="120" placeholder="New project…" aria-label="New project" />
+                <button id="project-create" type="button">Create</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="settings-card" aria-label="Safety and approvals">
+            <div class="settings-card-head"><h3>Safety and approvals</h3><span>Permissions, approvals, prohibitions</span></div>
+            <details class="companies" id="perms-box" hidden>
+              <summary>Computer permissions</summary>
+              <div id="perms-list"></div>
+            </details>
+            <details class="companies" id="approvals-box">
+              <summary>Pending approvals</summary>
+              <div id="approvals-list"></div>
+            </details>
+            <details class="companies" id="prohib-box">
+              <summary>Prohibitions</summary>
+              <div id="prohib-list"></div>
+              <div class="project-new">
+                <select id="prohib-kind" aria-label="Type">
+                  <option value="tool">tool</option>
+                  <option value="cmd">cmd</option>
+                  <option value="path">path</option>
+                  <option value="url">url</option>
+                </select>
+                <input id="prohib-pattern" type="text" maxlength="300" placeholder="Pattern (glob or /regex/)" aria-label="Pattern" />
+                <button id="prohib-add" type="button">Prohibit</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="settings-card settings-card-wide" aria-label="Integrations and capabilities">
+            <div class="settings-card-head"><h3>Integrations and capabilities</h3><span>Status and controls available in this build</span></div>
+            <details class="companies">
+              <summary>Channels and notifications</summary>
+              <div class="settings-note">Telegram configuration is available in Runtime configuration above. WhatsApp, allowlists, auto-respond, and notification routing are managed via API in this build and will surface as direct controls in a future update.</div>
+            </details>
+            <details class="companies">
+              <summary>MCP, skills, and plugins</summary>
+              <div class="settings-note">MCP server status and reconnect are available from Manager/command bar. Server enable/disable editing, per-role skill assignment, and plugins are not yet exposed as runtime toggles.</div>
+            </details>
+            <details class="companies">
+              <summary>Scheduler and diagnostics</summary>
+              <div class="settings-note">Scheduler jobs, connectivity, logs, and telemetry are available via API endpoints. Use Jobs and Manager for operational views.</div>
+            </details>
+          </section>
         </div>
       </section>
     </main>

@@ -1,203 +1,80 @@
-# Sofia — tu equipo IA por voz (Jarvis, no chat)
+# J.A.B.S — Just A Better System
 
-**Demo en vivo:** https://equipo-0jfr.onrender.com/ — entrá y hablá. La voz funciona en Chrome, Edge y Safari; en Brave/Firefox el chat de texto anda completo.
+> A local-first, voice-forward AI workspace: talk to Pablo, run projects with dedicated agent teams, and keep work moving with verifiable execution.
 
-**Sofia** es una asistente always-open: abrís la app y ya está escuchando — *"a la orden"*. Hablale y responde por voz con barge-in real (interrumpila a mitad de frase). Las **empresas con empleados IA** siguen como sección opcional: equipos con skills, conocimientos, personalidad y voz propia que conversan en reunión, recuerdan y **aprenden de lo que les enseñás**.
+J.A.B.S is a desktop/web app (Tauri + Node + TypeScript/vanilla UI) built around one idea: **your assistant should feel present, not like a chat tab**. You start in **Home** with Pablo, your personal assistant. When work becomes complex, you open a **Project** and give it a dedicated team that can plan, execute, and verify in parallel.
 
-- **Cerebro**: **opencode Zen** (pool gratis con rotación, default `crouton-alpha-free`), **MiniMax** (M2–M3), **DeepSeek** o **Groq** — a elección en Ajustes. Cada proveedor guarda su clave por separado.
-- **Voz de Sofia**: [Supertonic TTS](https://github.com/supertone-inc/supertonic) **100% local** (~1.7s, 10 voces) → respaldo [Deepgram Aura-2](https://deepgram.com) (español) → Edge keyless → voz del navegador.
-- **Tu voz**: **Parakeet-TDT-v3** local (~0.4s) → Whisper local → **Groq** (~1.4s) → **Deepgram Nova-3** → navegador. VAD con calibración de ruido + confirmación de arranque (el teclado no abre turnos) y filtro de alucinaciones.
-- **Escritorio**: app Tauri (Linux/Win/Mac) con **orbe flotante** estilo llamada + atajo global `Ctrl+Shift+E`.
+## Why it’s interesting
 
-## Ejecutar
+- **Home + Projects model (in progress):** personal assistant by default, project-scoped teams for engineering/product flows.
+- **Voice-first interaction:** continuous listening/speaking pipeline with local/cloud fallbacks (Parakeet/Whisper/Groq/Deepgram STT, Supertonic/Deepgram/Edge/Piper TTS), barge-in and turn handling.
+- **Operational console UI:** dense dark interface with live activity stream, agent presence/orbs, jobs, manager, and settings.
+- **Real work engine:** projects, tasks, work runs, tool execution, deterministic verification hooks, approvals/permissions, and workspace outputs under `workspace/`.
+- **Generative 3D stage (spec-driven):** declarative `SceneSpec` modules for agent-generated/explodable 3D explanations (demo: V6 engine) with safe validation and isolated rendering.
+- **JABS presence/insights modules:** ambient pulse, nudges, session brief, and quick-action primitives (`src/presence`, `src/jabs`) designed for low-overhead awareness.
+- **Local-first runtime:** SQLite state, local sidecars, desktop packaging (Tauri), and configurable providers/models/devices.
+
+## Current status (honest)
+
+This is an active build with strong foundations and ongoing integration work.
+
+- **Working now:** backend API/server, project/company/task data model, voice/runtime plumbing, desktop shell, console/jobs/manager/settings views, frontend build, new UI direction, and multiple new feature modules/reports.
+- **Partially wired / in progress:** full Home-vs-Projects scoping in runtime, complete Settings coverage for every backend capability, end-to-end wiring of some new modules (scene/presence/insights/channel/spawner/checkpoint paths), and full English/QA polish across all legacy text and docs.
+- **Known gaps:** some backend capabilities are API-only; CI/release workflow needs alignment with `desktop-tauri`; Windows sidecar packaging and full cross-platform verification are not complete in this environment.
+
+See `/home/tito/research/` for audits, plans, and feature reports generated during development.
+
+## Quick start
 
 ```bash
 npm install
-cp .env.example .env                 # o cargá las claves después desde ⚙ Ajustes
-
-npm run dev                          # backend + frontend (+ TTS/STT locales si están instalados)
+npm run dev
 ```
 
-Abre la URL que imprime Vite. El backend escucha solo en loopback (`127.0.0.1:8787`); el cliente le habla vía proxy same-origin.
+- Frontend: Vite dev server (URL printed by Vite)
+- Backend: Node server on loopback (default `127.0.0.1:8787`, proxied in dev)
 
-Scripts: `npm test` (suite `node:test`), `npm run typecheck`, `npm run build`.
-
-## App de escritorio (Tauri: Win/Mac/Linux)
-
-El mismo repo es la app instalada: ventana principal + orbe flotante de cristal
-(la UI minimizada), bandeja, atajo global `Ctrl+Shift+E` y backend Node
-embebido (sin instalar nada aparte). El equipo puede ver tu pantalla y mover
-mouse/teclado por niveles de permiso (Ajustes → Computadora).
+Useful scripts:
 
 ```bash
-npm run build:desktop -- deb,appimage   # Linux; Win: nsis, Mac: dmg
+npm run typecheck
+npm test
+npm run build
+npm run build:desktop -- deb
 ```
 
-Requiere Rust estable + deps del sistema (ver `.github/workflows/desktop.yml`:
-webkit2gtk, pipewire, libclang, libgbm). Los instaladores de Win/Mac se
-compilan en CI con cada tag `desktop-v*` (Actions → desktop → Artifacts).
-Contrato visual: `desktop/DESIGN.md`.
+## Architecture (high level)
 
-## ¿Algo no anda?
+- `src/` — UI (vanilla TS), voice client, FX/orbs/stage, jobs/manager/mission views, presence/JABS modules
+- `server/` — HTTP/WS server, agent runtime, store/SQLite, work engine, permissions/approvals, voice/sidecars, tools/MCP/channels/scheduler
+- `shared/` — protocol/types shared across client and server
+- `src-tauri/` — desktop app shell, tray/single-instance behavior, embedded sidecar runtime
+- `workspace/` — project deliverables and generated artifacts (runtime data)
+- `tests/` — `node:test` suite
+- `research/` docs (in `/home/tito/research`) — audits, design notes, integration reports
+
+## Configuration
+
+- Settings UI exposes core LLM/STT/TTS/audio/energy/split controls (coverage varies by build).
+- Provider keys and runtime options can be configured via environment and/or persisted settings (secrets are masked in public settings responses).
+- Local voice sidecars (Supertonic/Piper/Parakeet/Whisper) can be enabled for lower-latency, offline-capable voice.
+
+## Desktop
+
+J.A.B.S ships as a Tauri app with an embedded Node backend/sidecar. Linux packaging is supported via the desktop build script; Windows/macOS artifacts depend on CI/toolchain availability.
 
 ```bash
-npm run doctor
+npm run build:desktop -- deb,appimage
 ```
 
-Dice qué está bien, qué falta y el comando exacto para arreglarlo (Node, claves,
-voz local, transcripción local, base de datos y puertos). Sirve tanto para la
-primera instalación como para cuando algo dejó de responder.
+## Research and product direction
 
-## Mejora opcional de voz (avanzado)
+- Comparable systems and patterns: `/home/tito/research/inspiration-2026-11-13.md`
+- Monetization/pricing notes: `/home/tito/research/monetization-2026-11-13.md`
+- 3D stage spec/report: `/home/tito/research/scene3d-2026-11-13.md`
+- Presence and JABS innovations: `/home/tito/research/presence-2026-11-13.md`, `/home/tito/research/jabs-innovations-2026-11-13.md`
+- Settings/latency/home-projects audits and plans: `/home/tito/research/settings-audit-2026-11-13.md`, `/home/tito/research/latency-audit-2026-11-13.md`, `/home/tito/research/home-projects-2026-11-13.md`
 
-Sin instalar nada, la app habla y escucha con la voz del navegador. Solo si
-querés mejor calidad (voces propias por empleado + Whisper local):
+## License / notes
 
-```bash
-# Venvs dedicados (uno por motor, fuera del repo):
-python3 -m venv ~/.local/share/equipo/supertonic-venv
-~/.local/share/equipo/supertonic-venv/bin/pip install 'supertonic[serve]'
-python3 -m venv ~/.local/share/equipo/whisper-venv
-~/.local/share/equipo/whisper-venv/bin/pip install faster-whisper fastapi uvicorn
-```
-
-## Las organizaciones
-
-No se crean empresas: elegís entre estudios técnicos predeterminados, cada uno
-con su equipo armado y su criterio propio. Hoy son cuatro, definidos en
-`server/company-templates.json`:
-
-| Estudio | Hace | Equipo |
-|---|---|---|
-| 🌐 **Atelier Web** | Sitios y apps de navegador | CEO · directora de arte · front-end · full-stack · QA · talento |
-| ⚙️ **Taller de Automatizaciones** | Procesos que corren solos | CEO · arquitecta de integraciones · dev · analista de procesos · QA · talento |
-| 📱 **Estudio Móvil** | Apps móviles multiplataforma con React Native | CEO · diseñadora de producto móvil · dev RN · dev de plataforma · QA · talento |
-| 🤖 **Estudio Android** | Apps Android **nativas** en Kotlin + Compose | CEO · diseñadora Material · dev Android · dev de plataforma · QA · talento |
-
-Los dos estudios móviles entregan **apps de verdad, no páginas web**: el motor
-compila el proyecto Android con Gradle, lo instala en el emulador y lo abre. Si
-no compila, los errores del compilador vuelven al equipo con archivo y línea.
-
-La primera vez que entrás a uno se instancia con toda su gente; después queda con
-su historia. Las empresas de otros rubros que hayas creado antes siguen enteras
-en **Archivadas**.
-
-## El proyecto es la unidad de trabajo
-
-Entrás a una empresa y ves **sus proyectos**. Entrás a un proyecto y ahí adentro
-viven su reunión, sus tareas, su organigrama, su actividad y su vista previa.
-
-Eso es lo que hace que el equipo entienda de qué le hablás: en vez de recibir el
-contexto de toda la empresa, recibe el de *este* proyecto. Podés abrir una
-reunión sobre algo ya entregado y pedir "cambiá el header" — saben qué archivos
-hay y qué dice cada uno.
-
-Los proyectos **se borran** desde su tarjeta. Un proyecto borrado se lleva sus
-reuniones, sus tareas y su carpeta del entorno aislado. (Borrar una *reunión* es
-lo contrario: preserva el trabajo que salió de ella.)
-
-## La empresa digital (estilo [Paperclip](https://github.com/paperclipai/paperclip))
-
-Cada simulación es una **empresa que trabaja de verdad**:
-
-- **Jerarquía**: toda empresa tiene una **CEO** (interlocutora directa: si nadie tiene el dominio, ella toma el punto) y un **contratista de talento**; el resto del equipo le reporta a la CEO. Árbol observable en el panel Organigrama.
-- **Paciencia conversacional**: si escribís/decís tu idea en varias partes, los agentes esperan (2.6s, más si la frase quedó abierta) y responden UNA vez con todo el contexto.
-- **Arrancar sin cerrar la reunión**: el botón **Comenzar a trabajar** (junto a "Finalizar reunión") pone al equipo a producir con lo que ya tiene repartido, sin pasar por el cierre. Dice "Comenzar a trabajar" cuando hay tareas repartidas sin arrancar, y **Forzar a trabajar** el resto del tiempo — si nadie tiene nada asignado, no hace nada y lo avisa.
-- **Reunión → trabajo**: en la reunión exponés qué querés lograr y se reparten tareas. Al tocar **Finalizar reunión**, la CEO repasa en voz alta quién quedó con qué (validación conversacional) y, cuando confirmás, se crea la **meta** y el equipo se pone a trabajar en segundo plano.
-- **Trabajo real**: un motor de heartbeats (checkout atómico, máx. 2 corridas en paralelo, pasos acotados con herramientas de archivos sandboxeadas) hace que cada empleado PRODUZCA entregables reales en `workspace/<empresa>/` — una página web pedida en reunión termina siendo un `index.html` navegable en `/workspace/<empresa>/`. Todo con log durable por corrida.
-- **Entorno aislado**: todo lo que la empresa produce vive en `workspace/<empresa>/<proyecto>/` y en ningún otro lado. El motor solo escribe ahí dentro (sin rutas relativas hacia afuera, sin archivos ocultos ni absolutos) y únicamente formatos de entregable (html/css/js/json/md/svg/csv…). La carpeta está fuera del control de versiones.
-- **Cada tarea es un archivo con un dueño**: al cerrar la reunión, la CEO no reparte por disciplina sino por archivo — quién escribe `index.html`, quién `menu.json`. Lo que no es un archivo (una decisión, una revisión, "definir la paleta") no es una tarea de producción. El equipo solo entrega archivos: no existen Figma ni herramientas externas.
-- **Una paleta para todos**: `tokens.css` lo escribe el primero que construye y es la fuente única de colores, tipografía y espaciado. Nadie escribe un valor a mano.
-- **Una máquina revisa antes que un colega**: al terminar, un verificador **sin IA** mide lo que quedó escrito — HTML balanceado, enlaces muertos, imágenes sin `alt`, placeholders, inglés colado, colores fuera de los tokens, JavaScript que no parsea. Los hallazgos le vuelven al agente en el paso siguiente y los arregla ahí mismo.
-- **Continuidad del trabajo**: el equipo trabaja **en fila por proyecto**, no en paralelo sobre los mismos archivos. Quien entra recibe el contrato, la bitácora de lo que dejó el anterior y el contenido real del archivo principal; tiene que **editar** con `edit_file` en vez de regenerar, y no puede sobreescribir un archivo que no leyó.
-- **Revisión entre compañeros**: cuando alguien termina un entregable, un colega con skills afines lo lee de verdad —todos los archivos, no los tres primeros— y lo juzga contra los criterios de aceptación acordados. Deja su comentario y lo aprueba o pide cambios concretos.
-- **Nadie te hace preguntas técnicas**: el equipo decide el stack, la arquitectura y cómo guardar los datos con su propio criterio (`server/playbooks/`), y te lo cuenta en términos de lo que vas a ver. Vos hablás del producto.
-- **El equipo es fijo, pero se afina**: no se contrata gente nueva. El responsable de talento **refina a quien ya está** cuando se lo pedís ("que Delfina sepa de accesibilidad", "quiero a Nahuel más directo"): suma habilidades sin borrar las que tenía, reescribe su conocimiento y su oficio, y guarda la versión anterior por si hay que volver atrás.
-- **Contratación automática (histórico)**: si una tarea necesita habilidades que nadie tiene, el contratista diseña al empleado ideal (perfil completo, voz incluida), lo suma al equipo reportando a la CEO y le delega el trabajo.
-
-## Cómo funciona
-
-- **Simulaciones**: el home es una galería de empresas; adentro de cada una, sus proyectos. Creá una desde plantilla (equipo pre-armado con skills y conocimientos) o desde cero. Cada empresa tiene su escenario, su equipo y su historial de reuniones, todo persistido en SQLite (`node:sqlite`, WAL — sobrevive a `kill -9`).
-- **Empleados**: perfil completo editable — rol, skills (ruteo), **conocimientos del puesto** (se inyectan en su prompt), personalidad, límites y voz (10 presets Supertonic). Con versionado, changelog y rollback.
-- **Reunión en tiempo real**: un router (heurístico + MiniMax para casos grupales) decide quién habla; el texto streamea por deltas y la voz se sintetiza localmente por oraciones a través de un `SpeakerGate` que garantiza que nunca hablen dos a la vez. **Barge-in**: hablá encima y el empleado baja el volumen, se corta y tu turno entra completo.
-- **Auto-aprendizaje**: un observador (MiniMax) detecta correcciones/preferencias en lo que decís — solo turnos del usuario, con evidencia obligatoria — y las inyecta como MEMORIA APRENDIDA en el prompt del empleado correspondiente. Al cerrar cada reunión, una reflexión genera título+resumen y propone vocabulario/estilo (lo aditivo se auto-aplica con guardarraíles; el resto queda como sugerencia). Panel **Memoria** por empleado: ver, editar, borrar, pausar u olvidar todo.
-- **Tareas**: por UI o por los propios empleados (`[TAREA_CREAR: …]`, con destinatario por nombre).
-
-## Arquitectura
-
-```
-src/main.ts             cliente vanilla TS: Simulaciones → Proyectos → Proyecto,
-                        render por regiones, transcript append-only, cola PCM con
-                        ducking, barge-in, marcos de dispositivo
-shared/protocol.ts      protocolo WS tipado + validadores
-server/index.js         bootstrap
-server/lib/
-  config.js             env, modelos y proveedores   http.js       REST
-  db.js / store.js      migraciones / repositorios (store no toca el disco)
-  workforce.js          motor de trabajo: cola, corridas, contrato, revisión
-  verify.js             verificación determinista de entregables (sin IA)
-  playbooks.js          criterio técnico por nicho + estándar de diseño
-  emulator.js           emulador de Android (adb) y simulador de iOS (simctl)
-  llm.js                cliente OpenAI-compat (MiniMax/DeepSeek/opencode/Groq: SSE, rotación)
-  meeting-session.js    una reunión en vivo    router.js       ruteo heurístico
-  agent-runtime.js      prompts y streaming     turn-pipeline.js  cola + SpeakerGate
-  supertonic.js / deepgram.js TTS local + Aura     stt.js / transcriber.js  oído (Parakeet/Groq/Nova)
-  settings.js           ajustes del usuario (SQLite) que pisan al .env
-  learning.js           observador de aprendizajes  reflection.js  resumen + tuner
-  key-ring.js           rotación de claves      telemetry.js   ring en RAM + SSE
-server/playbooks/*.md           criterio de oficio y diseño que reciben al trabajar
-server/company-templates.json   los cuatro estudios con sus equipos
-server/stt/whisper_server.py    STT local (faster-whisper + FastAPI)
-workspace/<empresa>/<proyecto>/ TODO lo que produce el equipo (fuera de git)
-```
-
-Para tocar el código, leé [CLAUDE.md](CLAUDE.md) — explica el porqué de cada
-decisión y qué invariantes no romper. El motor de trabajo está detallado en
-[docs/MOTOR-DE-TRABAJO.md](docs/MOTOR-DE-TRABAJO.md).
-
-## Observabilidad local
-
-- `GET /api/agents/:id/prompt-preview`: el system prompt REAL del empleado (escenario de su empresa, conocimientos, límites y memoria).
-- `GET /api/companies` · `GET /api/companies/:id/projects` · `GET /api/projects/:goalId`
-- `GET /api/meetings?goalId=` · `GET /api/changelog` · `GET /api/emulator/status`
-- `GET /api/telemetry` · `/api/telemetry/stream` (SSE) · `/api/telemetry/analysis`
-
-## Seguridad
-
-App local de un solo usuario: bind en loopback, CORS con allowlist, validación y límites en todos los mensajes WS, TTS y base de datos sin salir de tu máquina. No la expongas a la red sin agregar autenticación.
-
-## Borrar reuniones pasadas
-
-Desde **Reuniones** (en el encabezado de la empresa) se borra cualquier reunión
-salvo en la que estés sentado, y hay un botón para borrar todas las pasadas de
-una. Qué se va y qué queda:
-
-- **Se va**: la conversación (turnos), la reunión en sí, su telemetría, su
-  resumen y sus entradas en el diario.
-- **Queda**: los proyectos y entregables que salieron de ella, con sus tareas.
-  Es trabajo, no charla — las tareas simplemente dejan de apuntar a la reunión.
-- Las tareas que nunca llegaron a un proyecto sí se borran: solo existían en esa
-  conversación.
-
-## Diario de la empresa (logs)
-
-Todo lo que pasa queda registrado en `server/data/logs/AAAA-MM-DD.jsonl`, en
-texto plano legible: tu mensaje tal cual lo escribiste, las respuestas de cada
-empleado, el ruteo, las interrupciones, cada paso del trabajo y los errores del
-modelo. Sirve para reconstruir qué pasó cuando algo falla, sin depender de que
-la app siga abierta.
-
-- Consultarlo desde la app: `GET /api/logs?day=2026-07-25&kind=mensaje_usuario&search=web`
-- O abrirlo a mano: `tail -f server/data/logs/$(date +%F).jsonl`
-- Nunca escribe claves (las tapa aunque aparezcan dentro de un texto), recorta
-  los textos enormes y rota el archivo por tamaño.
-- Se apaga con `SESSION_LOG=0`.
-
-Para comprobar a mano que la interrupción corta el audio de verdad, con el
-sistema levantado: mandá un turno, y en cuanto lleguen los primeros
-`agent_audio_chunk` mandá `{"type":"interrupt","reason":"barge_in"}` — el
-servidor responde `agent_interrupted` y deja de enviar audio en el acto.
-
-Para ver el prompt exacto que recibe un empleado (con su oficio, sus límites,
-lo aprendido y el estado del trabajo en curso): `GET /api/agents/<id>/prompt-preview`.
-Entre el diario y ese preview se reconstruye cualquier caso que haya fallado.
+Internal/active development project. Validate provider terms, voice model licenses, and asset licenses (especially for pixel-art/3D assets) before redistribution.

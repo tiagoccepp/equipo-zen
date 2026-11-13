@@ -124,7 +124,7 @@ test('qw06: splitSegments — dos bloques', () => {
 test('qw06: error accionable — línea + causa + arreglo', () => {
   const code = 'graph TD\nA-->\nB-->C';
   const info = mermaidErrorInfo(new Error('Parse error on line 2:\nExpecting SQE'), code);
-  assert.ok(info.title.includes('línea 2'), info.title);
+  assert.ok(info.title.includes('line 2'), info.title);
   assert.ok(info.detail.includes('A-->'), info.detail);
   assert.ok(info.hint.length > 20, 'hint accionable');
   const unknown = mermaidErrorInfo(new Error('Unknown diagram type: foo'), 'foo');
@@ -165,14 +165,14 @@ test('qw06: mountMermaid error — caja accionable + copiar llama clipboard', as
   const box = host.children[0];
   assert.ok(box.className.includes('mmd-error'), 'marca de error');
   const title = box.querySelector('.mmd-title');
-  assert.ok(title.textContent.includes('línea 2'), title.textContent);
+  assert.ok(title.textContent.includes('line 2'), title.textContent);
   assert.ok(box.querySelector('.mmd-hint').textContent.length > 10, 'hint visible');
   assert.ok(box.querySelector('.mmd-detail').textContent.includes('boom'), 'detalle crudo');
   const btn = box.querySelector('.mmd-copy');
   assert.ok(btn, 'botón copiar en error');
   await btn.click();
   assert.equal(copied, code, 'copia el código exacto');
-  assert.ok(btn.textContent.includes('Copiado'), 'feedback visual');
+  assert.ok(btn.textContent.includes('Copied'), 'feedback visual');
 });
 
 test('qw06: mountMermaid vacío — error sin llamar a mermaid', async () => {

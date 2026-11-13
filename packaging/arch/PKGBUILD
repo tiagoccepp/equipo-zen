@@ -2,7 +2,7 @@
 pkgname=equipo-bin
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Equipo — tu equipo IA en el escritorio (orbe, voz, permisos)"
+pkgdesc="J.A.B.S (Just A Better System) — local-first AI team desktop app (orb, voice, permissions)"
 arch=('x86_64')
 url="https://example.invalid/equipo"
 license=('custom')

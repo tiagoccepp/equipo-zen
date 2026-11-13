@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Stage Demo</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #0e1013; }
+      #app { height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import '/src/stage/stage.css';
+      import { mountStage } from '/src/stage/stage.ts';
+      import { demoSpec } from '/src/stage/demo-spec.ts';
+
+      const root = document.getElementById('app');
+      if (!root) throw new Error('missing #app');
+      const stage = mountStage({ container: root, spec: demoSpec });
+      // Expose for quick manual checks in devtools.
+      window.__stage = stage;
+    </script>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-# App de escritorio Equipo (Tauri): build Win + Mac + Linux.
+# J.A.B.S (Just A Better System) desktop app (Tauri): build Win + Mac + Linux.
 # Se dispara manual o con tags desktop-v* (los builds pesan; no corre en cada push).
 # El build lo orquesta scripts/desktop/build.sh (frontend → poda devDeps →
 # bundle); acá solo se instalan toolchains y se suben los instaladores.

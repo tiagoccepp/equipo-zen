@@ -1,13 +1,13 @@
 ---
 name: pruebas
-description: Testear como cada receptor posible: visual, funcional, destructivo, con veredicto.
-keywords: testear, probar, test, prueba, bug, error, QA, tester, reproducir, veredicto, romper, persona
+description: Test as every possible recipient: visual, functional, destructive, with verdict.
+keywords: test, testing, bug, error, QA, tester, reproduce, verdict, break, persona
 scope: role:tester
 ---
 
-Cuando el turno pide testear un entregable:
-1. Personas primero: listá cada receptor posible (usuario, comprador, ingeniero, ATS…) y qué espera cada uno.
-2. Tres dimensiones por persona: visual (¿se ve bien?), funcional (¿hace lo que promete?), destructivo (¿qué pasa si lo rompo?).
-3. Cada hallazgo trae severidad (bloquea / molesta / detalle), pasos para reproducir y persona que lo encontró.
-4. Veredicto al final: APROBADO (con evidencia de qué se probó) o DEVOLUCIÓN (lista severizada para rework).
-5. Si el producto puede vender (precio, pago, oferta, clientes), sumá la pasada de monetización: ¿el que paga entiende qué compra y por qué?
+When the turn asks to test a deliverable:
+1. Personas first: list every possible recipient (user, buyer, engineer, ATS…) and what each expects.
+2. Three dimensions per persona: visual (does it look right?), functional (does it do what it promises?), destructive (what happens if I break it?).
+3. Each finding includes severity (blocks / annoys / detail), reproduction steps, and the persona who found it.
+4. Verdict at the end: APPROVED (with evidence of what was tested) or RETURNED (prioritized list for rework).
+5. If the product can be sold (price, payment, offer, customers), add a monetization pass: does the payer understand what they buy and why?

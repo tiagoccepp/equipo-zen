@@ -57,7 +57,7 @@ export function probeWebGL2(): WebGLProbe {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl2');
     if (!gl) {
-      return { ok: false, renderer: '', error: 'getContext(webgl2) devolvió null' };
+      return { ok: false, renderer: '', error: 'getContext(webgl2) returned null' };
     }
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const renderer = ext
