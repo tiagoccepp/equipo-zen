@@ -131,6 +131,11 @@ function switchView(name: ViewName): void {
       }
     }
   }
+  if (name === 'settings') {
+    openSettingsView();
+  } else {
+    stopSidecarRefresh();
+  }
   if (name === 'projects') {
     if (!projectsMcMounted) {
       const mc = document.getElementById('projects-mc');
@@ -1882,131 +1887,154 @@ function flashSaved(): void {
   }, 1200);
 }
 
+function initSettingsNav(): void {
+  const navs = Array.from(document.querySelectorAll<HTMLButtonElement>('.snav[data-stab]'));
+  if (navs.length === 0) return;
+  const activate = (tab: string): void => {
+    for (const n of navs) {
+      const on = n.dataset.stab === tab;
+      n.classList.toggle('active', on);
+      n.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    for (const p of Array.from(document.querySelectorAll<HTMLElement>('.spanel[data-spanel]'))) {
+      const on = p.dataset.spanel === tab;
+      p.classList.toggle('active', on);
+      p.hidden = !on;
+    }
+  };
+  for (const n of navs) {
+    n.addEventListener('click', () => activate(n.dataset.stab || 'models'));
+  }
+}
+
 async function renderSettings(): Promise<void> {
-  const box = $('settings-list');
-  box.innerHTML = '';
+  initSettingsNav();
+  const modelsBox = document.getElementById('settings-models');
+  const voiceBox = document.getElementById('settings-voice');
+  const channelsBox = document.getElementById('settings-channels');
+  const systemBox = document.getElementById('settings-system');
+  const legacy = document.getElementById('settings-list');
+  for (const b of [modelsBox, voiceBox, channelsBox, systemBox, legacy]) if (b) b.innerHTML = '';
+
   let s: PublicSettings;
   try {
     s = await getSettings();
   } catch {
-    box.textContent = 'Backend unavailable. Check that the server is running.';
+    if (modelsBox) modelsBox.innerHTML = '<div class="set-card"><h3>Unavailable</h3><p class="set-desc">Backend unavailable. Check that the server is running.</p></div>';
     return;
   }
 
   const save = (patch: Record<string, string>, rerender = false): void => {
     void saveSettings(patch)
-      .then(() => {
-        flashSaved();
-        if (rerender) void renderSettings();
-      })
+      .then(() => { flashSaved(); if (rerender) void renderSettings(); })
       .catch((err) => addMsg('system', `Setting failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
   };
 
-  const note = (text: string): HTMLDivElement => {
-    const d = document.createElement('div');
-    d.className = 'sidecar-note';
-    d.textContent = text;
-    return d;
+  const card = (title: string, desc?: string): HTMLElement => {
+    const c = document.createElement('section');
+    c.className = 'set-card';
+    const h = document.createElement('h3'); h.textContent = title; c.appendChild(h);
+    if (desc) { const p = document.createElement('p'); p.className = 'set-desc'; p.textContent = desc; c.appendChild(p); }
+    return c;
   };
+  const note = (text: string): HTMLElement => {
+    const d = document.createElement('p'); d.className = 'set-note'; d.textContent = text; return d;
+  };
+  const row = (label: string, control: HTMLElement, hint?: string): HTMLElement => {
+    const r = document.createElement('div'); r.className = 'set-row';
+    const l = document.createElement('div'); l.className = 'set-row-label'; l.textContent = label;
+    if (hint) { const sm = document.createElement('small'); sm.textContent = hint; l.appendChild(sm); }
+    const c = document.createElement('div'); c.className = 'set-row-control'; c.appendChild(control);
+    r.append(l, c); return r;
+  };
+  const add = (parent: HTMLElement | null, child: HTMLElement): void => { if (parent) parent.appendChild(child); };
 
-  // ── Brain (LLM) ──────────────────────────────────────────────────
-  box.appendChild(settingGroup('Brain (LLM)'));
-  box.appendChild(note('Configure reasoning providers and models. Changes apply immediately to new requests.'));
-
+  // ══ AI & Models ══════════════════════════════════════════════════
+  const brain = card('Language models (LLM)', 'Choose providers and models for reasoning. You can set a default, strong, and fast model, plus failover order.');
+  add(modelsBox, brain);
   const provLabels: Record<string, string> = {};
   for (const p of s.llm.providerOptions) provLabels[p.id] = p.label;
   const provSel = settingSelect(s.llm.providerOptions.map((p) => p.id), s.llm.provider, provLabels);
   provSel.setAttribute('aria-label', 'Reasoning provider');
   provSel.addEventListener('change', () => save({ 'llm.provider': provSel.value }, true));
-  box.appendChild(settingRow('Active provider', provSel));
+  brain.appendChild(row('Active provider', provSel, 'Provider used for new requests'));
 
   const modelSel = settingSelect(s.llm.modelOptions, s.llm.model);
   modelSel.setAttribute('aria-label', 'Default model');
   modelSel.addEventListener('change', () => save({ 'llm.model': modelSel.value }));
-  box.appendChild(settingRow('Default model', modelSel));
+  brain.appendChild(row('Default model', modelSel));
 
-  const strongInput = document.createElement('input');
-  strongInput.type = 'text';
-  strongInput.placeholder = 'Strong model override (optional)';
+  const strongInput = document.createElement('input'); strongInput.type = 'text';
+  strongInput.placeholder = 'e.g. opencode-go/beam-free or provider/model';
   strongInput.value = (s.llm as any).strong || '';
-  strongInput.setAttribute('aria-label', 'Strong model override');
+  strongInput.setAttribute('aria-label', 'Strong model');
   strongInput.addEventListener('change', () => save({ 'llm.strong': strongInput.value.trim() }));
-  box.appendChild(settingRow('Strong model', strongInput));
+  brain.appendChild(row('Strong model', strongInput, 'Used for complex tasks (optional override)'));
 
-  const fastInput = document.createElement('input');
-  fastInput.type = 'text';
-  fastInput.placeholder = 'Fast model override (optional)';
+  const fastInput = document.createElement('input'); fastInput.type = 'text';
+  fastInput.placeholder = 'e.g. opencode-go/beam-free';
   fastInput.value = (s.llm as any).fast || '';
-  fastInput.setAttribute('aria-label', 'Fast model override');
+  fastInput.setAttribute('aria-label', 'Fast model');
   fastInput.addEventListener('change', () => save({ 'llm.fast': fastInput.value.trim() }));
-  box.appendChild(settingRow('Fast model', fastInput));
+  brain.appendChild(row('Fast model', fastInput, 'Used for quick/light tasks (optional override)'));
 
   const modelsInput = document.createElement('input');
-  modelsInput.placeholder = 'Custom models (CSV, empty = curated list)';
+  modelsInput.placeholder = 'Custom models (CSV), leave empty for curated list';
   modelsInput.value = s.llm.customModels || '';
   modelsInput.setAttribute('aria-label', 'Custom models CSV');
   modelsInput.addEventListener('change', () => save({ 'llm.models': modelsInput.value }, true));
-  box.appendChild(settingRow('Custom models', modelsInput));
+  brain.appendChild(row('Custom models', modelsInput));
 
   const foInput = document.createElement('input');
-  foInput.placeholder = 'Failover order (CSV, e.g. opencode,groq,deepseek)';
+  foInput.placeholder = 'Failover order (CSV), e.g. opencode,groq,deepseek';
   foInput.value = s.llm.failover || '';
-  foInput.setAttribute('aria-label', 'Failover order CSV');
+  foInput.setAttribute('aria-label', 'Failover order');
   foInput.addEventListener('change', () => save({ 'llm.failover': foInput.value }, true));
-  box.appendChild(settingRow('Failover order', foInput));
-  box.appendChild(note(`Effective failover: ${(s.llm.failoverResolved || []).join(' → ') || '—'}`));
+  brain.appendChild(row('Failover order', foInput));
+  brain.appendChild(note(`Effective failover: ${(s.llm.failoverResolved || []).join(' → ') || '—'}`));
 
-  // All provider keys (professional: manage each provider without switching context)
+  const keysCard = card('API keys', 'Provider credentials for language models. Keys are stored locally and masked after save.');
+  add(modelsBox, keysCard);
   const keyDefs: Array<{ label: string; field: string; masked: string; set: boolean }> = [
-    { label: 'MiniMax API key', field: 'llm.apiKey', masked: s.llm.apiKeyMasked, set: s.llm.apiKeySet },
-    { label: 'DeepSeek API key', field: 'llm.deepseekKey', masked: s.llm.deepseekKeyMasked, set: s.llm.deepseekKeySet },
-    { label: 'OpenCode API key', field: 'llm.opencodeKey', masked: s.llm.opencodeKeyMasked, set: s.llm.opencodeKeySet },
-    { label: 'Groq API key', field: 'llm.groqKey', masked: s.llm.groqKeyMasked, set: s.llm.groqKeySet }
+    { label: 'MiniMax', field: 'llm.apiKey', masked: s.llm.apiKeyMasked, set: s.llm.apiKeySet },
+    { label: 'DeepSeek', field: 'llm.deepseekKey', masked: s.llm.deepseekKeyMasked, set: s.llm.deepseekKeySet },
+    { label: 'OpenCode', field: 'llm.opencodeKey', masked: s.llm.opencodeKeyMasked, set: s.llm.opencodeKeySet },
+    { label: 'Groq (LLM)', field: 'llm.groqKey', masked: s.llm.groqKeyMasked, set: s.llm.groqKeySet }
   ];
   for (const k of keyDefs) {
-    const inp = document.createElement('input');
-    inp.type = 'password';
+    const inp = document.createElement('input'); inp.type = 'password';
     inp.placeholder = k.masked || (k.set ? 'Set (hidden)' : 'Not set — paste key');
-    inp.setAttribute('aria-label', k.label);
-    inp.addEventListener('change', () => {
-      if (!inp.value) return;
-      save({ [k.field]: inp.value }, true);
-      inp.value = '';
-    });
-    box.appendChild(settingRow(k.label, inp));
+    inp.setAttribute('aria-label', `${k.label} API key`);
+    inp.addEventListener('change', () => { if (!inp.value) return; save({ [k.field]: inp.value }, true); inp.value = ''; });
+    keysCard.appendChild(row(`${k.label} API key`, inp, k.set ? 'Configured' : 'Not configured'));
   }
 
-  // ── Speech (STT) ─────────────────────────────────────────────────
-  box.appendChild(settingGroup('Speech (STT)'));
-  box.appendChild(note('Speech-to-text engines and models. Order controls fallback chain (comma-separated).'));
-
+  // ══ Speech & Voice ═══════════════════════════════════════════════
+  const sttCard = card('Speech to text (STT)', 'Choose how your voice is transcribed. Set provider, engine order, model, and language.');
+  add(voiceBox, sttCard);
   const sttProvSel = settingSelect(s.stt.providerOptions, s.stt.provider);
   sttProvSel.setAttribute('aria-label', 'STT provider');
   sttProvSel.addEventListener('change', () => save({ 'stt.provider': sttProvSel.value }));
-  box.appendChild(settingRow('STT provider', sttProvSel));
+  sttCard.appendChild(row('STT provider', sttProvSel));
 
-  const sttOrderInput = document.createElement('input');
-  sttOrderInput.type = 'text';
-  sttOrderInput.value = s.stt.order || '';
-  sttOrderInput.placeholder = s.stt.orderDefault || 'parakeet,whisper,groq,deepgram';
-  sttOrderInput.setAttribute('aria-label', 'STT engine order');
-  sttOrderInput.spellcheck = false;
+  const sttOrderInput = document.createElement('input'); sttOrderInput.type = 'text';
+  sttOrderInput.value = s.stt.order || ''; sttOrderInput.placeholder = s.stt.orderDefault || 'parakeet,whisper,groq,deepgram';
+  sttOrderInput.setAttribute('aria-label', 'STT engine order'); sttOrderInput.spellcheck = false;
   sttOrderInput.addEventListener('change', () => save({ 'stt.order': sttOrderInput.value.trim() }));
-  box.appendChild(settingRow('STT engine order', sttOrderInput));
+  sttCard.appendChild(row('Engine order', sttOrderInput, 'Fallback chain, comma-separated'));
 
   const whisperSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
   whisperSel.setAttribute('aria-label', 'Local Whisper model');
   whisperSel.addEventListener('change', () => save({ 'stt.whisperModel': whisperSel.value }));
-  box.appendChild(settingRow('Whisper model (local)', whisperSel));
+  sttCard.appendChild(row('Whisper model (local)', whisperSel));
 
   const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English', auto: 'Auto-detect' };
   const sttLang = (s.stt.language === 'es' || s.stt.language === 'en' || s.stt.language === 'auto')
-    ? s.stt.language
-    : (s.stt.language.startsWith('en') ? 'en' : (s.stt.language.startsWith('auto') ? 'auto' : 'es'));
+    ? s.stt.language : (s.stt.language.startsWith('en') ? 'en' : (s.stt.language.startsWith('auto') ? 'auto' : 'es'));
   const langSel = settingSelect(['auto', 'es', 'en'], sttLang, LANG_LABELS);
   langSel.setAttribute('aria-label', 'Listening language');
   langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
-  box.appendChild(settingRow('Listening language', langSel));
+  sttCard.appendChild(row('Listening language', langSel));
 
   const CONF_LABELS: Record<string, string> = { '0.3': 'Low (0.3)', '0.4': 'Medium (0.4)', '0.55': 'Default (0.55)', '0.7': 'High (0.7)' };
   const confCur = String(s.stt.minConfidence ?? 0.55);
@@ -2014,345 +2042,202 @@ async function renderSettings(): Promise<void> {
   const confSel = settingSelect(confOpts, confCur, { ...CONF_LABELS, [confCur]: CONF_LABELS[confCur] || `Custom (${confCur})` });
   confSel.setAttribute('aria-label', 'STT min confidence');
   confSel.addEventListener('change', () => save({ 'stt.minConfidence': confSel.value }));
-  box.appendChild(settingRow('Min confidence', confSel));
+  sttCard.appendChild(row('Min confidence', confSel));
 
-  const groqStt = document.createElement('input');
-  groqStt.type = 'password';
+  const groqStt = document.createElement('input'); groqStt.type = 'password';
   groqStt.placeholder = s.stt.groqKeyMasked || 'Not set';
   groqStt.setAttribute('aria-label', 'Groq STT key');
   groqStt.addEventListener('change', () => { if (!groqStt.value) return; save({ 'stt.groqKey': groqStt.value }, true); groqStt.value = ''; });
-  box.appendChild(settingRow('Groq STT key', groqStt));
+  sttCard.appendChild(row('Groq STT key', groqStt));
 
-  const dgStt = document.createElement('input');
-  dgStt.type = 'password';
+  const dgStt = document.createElement('input'); dgStt.type = 'password';
   dgStt.placeholder = s.stt.deepgramKeyMasked || 'Not set';
-  dgStt.setAttribute('aria-label', 'Deepgram key (STT/TTS)');
+  dgStt.setAttribute('aria-label', 'Deepgram key');
   dgStt.addEventListener('change', () => { if (!dgStt.value) return; save({ 'stt.deepgramKey': dgStt.value }, true); dgStt.value = ''; });
-  box.appendChild(settingRow('Deepgram key', dgStt));
+  sttCard.appendChild(row('Deepgram key (STT/TTS)', dgStt));
 
-  // ── Voice (TTS) ──────────────────────────────────────────────────
-  box.appendChild(settingGroup('Voice (TTS)'));
-  box.appendChild(note('Text-to-speech engines and models. Order controls fallback chain.'));
-
-  const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en')
-    ? s.tts.language : (s.tts.language.startsWith('en') ? 'en' : 'es');
+  const ttsCard = card('Text to speech (TTS)', 'Choose voice output engine, order, speed, and service URLs.');
+  add(voiceBox, ttsCard);
+  const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en') ? s.tts.language : (s.tts.language.startsWith('en') ? 'en' : 'es');
   const ttsLangSel = settingSelect(['es', 'en'], ttsLangCur, { es: 'Español', en: 'English' });
   ttsLangSel.setAttribute('aria-label', 'Voice language');
   ttsLangSel.addEventListener('change', () => save({ 'tts.language': ttsLangSel.value }));
-  box.appendChild(settingRow('Voice language', ttsLangSel));
+  ttsCard.appendChild(row('Voice language', ttsLangSel));
 
   const engSel = settingSelect(s.tts.engineOptions || ['auto', 'piper', 'supertonic', 'deepgram', 'edge'], s.tts.engine || 'auto');
   engSel.setAttribute('aria-label', 'Preferred TTS engine');
   engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
-  box.appendChild(settingRow('Preferred engine', engSel));
+  ttsCard.appendChild(row('Preferred engine', engSel));
 
-  const ttsOrderInput = document.createElement('input');
-  ttsOrderInput.type = 'text';
-  ttsOrderInput.value = s.tts.order || '';
-  ttsOrderInput.placeholder = s.tts.orderDefault || 'deepgram,piper,supertonic,edge';
-  ttsOrderInput.setAttribute('aria-label', 'TTS engine order');
-  ttsOrderInput.spellcheck = false;
+  const ttsOrderInput = document.createElement('input'); ttsOrderInput.type = 'text';
+  ttsOrderInput.value = s.tts.order || ''; ttsOrderInput.placeholder = s.tts.orderDefault || 'deepgram,piper,supertonic,edge';
+  ttsOrderInput.setAttribute('aria-label', 'TTS engine order'); ttsOrderInput.spellcheck = false;
   ttsOrderInput.addEventListener('change', () => save({ 'tts.order': ttsOrderInput.value.trim() }));
-  box.appendChild(settingRow('TTS engine order', ttsOrderInput));
+  ttsCard.appendChild(row('Engine order', ttsOrderInput, 'Fallback chain, comma-separated'));
 
-  const ttsSpeed = document.createElement('input');
-  ttsSpeed.type = 'number';
-  ttsSpeed.min = '0.5'; ttsSpeed.max = '2'; ttsSpeed.step = '0.1';
-  ttsSpeed.value = String(s.tts.speed ?? 1);
-  ttsSpeed.setAttribute('aria-label', 'Speech speed');
+  const ttsSpeed = document.createElement('input'); ttsSpeed.type = 'number'; ttsSpeed.min = '0.5'; ttsSpeed.max = '2'; ttsSpeed.step = '0.1';
+  ttsSpeed.value = String(s.tts.speed ?? 1); ttsSpeed.setAttribute('aria-label', 'Speech speed');
   ttsSpeed.addEventListener('change', () => save({ 'tts.speed': ttsSpeed.value }));
-  box.appendChild(settingRow('Speech speed', ttsSpeed));
+  ttsCard.appendChild(row('Speech speed', ttsSpeed));
 
-  const piperUrlInp = document.createElement('input');
-  piperUrlInp.type = 'text';
-  piperUrlInp.value = s.tts.piperUrl || '';
-  piperUrlInp.placeholder = 'http://127.0.0.1:7791';
-  piperUrlInp.spellcheck = false;
-  piperUrlInp.setAttribute('aria-label', 'Piper sidecar URL');
+  const piperUrlInp = document.createElement('input'); piperUrlInp.type = 'text';
+  piperUrlInp.value = s.tts.piperUrl || ''; piperUrlInp.placeholder = 'http://127.0.0.1:7791'; piperUrlInp.spellcheck = false;
+  piperUrlInp.setAttribute('aria-label', 'Piper URL');
   piperUrlInp.addEventListener('change', () => save({ 'tts.piperUrl': piperUrlInp.value.trim() }));
-  box.appendChild(settingRow('Piper URL', piperUrlInp));
+  ttsCard.appendChild(row('Piper URL', piperUrlInp, 'Local Piper sidecar endpoint'));
 
-  const supertonicUrlInp = document.createElement('input');
-  supertonicUrlInp.type = 'text';
-  supertonicUrlInp.value = s.tts.url || '';
-  supertonicUrlInp.placeholder = 'Supertonic sidecar URL (optional)';
-  supertonicUrlInp.spellcheck = false;
-  supertonicUrlInp.setAttribute('aria-label', 'Supertonic sidecar URL');
+  const supertonicUrlInp = document.createElement('input'); supertonicUrlInp.type = 'text';
+  supertonicUrlInp.value = s.tts.url || ''; supertonicUrlInp.placeholder = 'Supertonic sidecar URL (optional)'; supertonicUrlInp.spellcheck = false;
+  supertonicUrlInp.setAttribute('aria-label', 'Supertonic URL');
   supertonicUrlInp.addEventListener('change', () => save({ 'tts.url': supertonicUrlInp.value.trim() }));
-  box.appendChild(settingRow('Supertonic URL', supertonicUrlInp));
+  ttsCard.appendChild(row('Supertonic URL', supertonicUrlInp));
 
-  const testVoiceBtn = document.createElement('button');
-  testVoiceBtn.className = 'pill';
-  testVoiceBtn.textContent = 'Test voice';
+  const testVoiceBtn = document.createElement('button'); testVoiceBtn.className = 'pill'; testVoiceBtn.textContent = 'Test voice';
   testVoiceBtn.setAttribute('aria-label', 'Test voice output');
   testVoiceBtn.addEventListener('click', () => {
     testVoiceBtn.textContent = 'Speaking…';
     void (async () => {
-      try {
-        const audioB64 = await decir('Hello, this is a J.A.B.S voice test.');
-        const audio = new Audio(`data:audio/mpeg;base64,${audioB64}`);
-        await audio.play();
-      } catch (err) {
-        addMsg('system', `Voice test failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
-      } finally {
-        testVoiceBtn.textContent = 'Test voice';
-      }
+      try { const audioB64 = await decir('Hello, this is a J.A.B.S voice test.'); const audio = new Audio(`data:audio/mpeg;base64,${audioB64}`); await audio.play(); }
+      catch (err) { addMsg('system', `Voice test failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'); }
+      finally { testVoiceBtn.textContent = 'Test voice'; }
     })();
   });
-  box.appendChild(settingRow('Voice test', testVoiceBtn));
+  ttsCard.appendChild(row('Voice test', testVoiceBtn, 'Play a short sample with current TTS settings'));
 
-  // ── Energy & Runtime ─────────────────────────────────────────────
-  box.appendChild(settingGroup('Energy & Runtime'));
-  const energyModeSel = settingSelect(['always-on', 'gate', 'manual'], s.energy?.mode || 'manual', {
-    'always-on': 'Always on (start at boot)',
-    gate: 'Gate (orb + wake word)',
-    manual: 'Manual'
-  });
-  energyModeSel.setAttribute('aria-label', 'Energy mode');
-  energyModeSel.addEventListener('change', () => {
-    void apiJson('/api/energy/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: energyModeSel.value })
-    }).then(() => { flashSaved(); void renderSettings(); })
-      .catch(() => setStatus('Failed to change energy mode.'));
-  });
-  box.appendChild(settingRow('Energy mode', energyModeSel));
-
-  const splitSel = settingSelect(['local', 'split'], s.split?.mode || 'local', { local: 'Local only', split: 'Split (offload to VPS)' });
-  splitSel.setAttribute('aria-label', 'Split mode');
-  splitSel.addEventListener('change', () => save({ 'split.mode': splitSel.value }, true));
-  box.appendChild(settingRow('Compute mode', splitSel));
-
-  const vpsInput = document.createElement('input');
-  vpsInput.type = 'text';
-  vpsInput.placeholder = 'https://your-vps (STT/TTS ports)';
-  vpsInput.value = s.split?.vps || '';
-  vpsInput.spellcheck = false;
-  vpsInput.setAttribute('aria-label', 'VPS base URL');
-  vpsInput.addEventListener('change', () => save({ 'split.vps': vpsInput.value.trim() }));
-  box.appendChild(settingRow('VPS base URL', vpsInput));
-
-  // ── Channels & Notifications ─────────────────────────────────────
-  box.appendChild(settingGroup('Channels & Notifications'));
-  const tg = s.channels?.telegram;
-  if (tg) {
-    const tgOn = document.createElement('input');
-    tgOn.type = 'checkbox';
-    tgOn.checked = tg.enabled;
-    tgOn.setAttribute('aria-label', 'Telegram enabled');
-    tgOn.addEventListener('change', () => save({ 'channels.telegram.enabled': String(tgOn.checked) }));
-    box.appendChild(settingRow('Telegram enabled', tgOn));
-
-    const tgToken = document.createElement('input');
-    tgToken.type = 'password';
-    tgToken.placeholder = tg.botTokenMasked || 'Bot token';
-    tgToken.setAttribute('aria-label', 'Telegram bot token');
-    tgToken.addEventListener('change', () => { if (!tgToken.value) return; save({ 'channels.telegram.botToken': tgToken.value }, true); tgToken.value = ''; });
-    box.appendChild(settingRow('Telegram bot token', tgToken));
-
-    const tgTito = document.createElement('input');
-    tgTito.placeholder = 'Owner Telegram ID';
-    tgTito.value = tg.titoId || '';
-    tgTito.setAttribute('aria-label', 'Telegram owner ID');
-    tgTito.addEventListener('change', () => save({ 'channels.telegram.titoId': tgTito.value.trim() }));
-    box.appendChild(settingRow('Telegram owner ID', tgTito));
-
-    const tgMode = settingSelect(['tito-only', 'allowlist'], tg.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
-    tgMode.setAttribute('aria-label', 'Telegram access mode');
-    tgMode.addEventListener('change', () => save({ 'channels.telegram.mode': tgMode.value }));
-    box.appendChild(settingRow('Telegram access', tgMode));
-
-    const tgAllow = document.createElement('input');
-    tgAllow.type = 'text';
-    tgAllow.placeholder = 'Allowed IDs (CSV)';
-    tgAllow.value = tg.allow || '';
-    tgAllow.setAttribute('aria-label', 'Telegram allowlist');
-    tgAllow.addEventListener('change', () => save({ 'channels.telegram.allow': tgAllow.value.trim() }));
-    box.appendChild(settingRow('Telegram allowlist', tgAllow));
-
-    const tgAuto = document.createElement('input');
-    tgAuto.type = 'checkbox';
-    tgAuto.checked = (tg as any).autoRespond === 'true' || (tg as any).autoRespond === '1';
-    tgAuto.setAttribute('aria-label', 'Telegram auto-respond');
-    tgAuto.addEventListener('change', () => save({ 'channels.telegram.autoRespond': String(tgAuto.checked) }));
-    box.appendChild(settingRow('Telegram auto-respond', tgAuto));
-  }
-
-  const wa = s.channels?.whatsapp;
-  if (wa) {
-    const waOn = document.createElement('input');
-    waOn.type = 'checkbox';
-    waOn.checked = wa.enabled;
-    waOn.setAttribute('aria-label', 'WhatsApp enabled');
-    waOn.addEventListener('change', () => save({ 'channels.whatsapp.enabled': String(waOn.checked) }));
-    box.appendChild(settingRow('WhatsApp enabled', waOn));
-
-    const waToken = document.createElement('input');
-    waToken.type = 'password';
-    waToken.placeholder = wa.tokenMasked || 'Access token';
-    waToken.setAttribute('aria-label', 'WhatsApp token');
-    waToken.addEventListener('change', () => { if (!waToken.value) return; save({ 'channels.whatsapp.token': waToken.value }, true); waToken.value = ''; });
-    box.appendChild(settingRow('WhatsApp token', waToken));
-
-    const waPhone = document.createElement('input');
-    waPhone.type = 'text';
-    waPhone.placeholder = 'Phone number ID';
-    waPhone.value = wa.phoneId || '';
-    waPhone.setAttribute('aria-label', 'WhatsApp phone ID');
-    waPhone.addEventListener('change', () => save({ 'channels.whatsapp.phoneId': waPhone.value.trim() }));
-    box.appendChild(settingRow('WhatsApp phone ID', waPhone));
-
-    const waTito = document.createElement('input');
-    waTito.type = 'text';
-    waTito.placeholder = 'Owner WhatsApp ID';
-    waTito.value = wa.titoId || '';
-    waTito.setAttribute('aria-label', 'WhatsApp owner ID');
-    waTito.addEventListener('change', () => save({ 'channels.whatsapp.titoId': waTito.value.trim() }));
-    box.appendChild(settingRow('WhatsApp owner ID', waTito));
-
-    const waMode = settingSelect(['tito-only', 'allowlist'], wa.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
-    waMode.setAttribute('aria-label', 'WhatsApp access mode');
-    waMode.addEventListener('change', () => save({ 'channels.whatsapp.mode': waMode.value }));
-    box.appendChild(settingRow('WhatsApp access', waMode));
-
-    const waAllow = document.createElement('input');
-    waAllow.type = 'text';
-    waAllow.placeholder = 'Allowed IDs (CSV)';
-    waAllow.value = wa.allow || '';
-    waAllow.setAttribute('aria-label', 'WhatsApp allowlist');
-    waAllow.addEventListener('change', () => save({ 'channels.whatsapp.allow': waAllow.value.trim() }));
-    box.appendChild(settingRow('WhatsApp allowlist', waAllow));
-  }
-
-  const notify = (s as any).notify || { channel: 'none', voice: false, to: '' };
-  const notifChan = settingSelect(['none', 'telegram', 'whatsapp'], notify.channel || 'none', { none: 'None', telegram: 'Telegram', whatsapp: 'WhatsApp' });
-  notifChan.setAttribute('aria-label', 'Notification channel');
-  notifChan.addEventListener('change', () => save({ 'notify.channel': notifChan.value }));
-  box.appendChild(settingRow('Notification channel', notifChan));
-
-  const notifTo = document.createElement('input');
-  notifTo.type = 'text';
-  notifTo.placeholder = 'Notification recipient';
-  notifTo.value = notify.to || '';
-  notifTo.setAttribute('aria-label', 'Notification recipient');
-  notifTo.addEventListener('change', () => save({ 'notify.to': notifTo.value.trim() }));
-  box.appendChild(settingRow('Notification to', notifTo));
-
-  const notifVoice = document.createElement('input');
-  notifVoice.type = 'checkbox';
-  notifVoice.checked = !!notify.voice;
-  notifVoice.setAttribute('aria-label', 'Voice notifications');
-  notifVoice.addEventListener('change', () => save({ 'notify.voice': String(notifVoice.checked) }));
-  box.appendChild(settingRow('Voice notifications', notifVoice));
-
-  // ── Audio devices ────────────────────────────────────────────────
-  box.appendChild(settingGroup('Audio Devices'));
+  const audioCard = card('Audio devices', 'Input/output devices and volume (PipeWire).');
+  add(voiceBox, audioCard);
   const audioSel = s.audio || { output: 'default', input: 'default', followDefault: true };
-  let audioDev = null;
-  try { audioDev = await getAudioDevices(); } catch { audioDev = null; }
-
-  const followBox = document.createElement('input');
-  followBox.type = 'checkbox';
-  followBox.checked = audioSel.followDefault !== false;
+  let audioDev: any = null; try { audioDev = await getAudioDevices(); } catch { audioDev = null; }
+  const followBox = document.createElement('input'); followBox.type = 'checkbox'; followBox.checked = audioSel.followDefault !== false;
   followBox.setAttribute('aria-label', 'Follow system default audio');
   followBox.addEventListener('change', () => save({ 'audio.followDefault': followBox.checked ? 'true' : 'false' }, true));
-  box.appendChild(settingRow('Follow system defaults', followBox));
-
+  audioCard.appendChild(row('Follow system defaults', followBox));
   if (!audioDev) {
-    box.appendChild(note('Audio devices unavailable (PipeWire not detected).'));
+    audioCard.appendChild(note('Audio devices unavailable (PipeWire not detected).'));
   } else {
-    const sinks = audioDev.sinks || [];
-    const sources = audioDev.sources || [];
-    const withSaved = (list: Array<{ name: string }>, saved: string): string[] => {
-      const names = list.map((d) => d.name);
-      return saved && saved !== 'default' && !names.includes(saved) ? [saved, ...names] : names;
-    };
+    const sinks = audioDev.sinks || []; const sources = audioDev.sources || [];
+    const withSaved = (list: Array<{ name: string }>, saved: string): string[] => { const names = list.map((d) => d.name); return saved && saved !== 'default' && !names.includes(saved) ? [saved, ...names] : names; };
     const labelsFor = (list: Array<{ name: string; description: string; isDefault: boolean }>, saved: string): Record<string, string> => {
-      const labels: Record<string, string> = {};
-      for (const d of list) labels[d.name] = `${d.description}${d.isDefault ? ' (system default)' : ''}`;
-      if (saved && !labels[saved]) labels[saved] = 'Saved (not present)';
-      return labels;
+      const labels: Record<string, string> = {}; for (const d of list) labels[d.name] = `${d.description}${d.isDefault ? ' (system default)' : ''}`; if (saved && !labels[saved]) labels[saved] = 'Saved (not present)'; return labels;
     };
     const outSel = settingSelect(withSaved(sinks, audioSel.output), audioSel.output || 'default', labelsFor(sinks, audioSel.output));
-    outSel.setAttribute('aria-label', 'Audio output');
-    outSel.disabled = followBox.checked;
+    outSel.setAttribute('aria-label', 'Audio output'); outSel.disabled = followBox.checked;
     outSel.addEventListener('change', () => save({ 'audio.output': outSel.value }));
-    box.appendChild(settingRow('Output device', outSel));
-
+    audioCard.appendChild(row('Output device', outSel));
     const inSel = settingSelect(withSaved(sources, audioSel.input), audioSel.input || 'default', labelsFor(sources, audioSel.input));
-    inSel.setAttribute('aria-label', 'Audio input');
-    inSel.disabled = followBox.checked;
+    inSel.setAttribute('aria-label', 'Audio input'); inSel.disabled = followBox.checked;
     inSel.addEventListener('change', () => save({ 'audio.input': inSel.value }));
-    box.appendChild(settingRow('Input device', inSel));
-
-    const effectiveDev = (list: typeof sinks, saved: string): (typeof sinks)[number] | undefined =>
-      list.find((d) => d.name === saved) || list.find((d) => d.isDefault) || list[0];
-    const volRow = (dev: { name: string; volume: number | null; muted: boolean | null } | undefined, label: string): void => {
+    audioCard.appendChild(row('Input device', inSel));
+    const effectiveDev = (list: any[], saved: string): any => list.find((d) => d.name === saved) || list.find((d) => d.isDefault) || list[0];
+    const volRow = (dev: any, label: string): void => {
       if (!dev) return;
-      const wrap = document.createElement('div');
-      wrap.style.display = 'flex'; wrap.style.gap = '8px'; wrap.style.alignItems = 'center';
-      const slider = document.createElement('input');
-      slider.type = 'range'; slider.min = '0'; slider.max = '100';
-      slider.value = String(Math.round((dev.volume ?? 1) * 100));
+      const wrap = document.createElement('div'); wrap.style.display = 'flex'; wrap.style.gap = '8px'; wrap.style.alignItems = 'center'; wrap.style.width = '100%';
+      const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(Math.round((dev.volume ?? 1) * 100));
       slider.setAttribute('aria-label', `${label} volume`); slider.style.flex = '1';
-      slider.addEventListener('change', () => {
-        void setAudioVolume(dev.name, Number(slider.value) / 100).then(() => flashSaved())
-          .catch((err) => addMsg('system', `Volume failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
-      });
-      const mute = document.createElement('input');
-      mute.type = 'checkbox'; mute.checked = dev.muted === true; mute.title = 'Mute';
-      mute.setAttribute('aria-label', `${label} mute`);
-      mute.addEventListener('change', () => {
-        void setAudioMute(dev.name, mute.checked).then(() => flashSaved())
-          .catch((err) => addMsg('system', `Mute failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
-      });
-      wrap.append(slider, mute);
-      box.appendChild(settingRow(label, wrap));
+      slider.addEventListener('change', () => { void setAudioVolume(dev.name, Number(slider.value) / 100).then(() => flashSaved()).catch((err) => addMsg('system', `Volume failed: ${err instanceof Error ? err.message : 'error'}`, 'sys')); });
+      const mute = document.createElement('input'); mute.type = 'checkbox'; mute.checked = dev.muted === true; mute.title = 'Mute'; mute.setAttribute('aria-label', `${label} mute`);
+      mute.addEventListener('change', () => { void setAudioMute(dev.name, mute.checked).then(() => flashSaved()).catch((err) => addMsg('system', `Mute failed: ${err instanceof Error ? err.message : 'error'}`, 'sys')); });
+      wrap.append(slider, mute); audioCard.appendChild(row(label, wrap));
     };
     volRow(effectiveDev(sinks, audioSel.output), 'Output volume');
     volRow(effectiveDev(sources, audioSel.input), 'Input volume');
-
-    const testOutBtn = document.createElement('button');
-    testOutBtn.className = 'pill';
-    testOutBtn.textContent = 'Test output';
-    testOutBtn.setAttribute('aria-label', 'Test audio output');
+    const testOutBtn = document.createElement('button'); testOutBtn.className = 'pill'; testOutBtn.textContent = 'Test output'; testOutBtn.setAttribute('aria-label', 'Test audio output');
     testOutBtn.addEventListener('click', () => {
-      const target = effectiveDev(sinks, audioSel.output)?.name || '';
-      testOutBtn.textContent = 'Playing…';
-      void testAudioOutput(followBox.checked ? '' : target)
-        .then(() => { testOutBtn.textContent = 'Test output'; flashSaved(); })
-        .catch((err) => {
-          testOutBtn.textContent = 'Test output';
-          addMsg('system', `Test tone failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
-        });
+      const target = effectiveDev(sinks, audioSel.output)?.name || ''; testOutBtn.textContent = 'Playing…';
+      void testAudioOutput(followBox.checked ? '' : target).then(() => { testOutBtn.textContent = 'Test output'; flashSaved(); })
+        .catch((err) => { testOutBtn.textContent = 'Test output'; addMsg('system', `Test tone failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'); });
     });
-    box.appendChild(settingRow('Output test', testOutBtn));
+    audioCard.appendChild(row('Output test', testOutBtn));
   }
 
-  // ── Sidecars ─────────────────────────────────────────────────────
-  box.appendChild(settingGroup('Sidecars'));
-  box.appendChild(note('Local STT/TTS service health. Status refreshes automatically while this panel is open.'));
-  const scWrap = document.createElement('div');
-  scWrap.id = 'sidecars-list';
-  scWrap.className = 'sidecars';
-  const scLoading = document.createElement('div');
-  scLoading.className = 'sidecar-note';
-  scLoading.textContent = 'Loading sidecars…';
-  scWrap.appendChild(scLoading);
-  box.appendChild(scWrap);
-  const scFoot = document.createElement('div');
-  scFoot.className = 'sidecars-foot';
-  const scRefresh = document.createElement('button');
-  scRefresh.className = 'pill';
-  scRefresh.textContent = 'Refresh';
-  scRefresh.setAttribute('aria-label', 'Refresh sidecar status');
-  scRefresh.addEventListener('click', () => void renderSidecars(scWrap));
-  scFoot.appendChild(scRefresh);
-  box.appendChild(scFoot);
+  // ══ Channels ═════════════════════════════════════════════════════
+  const chanCard = card('Channels & notifications', 'Configure Telegram, WhatsApp, and where notifications go.');
+  add(channelsBox, chanCard);
+  const tg = s.channels?.telegram;
+  if (tg) {
+    chanCard.appendChild(note('Telegram'));
+    const tgOn = document.createElement('input'); tgOn.type = 'checkbox'; tgOn.checked = tg.enabled; tgOn.setAttribute('aria-label', 'Telegram enabled');
+    tgOn.addEventListener('change', () => save({ 'channels.telegram.enabled': String(tgOn.checked) }));
+    chanCard.appendChild(row('Telegram enabled', tgOn));
+    const tgToken = document.createElement('input'); tgToken.type = 'password'; tgToken.placeholder = tg.botTokenMasked || 'Bot token'; tgToken.setAttribute('aria-label', 'Telegram bot token');
+    tgToken.addEventListener('change', () => { if (!tgToken.value) return; save({ 'channels.telegram.botToken': tgToken.value }, true); tgToken.value = ''; });
+    chanCard.appendChild(row('Bot token', tgToken));
+    const tgTito = document.createElement('input'); tgTito.placeholder = 'Owner Telegram ID'; tgTito.value = tg.titoId || ''; tgTito.setAttribute('aria-label', 'Telegram owner ID');
+    tgTito.addEventListener('change', () => save({ 'channels.telegram.titoId': tgTito.value.trim() }));
+    chanCard.appendChild(row('Owner ID', tgTito));
+    const tgMode = settingSelect(['tito-only', 'allowlist'], tg.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
+    tgMode.setAttribute('aria-label', 'Telegram access mode'); tgMode.addEventListener('change', () => save({ 'channels.telegram.mode': tgMode.value }));
+    chanCard.appendChild(row('Access mode', tgMode));
+    const tgAllow = document.createElement('input'); tgAllow.type = 'text'; tgAllow.placeholder = 'Allowed IDs (CSV)'; tgAllow.value = tg.allow || ''; tgAllow.setAttribute('aria-label', 'Telegram allowlist');
+    tgAllow.addEventListener('change', () => save({ 'channels.telegram.allow': tgAllow.value.trim() }));
+    chanCard.appendChild(row('Allowlist', tgAllow));
+    const tgAuto = document.createElement('input'); tgAuto.type = 'checkbox'; tgAuto.checked = (tg as any).autoRespond === 'true' || (tg as any).autoRespond === '1'; tgAuto.setAttribute('aria-label', 'Telegram auto-respond');
+    tgAuto.addEventListener('change', () => save({ 'channels.telegram.autoRespond': String(tgAuto.checked) }));
+    chanCard.appendChild(row('Auto-respond', tgAuto));
+  }
+  const wa = s.channels?.whatsapp;
+  if (wa) {
+    chanCard.appendChild(note('WhatsApp'));
+    const waOn = document.createElement('input'); waOn.type = 'checkbox'; waOn.checked = wa.enabled; waOn.setAttribute('aria-label', 'WhatsApp enabled');
+    waOn.addEventListener('change', () => save({ 'channels.whatsapp.enabled': String(waOn.checked) }));
+    chanCard.appendChild(row('WhatsApp enabled', waOn));
+    const waToken = document.createElement('input'); waToken.type = 'password'; waToken.placeholder = wa.tokenMasked || 'Access token'; waToken.setAttribute('aria-label', 'WhatsApp token');
+    waToken.addEventListener('change', () => { if (!waToken.value) return; save({ 'channels.whatsapp.token': waToken.value }, true); waToken.value = ''; });
+    chanCard.appendChild(row('Access token', waToken));
+    const waPhone = document.createElement('input'); waPhone.type = 'text'; waPhone.placeholder = 'Phone number ID'; waPhone.value = wa.phoneId || ''; waPhone.setAttribute('aria-label', 'WhatsApp phone ID');
+    waPhone.addEventListener('change', () => save({ 'channels.whatsapp.phoneId': waPhone.value.trim() }));
+    chanCard.appendChild(row('Phone number ID', waPhone));
+    const waTito = document.createElement('input'); waTito.type = 'text'; waTito.placeholder = 'Owner WhatsApp ID'; waTito.value = wa.titoId || ''; waTito.setAttribute('aria-label', 'WhatsApp owner ID');
+    waTito.addEventListener('change', () => save({ 'channels.whatsapp.titoId': waTito.value.trim() }));
+    chanCard.appendChild(row('Owner ID', waTito));
+    const waMode = settingSelect(['tito-only', 'allowlist'], wa.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
+    waMode.setAttribute('aria-label', 'WhatsApp access mode'); waMode.addEventListener('change', () => save({ 'channels.whatsapp.mode': waMode.value }));
+    chanCard.appendChild(row('Access mode', waMode));
+    const waAllow = document.createElement('input'); waAllow.type = 'text'; waAllow.placeholder = 'Allowed IDs (CSV)'; waAllow.value = wa.allow || ''; waAllow.setAttribute('aria-label', 'WhatsApp allowlist');
+    waAllow.addEventListener('change', () => save({ 'channels.whatsapp.allow': waAllow.value.trim() }));
+    chanCard.appendChild(row('Allowlist', waAllow));
+  }
+  const notify = (s as any).notify || { channel: 'none', voice: false, to: '' };
+  chanCard.appendChild(note('Notifications'));
+  const notifChan = settingSelect(['none', 'telegram', 'whatsapp'], notify.channel || 'none', { none: 'None', telegram: 'Telegram', whatsapp: 'WhatsApp' });
+  notifChan.setAttribute('aria-label', 'Notification channel'); notifChan.addEventListener('change', () => save({ 'notify.channel': notifChan.value }));
+  chanCard.appendChild(row('Notification channel', notifChan));
+  const notifTo = document.createElement('input'); notifTo.type = 'text'; notifTo.placeholder = 'Recipient'; notifTo.value = notify.to || ''; notifTo.setAttribute('aria-label', 'Notification recipient');
+  notifTo.addEventListener('change', () => save({ 'notify.to': notifTo.value.trim() }));
+  chanCard.appendChild(row('Notification to', notifTo));
+  const notifVoice = document.createElement('input'); notifVoice.type = 'checkbox'; notifVoice.checked = !!notify.voice; notifVoice.setAttribute('aria-label', 'Voice notifications');
+  notifVoice.addEventListener('change', () => save({ 'notify.voice': String(notifVoice.checked) }));
+  chanCard.appendChild(row('Voice notifications', notifVoice));
+
+  // ══ System ═══════════════════════════════════════════════════════
+  const rtCard = card('Runtime & energy', 'Execution mode, energy behavior, and compute split.');
+  add(systemBox, rtCard);
+  const energyModeSel = settingSelect(['always-on', 'gate', 'manual'], s.energy?.mode || 'manual', { 'always-on': 'Always on (start at boot)', gate: 'Gate (orb + wake word)', manual: 'Manual' });
+  energyModeSel.setAttribute('aria-label', 'Energy mode');
+  energyModeSel.addEventListener('change', () => {
+    void apiJson('/api/energy/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: energyModeSel.value }) })
+      .then(() => { flashSaved(); void renderSettings(); }).catch(() => setStatus('Failed to change energy mode.'));
+  });
+  rtCard.appendChild(row('Energy mode', energyModeSel));
+  const splitSel = settingSelect(['local', 'split'], s.split?.mode || 'local', { local: 'Local only', split: 'Split (offload to VPS)' });
+  splitSel.setAttribute('aria-label', 'Compute mode'); splitSel.addEventListener('change', () => save({ 'split.mode': splitSel.value }, true));
+  rtCard.appendChild(row('Compute mode', splitSel));
+  const vpsInput = document.createElement('input'); vpsInput.type = 'text'; vpsInput.placeholder = 'https://your-vps'; vpsInput.value = s.split?.vps || ''; vpsInput.spellcheck = false; vpsInput.setAttribute('aria-label', 'VPS base URL');
+  vpsInput.addEventListener('change', () => save({ 'split.vps': vpsInput.value.trim() }));
+  rtCard.appendChild(row('VPS base URL', vpsInput, 'Used when compute mode is Split'));
+
+  const scCard = card('Sidecars', 'Local STT/TTS service health. Refresh to update status.');
+  add(systemBox, scCard);
+  const scWrap = document.createElement('div'); scWrap.id = 'sidecars-list'; scWrap.className = 'sidecars';
+  scCard.appendChild(scWrap);
+  const scFoot = document.createElement('div'); scFoot.className = 'sidecars-foot';
+  const scRefresh = document.createElement('button'); scRefresh.className = 'pill'; scRefresh.textContent = 'Refresh'; scRefresh.setAttribute('aria-label', 'Refresh sidecar status');
+  scRefresh.addEventListener('click', () => void renderSidecars(scWrap)); scFoot.appendChild(scRefresh); scCard.appendChild(scFoot);
   void renderSidecars(scWrap);
 
-  box.appendChild(note('Advanced controls (approvals, prohibitions, scheduler, MCP server config, project caps) are available via their dedicated panels/APIs.'));
+  const capCard = card('Integrations & capabilities', 'Status of skills, MCP, plugins, scheduler, and diagnostics in this build.');
+  add(systemBox, capCard);
+  capCard.appendChild(note('Channels (Telegram/WhatsApp) are configured in the Channels tab. MCP server status/reconnect is available from Manager/command bar; server enable/disable and per-role skill assignment are not yet exposed as runtime toggles in this build. Plugins, scheduler jobs, connectivity, logs, and telemetry are available via Jobs/Manager or API endpoints.'));
 }
 
 // ── Sidecars: 1 fila por sidecar (dot + métricas del watchdog) ─────────
@@ -2414,35 +2299,22 @@ function stopSidecarRefresh(): void {
 function startSidecarRefresh(): void {
   stopSidecarRefresh();
   sidecarTimer = window.setInterval(() => {
-    // El contenedor se rebusca en cada tick: renderSettings lo recrea.
-    const box = document.getElementById('settings-box') as HTMLDetailsElement | null;
+    const settingsView = document.getElementById('view-settings');
     const el = document.getElementById('sidecars-list');
-    if (!box?.open || !el) return;
+    if (!settingsView || settingsView.hidden || !el) return;
     void renderSidecars(el);
   }, SIDECAR_REFRESH_MS);
 }
-document.querySelector('#settings-box')?.addEventListener('toggle', (e) => {
-  const open = (e.target as HTMLDetailsElement).open;
-  if (open) {
-    void renderSettings();
-    startSidecarRefresh();
-  } else {
-    stopSidecarRefresh();
-  }
-});
-// T3: Companies y Settings arrancan abiertos en su vista → render inicial
-// sin esperar el primer toggle (que ya no llega solo).
-{
-  const companiesBox = document.querySelector('.companies') as HTMLDetailsElement | null;
-  if (companiesBox?.open) void renderCompanies();
-  const settingsBox = document.getElementById('settings-box') as HTMLDetailsElement | null;
-  if (settingsBox?.open) {
-    void renderSettings();
-    startSidecarRefresh();
-  }
+
+function openSettingsView(): void {
+  void renderSettings();
+  startSidecarRefresh();
+  void renderCompanies();
+  void renderProjects();
 }
 if (isTauri()) {
-  $('perms-box').hidden = false;
+  const pb = document.getElementById('perms-box');
+  if (pb) pb.hidden = false;
 }
 
 // ── FX + Mission Control (integración main) ──────────────────────────
@@ -2598,21 +2470,21 @@ if (idleCall) {
   window.setTimeout(() => { void upgradeTo3D(); }, 1200);
 }
 
-// ── Integrations: presence HUD/briefing, JABS pulse, 3D stage (lazy) ─
+// ── Integrations: presence HUD/briefing, JABS pulse, 3D stage (on-demand) ─
 let presenceDispose: (() => void) | null = null;
 let jabsDispose: (() => void) | null = null;
-let sceneHandle: { destroy(): void; refresh(): Promise<void> } | null = null;
-let sceneOpen = false;
+let stageHandle: { destroy(): void } | null = null;
 
-async function initConsoleAmbientIntegrationsOnce(): Promise<void> {
+async function initConsoleIntegrations(): Promise<void> {
   if (presenceDispose || jabsDispose) return;
   try {
-    const mod = await import('./integrations/presence-jabs-integration.ts');
-    const hudMount = document.getElementById('presence-hud-slot');
+    const mod = await import('./integrations/presence-jabs-integration.ts') as any;
+    await mod.ensureIntegrationCss?.();
+    const hudMount = document.getElementById('presence-hud-slot') as HTMLElement | null;
     const briefingMount = document.getElementById('presence-brief-slot') as HTMLElement | null;
     if (hudMount) {
       const p = await mod.mountConsolePresence({ hudMount, briefingMount: briefingMount ?? undefined });
-      presenceDispose = p.dispose;
+      presenceDispose = p?.dispose || (() => {});
     }
     const pulseMount = document.querySelector('#jabs-slot .jabs-pulse-slot') as HTMLElement | null;
     const briefMount = document.querySelector('#jabs-slot .jabs-brief-slot') as HTMLElement | null;
@@ -2631,58 +2503,69 @@ async function initConsoleAmbientIntegrationsOnce(): Promise<void> {
             switchView('console');
           } else if (a?.type === 'start.project' || a?.type === 'switch.view.projects') {
             switchView('projects');
-          } else if (a?.type === 'refresh.pulse') {
-            // pulse self-refreshes; no-op
-          } else {
-            console.debug('[jabs action]', action);
           }
         }
       });
-      jabsDispose = j.dispose;
+      jabsDispose = j?.dispose || (() => {});
     }
   } catch (err) {
     console.warn('[integrations] presence/jabs not mounted', err);
   }
 }
 
-async function toggleProjectStage(): Promise<void> {
-  const mount = document.getElementById('project-scene-mount') as HTMLElement | null;
-  const empty = document.getElementById('project-scene-empty') as HTMLElement | null;
-  const btn = document.getElementById('btn-open-stage') as HTMLButtonElement | null;
+// 3D Stage: on-demand overlay with large gridded canvas
+async function openProjectStage(projectId?: string): Promise<void> {
+  const pid = projectId || currentGoal || currentCompany || '';
+  let overlay = document.getElementById('stage-overlay') as HTMLElement | null;
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'stage-overlay';
+    overlay.className = 'stage-overlay';
+    overlay.innerHTML = `
+      <div class="stage-overlay-head">
+        <h3>3D Stage — Visual representation</h3>
+        <div class="stage-overlay-actions">
+          <span id="stage-overlay-label" class="set-note" style="margin:0"></span>
+          <button type="button" class="pill" id="stage-overlay-close" aria-label="Close">Close</button>
+        </div>
+      </div>
+      <div class="stage-overlay-body">
+        <div class="stage-grid-canvas" aria-hidden="true"></div>
+        <div id="stage-overlay-mount" class="stage-scene-mount"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#stage-overlay-close')?.addEventListener('click', () => closeProjectStage());
+  }
+  overlay.hidden = false;
+  const label = overlay.querySelector('#stage-overlay-label') as HTMLElement | null;
+  if (label) label.textContent = pid ? `Project: ${projectNames.get(pid) || pid}` : 'No project selected';
+  const mount = overlay.querySelector('#stage-overlay-mount') as HTMLElement | null;
+  if (stageHandle) { try { stageHandle.destroy(); } catch {} stageHandle = null; }
   if (!mount) return;
-  if (sceneOpen) {
-    sceneHandle?.destroy();
-    sceneHandle = null;
-    sceneOpen = false;
-    mount.hidden = true;
-    if (empty) { empty.hidden = false; empty.textContent = 'No scene loaded. Open to view the project stage.'; }
-    if (btn) btn.textContent = 'Open';
+  mount.innerHTML = '';
+  if (!pid) {
+    mount.innerHTML = '<div style="position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);padding:24px;text-align:center"><p>Open a project, then ask for a 3D/visual representation or prototype to render it on this grid.</p></div>';
     return;
   }
-  const projectId = currentGoal || currentCompany || 'home';
-  mount.hidden = false;
-  if (empty) { empty.hidden = true; }
-  if (btn) btn.textContent = 'Close';
   try {
-    const { mountProjectScene } = await import('./integrations/scene-integration.ts');
-    sceneHandle = await mountProjectScene({ container: mount, projectId });
-    sceneOpen = true;
+    const mod = await import('./integrations/scene-integration.ts') as any;
+    await mod.ensureIntegrationCss?.();
+    stageHandle = await mod.mountProjectScene({ container: mount, projectId: pid });
   } catch (err) {
-    console.warn('[stage] mount failed', err);
-    if (empty) {
-      empty.hidden = false;
-      empty.textContent = `Stage unavailable: ${err instanceof Error ? err.message : 'error'}`;
-    }
-    mount.hidden = true;
-    if (btn) btn.textContent = 'Open';
-    sceneOpen = false;
+    console.warn('[stage] unavailable', err);
+    mount.innerHTML = `<div style="position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);padding:24px"><p>3D Stage unavailable: ${err instanceof Error ? err.message : 'error'}</p></div>`;
   }
 }
-
-document.getElementById('btn-open-stage')?.addEventListener('click', () => { void toggleProjectStage(); });
+function closeProjectStage(): void {
+  const overlay = document.getElementById('stage-overlay') as HTMLElement | null;
+  if (overlay) overlay.hidden = true;
+  if (stageHandle) { try { stageHandle.destroy(); } catch {} stageHandle = null; }
+}
+(window as any).__openProjectStage = openProjectStage;
+(window as any).__closeProjectStage = closeProjectStage;
 
 const idleInit = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
-const scheduleIntegrations = () => idleInit ? idleInit(() => { void initConsoleAmbientIntegrationsOnce(); }, { timeout: 3000 }) : setTimeout(() => { void initConsoleAmbientIntegrationsOnce(); }, 1500);
+const scheduleIntegrations = () => idleInit ? idleInit(() => { void initConsoleIntegrations(); }, { timeout: 3000 }) : setTimeout(() => { void initConsoleIntegrations(); }, 1500);
 scheduleIntegrations();
 
 (async () => {

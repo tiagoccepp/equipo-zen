@@ -126,10 +126,8 @@
             </dl>
           </div>
 
-          <div class="context-block" id="stage-block">
-            <div class="rail-head"><span>3D Stage</span><button type="button" id="btn-open-stage" class="text-btn">Open</button></div>
-            <div id="project-scene-mount" class="scene-integration-root" hidden></div>
-            <p id="project-scene-empty" class="scene-integration-empty">No scene loaded. Open to view the project stage.</p>
+          <div class="context-block" id="stage-entry" hidden>
+            <div class="rail-head"><span>3D Stage</span></div>
           </div>
         </aside>
       </section>
@@ -157,80 +155,95 @@
         <div class="settings-head">
           <div>
             <h2 class="view-title">Settings</h2>
-            <p class="view-lead">Models, voice, devices, permissions, and system controls for J.A.B.S.</p>
+            <p class="view-lead">Models, voice, channels, workspace, and safety — organized and easy to find.</p>
           </div>
           <div class="settings-tools">
-            <button class="chip" type="button" id="btn-test-voice">Voice check</button>
+            <button class="chip" type="button" id="btn-test-voice" aria-label="Test voice">Test voice</button>
           </div>
         </div>
-
-        <div class="settings-grid">
-          <section class="settings-card" aria-label="AI, voice and runtime">
-            <div class="settings-card-head"><h3>AI, voice and runtime</h3><span>LLM, STT, TTS, audio, sidecars, energy</span></div>
-            <details class="companies" id="settings-box" open>
-              <summary>Runtime configuration</summary>
-              <div id="settings-list"></div>
-            </details>
-          </section>
-
-          <section class="settings-card" aria-label="Workspace">
-            <div class="settings-card-head"><h3>Workspace</h3><span>Companies and projects</span></div>
-            <details class="companies" open>
-              <summary>Companies</summary>
-              <div id="companies-list"></div>
-            </details>
-            <details class="companies" id="projects-box" open>
-              <summary>Projects</summary>
-              <div id="projects-list"></div>
-              <div class="project-new">
-                <input id="project-title" type="text" maxlength="120" placeholder="New project…" aria-label="New project" />
-                <button id="project-create" type="button">Create</button>
+        <div class="settings-shell">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button type="button" class="snav active" data-stab="models">AI &amp; Models</button>
+            <button type="button" class="snav" data-stab="voice">Speech &amp; Voice</button>
+            <button type="button" class="snav" data-stab="channels">Channels</button>
+            <button type="button" class="snav" data-stab="workspace">Workspace</button>
+            <button type="button" class="snav" data-stab="safety">Safety</button>
+            <button type="button" class="snav" data-stab="system">System</button>
+          </nav>
+          <div class="settings-content">
+            <div class="spanel active" data-spanel="models" id="panel-models">
+              <div id="settings-models" class="set-sections"></div>
+            </div>
+            <div class="spanel" data-spanel="voice" id="panel-voice" hidden>
+              <div id="settings-voice" class="set-sections"></div>
+            </div>
+            <div class="spanel" data-spanel="channels" id="panel-channels" hidden>
+              <div id="settings-channels" class="set-sections"></div>
+            </div>
+            <div class="spanel" data-spanel="workspace" id="panel-workspace" hidden>
+              <div id="settings-workspace" class="set-sections">
+                <section class="set-card">
+                  <h3>Companies</h3>
+                  <p class="set-desc">Manage workspaces/companies.</p>
+                  <div id="companies-list" class="set-block"></div>
+                </section>
+                <section class="set-card">
+                  <h3>Projects</h3>
+                  <p class="set-desc">Projects in the current company.</p>
+                  <div id="projects-list" class="set-block"></div>
+                  <div class="project-new set-inline">
+                    <input id="project-title" type="text" maxlength="120" placeholder="New project name…" aria-label="New project name" />
+                    <button id="project-create" type="button">Create project</button>
+                  </div>
+                </section>
               </div>
-            </details>
-          </section>
-
-          <section class="settings-card" aria-label="Safety and approvals">
-            <div class="settings-card-head"><h3>Safety and approvals</h3><span>Permissions, approvals, prohibitions</span></div>
-            <details class="companies" id="perms-box" hidden>
-              <summary>Computer permissions</summary>
-              <div id="perms-list"></div>
-            </details>
-            <details class="companies" id="approvals-box">
-              <summary>Pending approvals</summary>
-              <div id="approvals-list"></div>
-            </details>
-            <details class="companies" id="prohib-box">
-              <summary>Prohibitions</summary>
-              <div id="prohib-list"></div>
-              <div class="project-new">
-                <select id="prohib-kind" aria-label="Type">
-                  <option value="tool">tool</option>
-                  <option value="cmd">cmd</option>
-                  <option value="path">path</option>
-                  <option value="url">url</option>
-                </select>
-                <input id="prohib-pattern" type="text" maxlength="300" placeholder="Pattern (glob or /regex/)" aria-label="Pattern" />
-                <button id="prohib-add" type="button">Prohibit</button>
+            </div>
+            <div class="spanel" data-spanel="safety" id="panel-safety" hidden>
+              <div id="settings-safety" class="set-sections">
+                <section class="set-card">
+                  <h3>Permissions</h3>
+                  <p class="set-desc">Native computer permissions (desktop).</p>
+                  <details class="companies" id="perms-box" hidden>
+                    <summary>Computer permissions</summary>
+                    <div id="perms-list"></div>
+                  </details>
+                </section>
+                <section class="set-card">
+                  <h3>Approvals</h3>
+                  <p class="set-desc">Pending tool/action approvals.</p>
+                  <details class="companies" id="approvals-box" open>
+                    <summary>Pending approvals</summary>
+                    <div id="approvals-list"></div>
+                  </details>
+                </section>
+                <section class="set-card">
+                  <h3>Prohibitions</h3>
+                  <p class="set-desc">Global deny rules (tool, command, path, URL).</p>
+                  <details class="companies" id="prohib-box" open>
+                    <summary>Prohibitions</summary>
+                    <div id="prohib-list"></div>
+                    <div class="project-new set-inline">
+                      <select id="prohib-kind" aria-label="Type">
+                        <option value="tool">tool</option>
+                        <option value="cmd">cmd</option>
+                        <option value="path">path</option>
+                        <option value="url">url</option>
+                      </select>
+                      <input id="prohib-pattern" type="text" maxlength="300" placeholder="Pattern (glob or /regex/)" aria-label="Pattern" />
+                      <button id="prohib-add" type="button">Prohibit</button>
+                    </div>
+                  </details>
+                </section>
               </div>
-            </details>
-          </section>
-
-          <section class="settings-card settings-card-wide" aria-label="Integrations and capabilities">
-            <div class="settings-card-head"><h3>Integrations and capabilities</h3><span>Status and controls available in this build</span></div>
-            <details class="companies">
-              <summary>Channels and notifications</summary>
-              <div class="settings-note">Telegram configuration is available in Runtime configuration above. WhatsApp, allowlists, auto-respond, and notification routing are managed via API in this build and will surface as direct controls in a future update.</div>
-            </details>
-            <details class="companies">
-              <summary>MCP, skills, and plugins</summary>
-              <div class="settings-note">MCP server status and reconnect are available from Manager/command bar. Server enable/disable editing, per-role skill assignment, and plugins are not yet exposed as runtime toggles.</div>
-            </details>
-            <details class="companies">
-              <summary>Scheduler and diagnostics</summary>
-              <div class="settings-note">Scheduler jobs, connectivity, logs, and telemetry are available via API endpoints. Use Jobs and Manager for operational views.</div>
-            </details>
-          </section>
+            </div>
+            <div class="spanel" data-spanel="system" id="panel-system" hidden>
+              <div id="settings-system" class="set-sections"></div>
+            </div>
+          </div>
         </div>
+        <!-- legacy compatibility anchors -->
+        <div id="settings-box" hidden></div>
+        <div id="settings-list" hidden></div>
       </section>
     </main>
     <script type="module" src="/src/app.ts"></script>
