@@ -1,6 +1,21 @@
 /* Mission Control — grid + tarjetas (remix oscuro Lovable, TOKENS.md).
    Reusa vars de app.css: --card --ink --muted --line --ok --warn --bad --mono. */
 
+.mc-mission-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+}
+
+.mc-office-section {
+  width: 100%;
+}
+
+.mc-office-section .mc-card-body.mc-office-body {
+  padding: 8px 0 0;
+}
+
 .mc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

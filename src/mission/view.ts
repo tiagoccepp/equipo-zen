@@ -25,6 +25,7 @@ import {
 } from './cards.ts';
 import { replaceInnerHtmlIfChanged } from '../lib/dom-batch.ts';
 import { canPollElement, payloadSignature } from '../lib/polling.ts';
+import { mountOffice } from './office/index.ts';
 
 export interface MissionControlHandle {
   destroy: () => void;
@@ -45,9 +46,23 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
     getLiveSpeakers: opts.getLiveSpeakers,
     getVoiceActive: opts.getVoiceActive
   };
-  container.classList.add('mc-grid');
+  container.classList.remove('mc-grid');
+  container.classList.add('mc-mission-root');
   container.setAttribute('role', 'region');
   container.setAttribute('aria-label', 'Mission Control');
+  container.innerHTML = `
+    <section class="mc-card mc-office-section" aria-label="Project Office">
+      <header class="mc-card-head"><span class="mc-emoji" aria-hidden="true">🏢</span><h3>Project Office</h3></header>
+      <div class="mc-card-body mc-office-body"></div>
+    </section>
+    <div class="mc-cards-slot mc-grid"></div>`;
+  const cardsSlot = container.querySelector('.mc-cards-slot') as HTMLElement;
+  const officeBody = container.querySelector('.mc-office-body') as HTMLElement;
+
+  const office = mountOffice(officeBody, {
+    getLiveSpeakers: () => { try { return hooks.getLiveSpeakers?.() || []; } catch { return []; } },
+    getVoiceActive: () => { try { return hooks.getVoiceActive?.() ?? false; } catch { return false; } }
+  });
 
   let alive = true;
   let refreshing = false;
@@ -67,7 +82,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
       const connPromise = shouldRefreshConnectivity ? fetchConnectivity() : Promise.resolve(lastConnectivity);
 
       // Each card fetches in isolation: Promise.all with getters that never throw.
-      const [live, work, sidecars, latency, salaAudio, devices, audioRt, conn] = await Promise.all([
+      const [live, work, sidecars, latency, salaAudio, devices, audioRt, conn, officeDone] = await Promise.all([
         fetchLive(),
         fetchWork(),
         fetchSidecars(),
@@ -75,8 +90,10 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
         fetchSalaAudioBundle(),
         fetchLocalDevices(),
         fetchAudioDevices(),
-        connPromise
+        connPromise,
+        office.refresh().then(() => true, () => false)
       ]);
+      void officeDone;
       if (!alive) {
         return;
       }
@@ -112,7 +129,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
         renderLatencia(latency) +
         renderAudio(audio, devices, audioRt) +
         renderSala(sala);
-      const res = replaceInnerHtmlIfChanged(container, html, lastHtml);
+      const res = replaceInnerHtmlIfChanged(cardsSlot, html, lastHtml);
       if (res.changed) {
         lastHtml = html;
         lastSignature = signature;
@@ -135,6 +152,7 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
     destroy: () => {
       alive = false;
       clearInterval(timer);
+      office.destroy();
     }
   };
 }

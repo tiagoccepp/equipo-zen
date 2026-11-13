@@ -137,6 +137,8 @@ export interface PublicSettings {
     customModels: string;
     failover: string;
     failoverResolved: string[];
+    strong?: string;
+    fast?: string;
   };
   energy: { mode: string };
   split: { mode: string; vps: string };
@@ -160,6 +162,7 @@ export interface PublicSettings {
   };
   tts: { engine: string; engineOptions: string[]; order: string; orderDefault: string; language: string; url: string; speed: number; piperUrl: string };
   audio: { output: string; input: string; followDefault: boolean };
+  notify?: { channel: string; voice: boolean; to: string };
 }
 
 export async function getSettings(): Promise<PublicSettings> {

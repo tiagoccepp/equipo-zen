@@ -12,6 +12,7 @@ import { mountManager } from './manager/view.ts';
 import './manager/manager.css';
 import { mountMissionControl } from './mission/view.ts';
 import './mission/mission.css';
+import './integrations/integration.css';
 import './fx/motion.css';
 import { mountMotion, setSpeakingGlow } from './fx/motion.ts';
 import { mountPalette } from './fx/palette.ts';
@@ -82,11 +83,12 @@ function setConn(state: 'connecting' | 'live' | 'offline'): void {
 
 // ── Vistas (T3 minimal: 1 columna, tabs + hash) ─────────────────────────
 // #view-jobs y #view-manager los monta main (T4/T5); acá solo switch + tabs.
-type ViewName = 'console' | 'jobs' | 'manager' | 'settings';
-const VIEW_ORDER: ViewName[] = ['console', 'jobs', 'manager', 'settings'];
+type ViewName = 'console' | 'projects' | 'jobs' | 'manager' | 'settings';
+const VIEW_ORDER: ViewName[] = ['console', 'projects', 'jobs', 'manager', 'settings'];
 let currentView: ViewName = 'console';
 let jobsMounted = false;
 let managerMounted = false;
+let projectsMcMounted = false;
 
 function switchView(name: ViewName): void {
   if (!VIEW_ORDER.includes(name)) name = 'console';
@@ -128,6 +130,23 @@ function switchView(name: ViewName): void {
         console.warn('[manager] mount falló:', err);
       }
     }
+  }
+  if (name === 'projects') {
+    if (!projectsMcMounted) {
+      const mc = document.getElementById('projects-mc');
+      if (mc) {
+        try {
+          mountMissionControl(mc, {
+            getLiveSpeakers: () => (speakingAgent ? [speakingAgent] : []),
+            getVoiceActive: () => voiceSession
+          });
+          projectsMcMounted = true;
+        } catch (err) {
+          console.warn('[projects-mc] mount failed:', err);
+        }
+      }
+    }
+    void renderProjectsView();
   }
   if (name === 'console') {
     // El canvas vuelve a tener tamaño: re-layout vía el listener existente.
@@ -1870,9 +1889,10 @@ async function renderSettings(): Promise<void> {
   try {
     s = await getSettings();
   } catch {
-    box.textContent = 'No backend.';
+    box.textContent = 'Backend unavailable. Check that the server is running.';
     return;
   }
+
   const save = (patch: Record<string, string>, rerender = false): void => {
     void saveSettings(patch)
       .then(() => {
@@ -1882,202 +1902,150 @@ async function renderSettings(): Promise<void> {
       .catch((err) => addMsg('system', `Setting failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
   };
 
-  box.appendChild(settingGroup('Brain'));
+  const note = (text: string): HTMLDivElement => {
+    const d = document.createElement('div');
+    d.className = 'sidecar-note';
+    d.textContent = text;
+    return d;
+  };
+
+  // ── Brain (LLM) ──────────────────────────────────────────────────
+  box.appendChild(settingGroup('Brain (LLM)'));
+  box.appendChild(note('Configure reasoning providers and models. Changes apply immediately to new requests.'));
+
   const provLabels: Record<string, string> = {};
   for (const p of s.llm.providerOptions) provLabels[p.id] = p.label;
   const provSel = settingSelect(s.llm.providerOptions.map((p) => p.id), s.llm.provider, provLabels);
   provSel.setAttribute('aria-label', 'Reasoning provider');
   provSel.addEventListener('change', () => save({ 'llm.provider': provSel.value }, true));
-  box.appendChild(settingRow('Provider', provSel));
+  box.appendChild(settingRow('Active provider', provSel));
 
   const modelSel = settingSelect(s.llm.modelOptions, s.llm.model);
-  modelSel.setAttribute('aria-label', 'Model');
+  modelSel.setAttribute('aria-label', 'Default model');
   modelSel.addEventListener('change', () => save({ 'llm.model': modelSel.value }));
-  box.appendChild(settingRow('📦 Model', modelSel));
+  box.appendChild(settingRow('Default model', modelSel));
 
-  const keyInfo = LLM_KEY_FIELD[s.llm.provider] || LLM_KEY_FIELD.opencode;
-  const masked = s.llm.provider === 'minimax' ? s.llm.apiKeyMasked
-    : s.llm.provider === 'deepseek' ? s.llm.deepseekKeyMasked
-    : s.llm.provider === 'opencode' ? s.llm.opencodeKeyMasked
-    : s.llm.provider === 'groq' ? s.llm.groqKeyMasked : '';
-  const keyInput = document.createElement('input');
-  keyInput.type = 'password';
-  keyInput.placeholder = masked || 'Empty — paste the key';
-  keyInput.setAttribute('aria-label', keyInfo.label);
-  keyInput.addEventListener('change', () => {
-    if (!keyInput.value) return;
-    save({ [keyInfo.field]: keyInput.value });
-    keyInput.value = '';
-  });
-  box.appendChild(settingRow(keyInfo.label, keyInput));
+  const strongInput = document.createElement('input');
+  strongInput.type = 'text';
+  strongInput.placeholder = 'Strong model override (optional)';
+  strongInput.value = (s.llm as any).strong || '';
+  strongInput.setAttribute('aria-label', 'Strong model override');
+  strongInput.addEventListener('change', () => save({ 'llm.strong': strongInput.value.trim() }));
+  box.appendChild(settingRow('Strong model', strongInput));
 
-  // E-14: modelos custom (CSV, solo activo) + orden de failover.
+  const fastInput = document.createElement('input');
+  fastInput.type = 'text';
+  fastInput.placeholder = 'Fast model override (optional)';
+  fastInput.value = (s.llm as any).fast || '';
+  fastInput.setAttribute('aria-label', 'Fast model override');
+  fastInput.addEventListener('change', () => save({ 'llm.fast': fastInput.value.trim() }));
+  box.appendChild(settingRow('Fast model', fastInput));
+
   const modelsInput = document.createElement('input');
-  modelsInput.placeholder = 'Custom models (CSV, vacío = curados)';
+  modelsInput.placeholder = 'Custom models (CSV, empty = curated list)';
   modelsInput.value = s.llm.customModels || '';
   modelsInput.setAttribute('aria-label', 'Custom models CSV');
   modelsInput.addEventListener('change', () => save({ 'llm.models': modelsInput.value }, true));
-  box.appendChild(settingRow('📦 Models', modelsInput));
+  box.appendChild(settingRow('Custom models', modelsInput));
 
   const foInput = document.createElement('input');
-  foInput.placeholder = `Failover order (efectivo: ${(s.llm.failoverResolved || []).join(', ') || '—'})`;
+  foInput.placeholder = 'Failover order (CSV, e.g. opencode,groq,deepseek)';
   foInput.value = s.llm.failover || '';
   foInput.setAttribute('aria-label', 'Failover order CSV');
   foInput.addEventListener('change', () => save({ 'llm.failover': foInput.value }, true));
-  box.appendChild(settingRow('🔀 Failover', foInput));
+  box.appendChild(settingRow('Failover order', foInput));
+  box.appendChild(note(`Effective failover: ${(s.llm.failoverResolved || []).join(' → ') || '—'}`));
 
-  // E-17: modo de energía (autostart + gate Jev).
-  box.appendChild(settingGroup('Energy'));
-  const modeSel = settingSelect(['always-on', 'gate', 'manual'], s.energy?.mode || 'manual');
-  modeSel.setAttribute('aria-label', 'Energy mode');
-  modeSel.addEventListener('change', () => {
-    void apiJson('/api/energy/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: modeSel.value })
-    }).then(() => {
-      flashSaved();
-      void renderSettings();
-    }).catch(() => setStatus('No se pudo cambiar el modo.'));
-  });
-  box.appendChild(settingRow('⚡ Mode', modeSel));
-  const modeNote = document.createElement('div');
-  modeNote.className = 'sidecar-note';
-  modeNote.textContent = 'always-on: completa al boot · gate: solo orbe + "Pablo" · manual: la abrís vos.';
-  box.appendChild(modeNote);
-
-  // E-15: channels (Telegram + WhatsApp) — Pablo fuera de la app.
-  // E-20: split local+VPS — lo pesado (STT/TTS) en el VPS.
-  box.appendChild(settingGroup('Split VPS'));
-  const splitSel = settingSelect(['local', 'split'], s.split?.mode || 'local');
-  splitSel.setAttribute('aria-label', 'Split mode');
-  splitSel.addEventListener('change', () => save({ 'split.mode': splitSel.value }, true));
-  box.appendChild(settingRow('🖥️ Mode', splitSel));
-  const vpsInput = document.createElement('input');
-  vpsInput.type = 'text';
-  vpsInput.placeholder = 'https://tu-vps (puertos 7788-7791)';
-  vpsInput.value = s.split?.vps || '';
-  vpsInput.spellcheck = false;
-  vpsInput.setAttribute('aria-label', 'VPS base URL');
-  vpsInput.addEventListener('change', () => save({ 'split.vps': vpsInput.value.trim() }));
-  box.appendChild(settingRow('VPS', vpsInput));
-
-  box.appendChild(settingGroup('Channels'));
-  const tg = s.channels?.telegram;
-  if (tg) {
-    const tgOn = document.createElement('input');
-    tgOn.type = 'checkbox';
-    tgOn.checked = tg.enabled;
-    tgOn.setAttribute('aria-label', 'Telegram enabled');
-    tgOn.addEventListener('change', () => save({ 'channels.telegram.enabled': String(tgOn.checked) }));
-    box.appendChild(settingRow('✈️ Telegram', tgOn));
-    const tgToken = document.createElement('input');
-    tgToken.type = 'password';
-    tgToken.placeholder = tg.botTokenMasked || 'Bot token';
-    tgToken.setAttribute('aria-label', 'Telegram bot token');
-    tgToken.addEventListener('change', () => {
-      if (!tgToken.value) return;
-      save({ 'channels.telegram.botToken': tgToken.value });
-      tgToken.value = '';
+  // All provider keys (professional: manage each provider without switching context)
+  const keyDefs: Array<{ label: string; field: string; masked: string; set: boolean }> = [
+    { label: 'MiniMax API key', field: 'llm.apiKey', masked: s.llm.apiKeyMasked, set: s.llm.apiKeySet },
+    { label: 'DeepSeek API key', field: 'llm.deepseekKey', masked: s.llm.deepseekKeyMasked, set: s.llm.deepseekKeySet },
+    { label: 'OpenCode API key', field: 'llm.opencodeKey', masked: s.llm.opencodeKeyMasked, set: s.llm.opencodeKeySet },
+    { label: 'Groq API key', field: 'llm.groqKey', masked: s.llm.groqKeyMasked, set: s.llm.groqKeySet }
+  ];
+  for (const k of keyDefs) {
+    const inp = document.createElement('input');
+    inp.type = 'password';
+    inp.placeholder = k.masked || (k.set ? 'Set (hidden)' : 'Not set — paste key');
+    inp.setAttribute('aria-label', k.label);
+    inp.addEventListener('change', () => {
+      if (!inp.value) return;
+      save({ [k.field]: inp.value }, true);
+      inp.value = '';
     });
-    box.appendChild(settingRow('🔑 TG token', tgToken));
-    const tgTito = document.createElement('input');
-    tgTito.placeholder = 'Tito Telegram id (solo-Tito)';
-    tgTito.value = tg.titoId || '';
-    tgTito.setAttribute('aria-label', 'Tito Telegram id');
-    tgTito.addEventListener('change', () => save({ 'channels.telegram.titoId': tgTito.value }));
-    box.appendChild(settingRow('👤 TG Tito id', tgTito));
-    const tgMode = settingSelect(['tito-only', 'allowlist'], tg.mode || 'tito-only');
-    tgMode.setAttribute('aria-label', 'Telegram mode');
-    tgMode.addEventListener('change', () => save({ 'channels.telegram.mode': tgMode.value }));
-    box.appendChild(settingRow('🔒 TG mode', tgMode));
+    box.appendChild(settingRow(k.label, inp));
   }
 
-  box.appendChild(settingGroup('Hearing'));
-  const sttSel = settingSelect(s.stt.providerOptions, s.stt.provider);
-  sttSel.setAttribute('aria-label', 'Transcription provider');
-  sttSel.addEventListener('change', () => save({ 'stt.provider': sttSel.value }));
-  box.appendChild(settingRow('👂 Transcription', sttSel));
+  // ── Speech (STT) ─────────────────────────────────────────────────
+  box.appendChild(settingGroup('Speech (STT)'));
+  box.appendChild(note('Speech-to-text engines and models. Order controls fallback chain (comma-separated).'));
 
-  // Orden de la cadena STT (stt.order): CSV de motores, aplica en caliente.
-  // Vacío = default según provider. Motores: parakeet, whisper, groq, deepgram.
-  const orderInput = document.createElement('input');
-  orderInput.type = 'text';
-  orderInput.value = s.stt.order || '';
-  orderInput.placeholder = s.stt.orderDefault || 'parakeet,groq,deepgram';
-  orderInput.setAttribute('aria-label', 'STT engine order');
-  orderInput.spellcheck = false;
-  orderInput.addEventListener('change', () => save({ 'stt.order': orderInput.value.trim() }));
-  box.appendChild(settingRow('🔀 STT order', orderInput));
-  const sttNote = document.createElement('div');
-  sttNote.className = 'sidecar-note';
-  sttNote.textContent = 'Motores: parakeet, whisper, groq, deepgram — solo los listados se intentan, en orden.';
-  box.appendChild(sttNote);
+  const sttProvSel = settingSelect(s.stt.providerOptions, s.stt.provider);
+  sttProvSel.setAttribute('aria-label', 'STT provider');
+  sttProvSel.addEventListener('change', () => save({ 'stt.provider': sttProvSel.value }));
+  box.appendChild(settingRow('STT provider', sttProvSel));
 
-  const wSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
-  wSel.setAttribute('aria-label', 'Local Whisper model');
-  wSel.addEventListener('change', () => save({ 'stt.whisperModel': wSel.value }));
-  box.appendChild(settingRow('📦 Local Whisper', wSel));
+  const sttOrderInput = document.createElement('input');
+  sttOrderInput.type = 'text';
+  sttOrderInput.value = s.stt.order || '';
+  sttOrderInput.placeholder = s.stt.orderDefault || 'parakeet,whisper,groq,deepgram';
+  sttOrderInput.setAttribute('aria-label', 'STT engine order');
+  sttOrderInput.spellcheck = false;
+  sttOrderInput.addEventListener('change', () => save({ 'stt.order': sttOrderInput.value.trim() }));
+  box.appendChild(settingRow('STT engine order', sttOrderInput));
 
-  const groqInput = document.createElement('input');
-  groqInput.type = 'password';
-  groqInput.placeholder = s.stt.groqKeyMasked || 'Empty';
-  groqInput.setAttribute('aria-label', 'Groq STT key');
-  groqInput.addEventListener('change', () => {
-    if (!groqInput.value) return;
-    save({ 'stt.groqKey': groqInput.value });
-    groqInput.value = '';
-  });
-  box.appendChild(settingRow('🔑 Groq key', groqInput));
+  const whisperSel = settingSelect(s.stt.whisperModelOptions, s.stt.whisperModel);
+  whisperSel.setAttribute('aria-label', 'Local Whisper model');
+  whisperSel.addEventListener('change', () => save({ 'stt.whisperModel': whisperSel.value }));
+  box.appendChild(settingRow('Whisper model (local)', whisperSel));
 
-  const dgInput = document.createElement('input');
-  dgInput.type = 'password';
-  dgInput.placeholder = s.stt.deepgramKeyMasked || 'Empty';
-  dgInput.setAttribute('aria-label', 'Deepgram key');
-  dgInput.addEventListener('change', () => {
-    if (!dgInput.value) return;
-    save({ 'stt.deepgramKey': dgInput.value });
-    dgInput.value = '';
-  });
-  box.appendChild(settingRow('🔑 Deepgram key', dgInput));
-
-  const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English', auto: 'Auto' };
+  const LANG_LABELS: Record<string, string> = { es: 'Español', en: 'English', auto: 'Auto-detect' };
   const sttLang = (s.stt.language === 'es' || s.stt.language === 'en' || s.stt.language === 'auto')
     ? s.stt.language
     : (s.stt.language.startsWith('en') ? 'en' : (s.stt.language.startsWith('auto') ? 'auto' : 'es'));
   const langSel = settingSelect(['auto', 'es', 'en'], sttLang, LANG_LABELS);
   langSel.setAttribute('aria-label', 'Listening language');
   langSel.addEventListener('change', () => save({ 'stt.language': langSel.value }));
-  box.appendChild(settingRow('🗣️ Listening language', langSel));
+  box.appendChild(settingRow('Listening language', langSel));
 
-  // Umbral de confianza STT (§2e): debajo reintenta una vez en Deepgram
-  // (turno corto + key). El valor guardado manda aunque no esté en la lista.
-  const CONF_LABELS: Record<string, string> = { '0.3': 'Bajo (0.3)', '0.4': 'Medio (0.4)', '0.55': 'Default (0.55)', '0.7': 'Alto (0.7)' };
+  const CONF_LABELS: Record<string, string> = { '0.3': 'Low (0.3)', '0.4': 'Medium (0.4)', '0.55': 'Default (0.55)', '0.7': 'High (0.7)' };
   const confCur = String(s.stt.minConfidence ?? 0.55);
   const confOpts = Object.keys(CONF_LABELS).includes(confCur) ? Object.keys(CONF_LABELS) : [confCur, ...Object.keys(CONF_LABELS)];
-  const confSel = settingSelect(confOpts, confCur, { ...CONF_LABELS, [confCur]: CONF_LABELS[confCur] || `Guardado (${confCur})` });
+  const confSel = settingSelect(confOpts, confCur, { ...CONF_LABELS, [confCur]: CONF_LABELS[confCur] || `Custom (${confCur})` });
   confSel.setAttribute('aria-label', 'STT min confidence');
   confSel.addEventListener('change', () => save({ 'stt.minConfidence': confSel.value }));
-  box.appendChild(settingRow('🎯 Min confidence', confSel));
+  box.appendChild(settingRow('Min confidence', confSel));
 
-  box.appendChild(settingGroup('Voice'));
+  const groqStt = document.createElement('input');
+  groqStt.type = 'password';
+  groqStt.placeholder = s.stt.groqKeyMasked || 'Not set';
+  groqStt.setAttribute('aria-label', 'Groq STT key');
+  groqStt.addEventListener('change', () => { if (!groqStt.value) return; save({ 'stt.groqKey': groqStt.value }, true); groqStt.value = ''; });
+  box.appendChild(settingRow('Groq STT key', groqStt));
+
+  const dgStt = document.createElement('input');
+  dgStt.type = 'password';
+  dgStt.placeholder = s.stt.deepgramKeyMasked || 'Not set';
+  dgStt.setAttribute('aria-label', 'Deepgram key (STT/TTS)');
+  dgStt.addEventListener('change', () => { if (!dgStt.value) return; save({ 'stt.deepgramKey': dgStt.value }, true); dgStt.value = ''; });
+  box.appendChild(settingRow('Deepgram key', dgStt));
+
+  // ── Voice (TTS) ──────────────────────────────────────────────────
+  box.appendChild(settingGroup('Voice (TTS)'));
+  box.appendChild(note('Text-to-speech engines and models. Order controls fallback chain.'));
+
   const ttsLangCur = (s.tts.language === 'es' || s.tts.language === 'en')
-    ? s.tts.language
-    : (s.tts.language.startsWith('en') ? 'en' : 'es');
-  const ttsSel = settingSelect(['es', 'en'], ttsLangCur, LANG_LABELS);
-  ttsSel.setAttribute('aria-label', 'Voice language');
-  ttsSel.addEventListener('change', () => save({ 'tts.language': ttsSel.value }));
-  box.appendChild(settingRow('🗣️ Voice language', ttsSel));
+    ? s.tts.language : (s.tts.language.startsWith('en') ? 'en' : 'es');
+  const ttsLangSel = settingSelect(['es', 'en'], ttsLangCur, { es: 'Español', en: 'English' });
+  ttsLangSel.setAttribute('aria-label', 'Voice language');
+  ttsLangSel.addEventListener('change', () => save({ 'tts.language': ttsLangSel.value }));
+  box.appendChild(settingRow('Voice language', ttsLangSel));
 
-  // Motor TTS local preferido (auto = Piper → Supertonic; el 2º respalda).
-  const engSel = settingSelect(s.tts.engineOptions || ['auto', 'piper', 'supertonic'], s.tts.engine || 'auto');
-  engSel.setAttribute('aria-label', 'TTS engine');
+  const engSel = settingSelect(s.tts.engineOptions || ['auto', 'piper', 'supertonic', 'deepgram', 'edge'], s.tts.engine || 'auto');
+  engSel.setAttribute('aria-label', 'Preferred TTS engine');
   engSel.addEventListener('change', () => save({ 'tts.engine': engSel.value }));
-  box.appendChild(settingRow('TTS engine', engSel));
+  box.appendChild(settingRow('Preferred engine', engSel));
 
-  // Orden de la cascada TTS (tts.order): CSV de motores, aplica en caliente.
-  // Vacío = default legacy (Deepgram-con-key → locales → Edge). Solo los
-  // listados se intentan, en orden: el elegido manda, el resto out.
   const ttsOrderInput = document.createElement('input');
   ttsOrderInput.type = 'text';
   ttsOrderInput.value = s.tts.order || '';
@@ -2085,133 +2053,286 @@ async function renderSettings(): Promise<void> {
   ttsOrderInput.setAttribute('aria-label', 'TTS engine order');
   ttsOrderInput.spellcheck = false;
   ttsOrderInput.addEventListener('change', () => save({ 'tts.order': ttsOrderInput.value.trim() }));
-  box.appendChild(settingRow('🔀 TTS order', ttsOrderInput));
-  const ttsNote = document.createElement('div');
-  ttsNote.className = 'sidecar-note';
-  ttsNote.textContent = 'Motores: piper, supertonic, deepgram, edge — solo los listados se intentan, en orden.';
-  box.appendChild(ttsNote);
+  box.appendChild(settingRow('TTS engine order', ttsOrderInput));
 
-  // E-16: velocidad de habla + URL del sidecar Piper.
   const ttsSpeed = document.createElement('input');
   ttsSpeed.type = 'number';
-  ttsSpeed.min = '0.5';
-  ttsSpeed.max = '2';
-  ttsSpeed.step = '0.1';
+  ttsSpeed.min = '0.5'; ttsSpeed.max = '2'; ttsSpeed.step = '0.1';
   ttsSpeed.value = String(s.tts.speed ?? 1);
   ttsSpeed.setAttribute('aria-label', 'Speech speed');
   ttsSpeed.addEventListener('change', () => save({ 'tts.speed': ttsSpeed.value }));
-  box.appendChild(settingRow('⏩ Speed', ttsSpeed));
+  box.appendChild(settingRow('Speech speed', ttsSpeed));
 
-  const piperInput = document.createElement('input');
-  piperInput.type = 'text';
-  piperInput.value = s.tts.piperUrl || '';
-  piperInput.placeholder = 'http://127.0.0.1:7791';
-  piperInput.spellcheck = false;
-  piperInput.setAttribute('aria-label', 'Piper sidecar URL');
-  piperInput.addEventListener('change', () => save({ 'tts.piperUrl': piperInput.value.trim() }));
-  box.appendChild(settingRow('Piper URL', piperInput));
+  const piperUrlInp = document.createElement('input');
+  piperUrlInp.type = 'text';
+  piperUrlInp.value = s.tts.piperUrl || '';
+  piperUrlInp.placeholder = 'http://127.0.0.1:7791';
+  piperUrlInp.spellcheck = false;
+  piperUrlInp.setAttribute('aria-label', 'Piper sidecar URL');
+  piperUrlInp.addEventListener('change', () => save({ 'tts.piperUrl': piperUrlInp.value.trim() }));
+  box.appendChild(settingRow('Piper URL', piperUrlInp));
 
-  // ── Audio: routing PipeWire (salida/entrada) ──────────────────────
-  // followDefault on = los streams siguen al sistema (selects off).
-  // Volumen/mute son vivos e independientes del routing: siempre activos.
-  box.appendChild(settingGroup('Audio'));
-  const audioSel = s.audio || { output: 'default', input: 'default', followDefault: true };
-  // (audio fns: import estático arriba; el dinámico duplicaba el chunk core).
-  let audioDev = null;
-  try {
-    audioDev = await getAudioDevices();
-  } catch {
-    audioDev = null;
+  const supertonicUrlInp = document.createElement('input');
+  supertonicUrlInp.type = 'text';
+  supertonicUrlInp.value = s.tts.url || '';
+  supertonicUrlInp.placeholder = 'Supertonic sidecar URL (optional)';
+  supertonicUrlInp.spellcheck = false;
+  supertonicUrlInp.setAttribute('aria-label', 'Supertonic sidecar URL');
+  supertonicUrlInp.addEventListener('change', () => save({ 'tts.url': supertonicUrlInp.value.trim() }));
+  box.appendChild(settingRow('Supertonic URL', supertonicUrlInp));
+
+  const testVoiceBtn = document.createElement('button');
+  testVoiceBtn.className = 'pill';
+  testVoiceBtn.textContent = 'Test voice';
+  testVoiceBtn.setAttribute('aria-label', 'Test voice output');
+  testVoiceBtn.addEventListener('click', () => {
+    testVoiceBtn.textContent = 'Speaking…';
+    void (async () => {
+      try {
+        const audioB64 = await decir('Hello, this is a J.A.B.S voice test.');
+        const audio = new Audio(`data:audio/mpeg;base64,${audioB64}`);
+        await audio.play();
+      } catch (err) {
+        addMsg('system', `Voice test failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
+      } finally {
+        testVoiceBtn.textContent = 'Test voice';
+      }
+    })();
+  });
+  box.appendChild(settingRow('Voice test', testVoiceBtn));
+
+  // ── Energy & Runtime ─────────────────────────────────────────────
+  box.appendChild(settingGroup('Energy & Runtime'));
+  const energyModeSel = settingSelect(['always-on', 'gate', 'manual'], s.energy?.mode || 'manual', {
+    'always-on': 'Always on (start at boot)',
+    gate: 'Gate (orb + wake word)',
+    manual: 'Manual'
+  });
+  energyModeSel.setAttribute('aria-label', 'Energy mode');
+  energyModeSel.addEventListener('change', () => {
+    void apiJson('/api/energy/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: energyModeSel.value })
+    }).then(() => { flashSaved(); void renderSettings(); })
+      .catch(() => setStatus('Failed to change energy mode.'));
+  });
+  box.appendChild(settingRow('Energy mode', energyModeSel));
+
+  const splitSel = settingSelect(['local', 'split'], s.split?.mode || 'local', { local: 'Local only', split: 'Split (offload to VPS)' });
+  splitSel.setAttribute('aria-label', 'Split mode');
+  splitSel.addEventListener('change', () => save({ 'split.mode': splitSel.value }, true));
+  box.appendChild(settingRow('Compute mode', splitSel));
+
+  const vpsInput = document.createElement('input');
+  vpsInput.type = 'text';
+  vpsInput.placeholder = 'https://your-vps (STT/TTS ports)';
+  vpsInput.value = s.split?.vps || '';
+  vpsInput.spellcheck = false;
+  vpsInput.setAttribute('aria-label', 'VPS base URL');
+  vpsInput.addEventListener('change', () => save({ 'split.vps': vpsInput.value.trim() }));
+  box.appendChild(settingRow('VPS base URL', vpsInput));
+
+  // ── Channels & Notifications ─────────────────────────────────────
+  box.appendChild(settingGroup('Channels & Notifications'));
+  const tg = s.channels?.telegram;
+  if (tg) {
+    const tgOn = document.createElement('input');
+    tgOn.type = 'checkbox';
+    tgOn.checked = tg.enabled;
+    tgOn.setAttribute('aria-label', 'Telegram enabled');
+    tgOn.addEventListener('change', () => save({ 'channels.telegram.enabled': String(tgOn.checked) }));
+    box.appendChild(settingRow('Telegram enabled', tgOn));
+
+    const tgToken = document.createElement('input');
+    tgToken.type = 'password';
+    tgToken.placeholder = tg.botTokenMasked || 'Bot token';
+    tgToken.setAttribute('aria-label', 'Telegram bot token');
+    tgToken.addEventListener('change', () => { if (!tgToken.value) return; save({ 'channels.telegram.botToken': tgToken.value }, true); tgToken.value = ''; });
+    box.appendChild(settingRow('Telegram bot token', tgToken));
+
+    const tgTito = document.createElement('input');
+    tgTito.placeholder = 'Owner Telegram ID';
+    tgTito.value = tg.titoId || '';
+    tgTito.setAttribute('aria-label', 'Telegram owner ID');
+    tgTito.addEventListener('change', () => save({ 'channels.telegram.titoId': tgTito.value.trim() }));
+    box.appendChild(settingRow('Telegram owner ID', tgTito));
+
+    const tgMode = settingSelect(['tito-only', 'allowlist'], tg.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
+    tgMode.setAttribute('aria-label', 'Telegram access mode');
+    tgMode.addEventListener('change', () => save({ 'channels.telegram.mode': tgMode.value }));
+    box.appendChild(settingRow('Telegram access', tgMode));
+
+    const tgAllow = document.createElement('input');
+    tgAllow.type = 'text';
+    tgAllow.placeholder = 'Allowed IDs (CSV)';
+    tgAllow.value = tg.allow || '';
+    tgAllow.setAttribute('aria-label', 'Telegram allowlist');
+    tgAllow.addEventListener('change', () => save({ 'channels.telegram.allow': tgAllow.value.trim() }));
+    box.appendChild(settingRow('Telegram allowlist', tgAllow));
+
+    const tgAuto = document.createElement('input');
+    tgAuto.type = 'checkbox';
+    tgAuto.checked = (tg as any).autoRespond === 'true' || (tg as any).autoRespond === '1';
+    tgAuto.setAttribute('aria-label', 'Telegram auto-respond');
+    tgAuto.addEventListener('change', () => save({ 'channels.telegram.autoRespond': String(tgAuto.checked) }));
+    box.appendChild(settingRow('Telegram auto-respond', tgAuto));
   }
+
+  const wa = s.channels?.whatsapp;
+  if (wa) {
+    const waOn = document.createElement('input');
+    waOn.type = 'checkbox';
+    waOn.checked = wa.enabled;
+    waOn.setAttribute('aria-label', 'WhatsApp enabled');
+    waOn.addEventListener('change', () => save({ 'channels.whatsapp.enabled': String(waOn.checked) }));
+    box.appendChild(settingRow('WhatsApp enabled', waOn));
+
+    const waToken = document.createElement('input');
+    waToken.type = 'password';
+    waToken.placeholder = wa.tokenMasked || 'Access token';
+    waToken.setAttribute('aria-label', 'WhatsApp token');
+    waToken.addEventListener('change', () => { if (!waToken.value) return; save({ 'channels.whatsapp.token': waToken.value }, true); waToken.value = ''; });
+    box.appendChild(settingRow('WhatsApp token', waToken));
+
+    const waPhone = document.createElement('input');
+    waPhone.type = 'text';
+    waPhone.placeholder = 'Phone number ID';
+    waPhone.value = wa.phoneId || '';
+    waPhone.setAttribute('aria-label', 'WhatsApp phone ID');
+    waPhone.addEventListener('change', () => save({ 'channels.whatsapp.phoneId': waPhone.value.trim() }));
+    box.appendChild(settingRow('WhatsApp phone ID', waPhone));
+
+    const waTito = document.createElement('input');
+    waTito.type = 'text';
+    waTito.placeholder = 'Owner WhatsApp ID';
+    waTito.value = wa.titoId || '';
+    waTito.setAttribute('aria-label', 'WhatsApp owner ID');
+    waTito.addEventListener('change', () => save({ 'channels.whatsapp.titoId': waTito.value.trim() }));
+    box.appendChild(settingRow('WhatsApp owner ID', waTito));
+
+    const waMode = settingSelect(['tito-only', 'allowlist'], wa.mode || 'tito-only', { 'tito-only': 'Owner only', allowlist: 'Allowlist' });
+    waMode.setAttribute('aria-label', 'WhatsApp access mode');
+    waMode.addEventListener('change', () => save({ 'channels.whatsapp.mode': waMode.value }));
+    box.appendChild(settingRow('WhatsApp access', waMode));
+
+    const waAllow = document.createElement('input');
+    waAllow.type = 'text';
+    waAllow.placeholder = 'Allowed IDs (CSV)';
+    waAllow.value = wa.allow || '';
+    waAllow.setAttribute('aria-label', 'WhatsApp allowlist');
+    waAllow.addEventListener('change', () => save({ 'channels.whatsapp.allow': waAllow.value.trim() }));
+    box.appendChild(settingRow('WhatsApp allowlist', waAllow));
+  }
+
+  const notify = (s as any).notify || { channel: 'none', voice: false, to: '' };
+  const notifChan = settingSelect(['none', 'telegram', 'whatsapp'], notify.channel || 'none', { none: 'None', telegram: 'Telegram', whatsapp: 'WhatsApp' });
+  notifChan.setAttribute('aria-label', 'Notification channel');
+  notifChan.addEventListener('change', () => save({ 'notify.channel': notifChan.value }));
+  box.appendChild(settingRow('Notification channel', notifChan));
+
+  const notifTo = document.createElement('input');
+  notifTo.type = 'text';
+  notifTo.placeholder = 'Notification recipient';
+  notifTo.value = notify.to || '';
+  notifTo.setAttribute('aria-label', 'Notification recipient');
+  notifTo.addEventListener('change', () => save({ 'notify.to': notifTo.value.trim() }));
+  box.appendChild(settingRow('Notification to', notifTo));
+
+  const notifVoice = document.createElement('input');
+  notifVoice.type = 'checkbox';
+  notifVoice.checked = !!notify.voice;
+  notifVoice.setAttribute('aria-label', 'Voice notifications');
+  notifVoice.addEventListener('change', () => save({ 'notify.voice': String(notifVoice.checked) }));
+  box.appendChild(settingRow('Voice notifications', notifVoice));
+
+  // ── Audio devices ────────────────────────────────────────────────
+  box.appendChild(settingGroup('Audio Devices'));
+  const audioSel = s.audio || { output: 'default', input: 'default', followDefault: true };
+  let audioDev = null;
+  try { audioDev = await getAudioDevices(); } catch { audioDev = null; }
+
   const followBox = document.createElement('input');
   followBox.type = 'checkbox';
   followBox.checked = audioSel.followDefault !== false;
   followBox.setAttribute('aria-label', 'Follow system default audio');
-  followBox.addEventListener('change', () =>
-    save({ 'audio.followDefault': followBox.checked ? 'true' : 'false' }, true));
-  box.appendChild(settingRow('🔀 Follow system default', followBox));
+  followBox.addEventListener('change', () => save({ 'audio.followDefault': followBox.checked ? 'true' : 'false' }, true));
+  box.appendChild(settingRow('Follow system defaults', followBox));
+
   if (!audioDev) {
-    const note = document.createElement('div');
-    note.className = 'sidecar-note';
-    note.textContent = 'Audio devices unavailable — is PipeWire running on this machine?';
-    box.appendChild(note);
+    box.appendChild(note('Audio devices unavailable (PipeWire not detected).'));
   } else {
     const sinks = audioDev.sinks || [];
     const sources = audioDev.sources || [];
-    const withSaved = (list: Array<{ name: string; description: string }>, saved: string): string[] => {
+    const withSaved = (list: Array<{ name: string }>, saved: string): string[] => {
       const names = list.map((d) => d.name);
       return saved && saved !== 'default' && !names.includes(saved) ? [saved, ...names] : names;
     };
-    const labelsFor = (list: Array<{ name: string; description: string; isDefault: boolean }>, kind: string): Record<string, string> => {
+    const labelsFor = (list: Array<{ name: string; description: string; isDefault: boolean }>, saved: string): Record<string, string> => {
       const labels: Record<string, string> = {};
       for (const d of list) labels[d.name] = `${d.description}${d.isDefault ? ' (system default)' : ''}`;
-      return { ...labels, [kind]: `Saved (not present)` };
+      if (saved && !labels[saved]) labels[saved] = 'Saved (not present)';
+      return labels;
     };
     const outSel = settingSelect(withSaved(sinks, audioSel.output), audioSel.output || 'default', labelsFor(sinks, audioSel.output));
     outSel.setAttribute('aria-label', 'Audio output');
     outSel.disabled = followBox.checked;
     outSel.addEventListener('change', () => save({ 'audio.output': outSel.value }));
-    box.appendChild(settingRow('🔈 Output', outSel));
+    box.appendChild(settingRow('Output device', outSel));
+
     const inSel = settingSelect(withSaved(sources, audioSel.input), audioSel.input || 'default', labelsFor(sources, audioSel.input));
     inSel.setAttribute('aria-label', 'Audio input');
     inSel.disabled = followBox.checked;
     inSel.addEventListener('change', () => save({ 'audio.input': inSel.value }));
-    box.appendChild(settingRow('🎙️ Input', inSel));
-    // Volumen/mute del efectivo: guardado si existe, si no el default.
-    const effective = (list: typeof sinks, saved: string): (typeof sinks)[number] | undefined =>
+    box.appendChild(settingRow('Input device', inSel));
+
+    const effectiveDev = (list: typeof sinks, saved: string): (typeof sinks)[number] | undefined =>
       list.find((d) => d.name === saved) || list.find((d) => d.isDefault) || list[0];
     const volRow = (dev: { name: string; volume: number | null; muted: boolean | null } | undefined, label: string): void => {
       if (!dev) return;
       const wrap = document.createElement('div');
-      wrap.style.display = 'flex';
-      wrap.style.gap = '8px';
-      wrap.style.alignItems = 'center';
+      wrap.style.display = 'flex'; wrap.style.gap = '8px'; wrap.style.alignItems = 'center';
       const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.min = '0';
-      slider.max = '100';
+      slider.type = 'range'; slider.min = '0'; slider.max = '100';
       slider.value = String(Math.round((dev.volume ?? 1) * 100));
-      slider.setAttribute('aria-label', `${label} volume`);
-      slider.style.flex = '1';
+      slider.setAttribute('aria-label', `${label} volume`); slider.style.flex = '1';
       slider.addEventListener('change', () => {
-        void setAudioVolume(dev.name, Number(slider.value) / 100)
-          .then(() => flashSaved())
+        void setAudioVolume(dev.name, Number(slider.value) / 100).then(() => flashSaved())
           .catch((err) => addMsg('system', `Volume failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
       });
       const mute = document.createElement('input');
-      mute.type = 'checkbox';
-      mute.checked = dev.muted === true;
-      mute.title = 'Mute';
+      mute.type = 'checkbox'; mute.checked = dev.muted === true; mute.title = 'Mute';
       mute.setAttribute('aria-label', `${label} mute`);
       mute.addEventListener('change', () => {
-        void setAudioMute(dev.name, mute.checked)
-          .then(() => flashSaved())
+        void setAudioMute(dev.name, mute.checked).then(() => flashSaved())
           .catch((err) => addMsg('system', `Mute failed: ${err instanceof Error ? err.message : 'error'}`, 'sys'));
       });
       wrap.append(slider, mute);
       box.appendChild(settingRow(label, wrap));
     };
-    volRow(effective(sinks, audioSel.output), '🎚️ Out volume');
-    volRow(effective(sources, audioSel.input), '🎚️ In volume');
-    const testBtn = document.createElement('button');
-    testBtn.className = 'pill';
-    testBtn.textContent = '🔔 Probar salida';
-    testBtn.setAttribute('aria-label', 'Test audio output');
-    testBtn.addEventListener('click', () => {
-      const target = effective(sinks, audioSel.output)?.name || '';
-      testBtn.textContent = '🔔…';
+    volRow(effectiveDev(sinks, audioSel.output), 'Output volume');
+    volRow(effectiveDev(sources, audioSel.input), 'Input volume');
+
+    const testOutBtn = document.createElement('button');
+    testOutBtn.className = 'pill';
+    testOutBtn.textContent = 'Test output';
+    testOutBtn.setAttribute('aria-label', 'Test audio output');
+    testOutBtn.addEventListener('click', () => {
+      const target = effectiveDev(sinks, audioSel.output)?.name || '';
+      testOutBtn.textContent = 'Playing…';
       void testAudioOutput(followBox.checked ? '' : target)
-        .then(() => { testBtn.textContent = '🔔 Probar salida'; flashSaved(); })
+        .then(() => { testOutBtn.textContent = 'Test output'; flashSaved(); })
         .catch((err) => {
-          testBtn.textContent = '🔔 Probar salida';
+          testOutBtn.textContent = 'Test output';
           addMsg('system', `Test tone failed: ${err instanceof Error ? err.message : 'error'}`, 'sys');
         });
     });
-    box.appendChild(settingRow('🔔 Test', testBtn));
+    box.appendChild(settingRow('Output test', testOutBtn));
   }
 
-  // Sidecars: estado del watchdog STT/TTS (GET directo, sin WS).
+  // ── Sidecars ─────────────────────────────────────────────────────
   box.appendChild(settingGroup('Sidecars'));
+  box.appendChild(note('Local STT/TTS service health. Status refreshes automatically while this panel is open.'));
   const scWrap = document.createElement('div');
   scWrap.id = 'sidecars-list';
   scWrap.className = 'sidecars';
@@ -2224,12 +2345,14 @@ async function renderSettings(): Promise<void> {
   scFoot.className = 'sidecars-foot';
   const scRefresh = document.createElement('button');
   scRefresh.className = 'pill';
-  scRefresh.textContent = '↻ Refresh';
+  scRefresh.textContent = 'Refresh';
   scRefresh.setAttribute('aria-label', 'Refresh sidecar status');
   scRefresh.addEventListener('click', () => void renderSidecars(scWrap));
   scFoot.appendChild(scRefresh);
   box.appendChild(scFoot);
   void renderSidecars(scWrap);
+
+  box.appendChild(note('Advanced controls (approvals, prohibitions, scheduler, MCP server config, project caps) are available via their dedicated panels/APIs.'));
 }
 
 // ── Sidecars: 1 fila por sidecar (dot + métricas del watchdog) ─────────
@@ -2474,6 +2597,93 @@ if (idleCall) {
 } else {
   window.setTimeout(() => { void upgradeTo3D(); }, 1200);
 }
+
+// ── Integrations: presence HUD/briefing, JABS pulse, 3D stage (lazy) ─
+let presenceDispose: (() => void) | null = null;
+let jabsDispose: (() => void) | null = null;
+let sceneHandle: { destroy(): void; refresh(): Promise<void> } | null = null;
+let sceneOpen = false;
+
+async function initConsoleAmbientIntegrationsOnce(): Promise<void> {
+  if (presenceDispose || jabsDispose) return;
+  try {
+    const mod = await import('./integrations/presence-jabs-integration.ts');
+    const hudMount = document.getElementById('presence-hud-slot');
+    const briefingMount = document.getElementById('presence-brief-slot') as HTMLElement | null;
+    if (hudMount) {
+      const p = await mod.mountConsolePresence({ hudMount, briefingMount: briefingMount ?? undefined });
+      presenceDispose = p.dispose;
+    }
+    const pulseMount = document.querySelector('#jabs-slot .jabs-pulse-slot') as HTMLElement | null;
+    const briefMount = document.querySelector('#jabs-slot .jabs-brief-slot') as HTMLElement | null;
+    const nudgesMount = document.querySelector('#jabs-slot .jabs-nudges-slot') as HTMLElement | null;
+    const actionsMount = document.querySelector('#jabs-slot .jabs-actions-slot') as HTMLElement | null;
+    const jabsSlot = document.getElementById('jabs-slot');
+    if (jabsSlot && (pulseMount || briefMount || nudgesMount || actionsMount)) {
+      const j = await mod.mountJabsAmbient({
+        pulseMount, briefMount, nudgesMount, actionsMount,
+        companyId: currentCompany || null,
+        onAction: (action: unknown) => {
+          const a = action as { type?: string; payload?: any };
+          if (a?.type === 'open.project' && a.payload?.companyId) {
+            connectTo(String(a.payload.companyId), a.payload.goalId || currentGoal || '');
+          } else if (a?.type === 'jump.meeting') {
+            switchView('console');
+          } else if (a?.type === 'start.project' || a?.type === 'switch.view.projects') {
+            switchView('projects');
+          } else if (a?.type === 'refresh.pulse') {
+            // pulse self-refreshes; no-op
+          } else {
+            console.debug('[jabs action]', action);
+          }
+        }
+      });
+      jabsDispose = j.dispose;
+    }
+  } catch (err) {
+    console.warn('[integrations] presence/jabs not mounted', err);
+  }
+}
+
+async function toggleProjectStage(): Promise<void> {
+  const mount = document.getElementById('project-scene-mount') as HTMLElement | null;
+  const empty = document.getElementById('project-scene-empty') as HTMLElement | null;
+  const btn = document.getElementById('btn-open-stage') as HTMLButtonElement | null;
+  if (!mount) return;
+  if (sceneOpen) {
+    sceneHandle?.destroy();
+    sceneHandle = null;
+    sceneOpen = false;
+    mount.hidden = true;
+    if (empty) { empty.hidden = false; empty.textContent = 'No scene loaded. Open to view the project stage.'; }
+    if (btn) btn.textContent = 'Open';
+    return;
+  }
+  const projectId = currentGoal || currentCompany || 'home';
+  mount.hidden = false;
+  if (empty) { empty.hidden = true; }
+  if (btn) btn.textContent = 'Close';
+  try {
+    const { mountProjectScene } = await import('./integrations/scene-integration.ts');
+    sceneHandle = await mountProjectScene({ container: mount, projectId });
+    sceneOpen = true;
+  } catch (err) {
+    console.warn('[stage] mount failed', err);
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = `Stage unavailable: ${err instanceof Error ? err.message : 'error'}`;
+    }
+    mount.hidden = true;
+    if (btn) btn.textContent = 'Open';
+    sceneOpen = false;
+  }
+}
+
+document.getElementById('btn-open-stage')?.addEventListener('click', () => { void toggleProjectStage(); });
+
+const idleInit = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+const scheduleIntegrations = () => idleInit ? idleInit(() => { void initConsoleAmbientIntegrationsOnce(); }, { timeout: 3000 }) : setTimeout(() => { void initConsoleAmbientIntegrationsOnce(); }, 1500);
+scheduleIntegrations();
 
 (async () => {
   try {

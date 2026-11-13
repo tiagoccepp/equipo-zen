@@ -559,6 +559,7 @@ const EDITABLE_KEYS = new Set([
   'tts.order',
   'tts.speed',
   'tts.piperUrl',
+  'tts.url',
   'manos.enabled',
   'manos.maxTurns',
   'sala.v1',
@@ -743,6 +744,9 @@ export function applySettings(patch) {
       }
     }
     if (key === 'tts.piperUrl' && value && !/^https?:\/\/.+/.test(value)) {
+      continue;
+    }
+    if (key === 'tts.url' && value && !/^https?:\/\/.+/.test(value)) {
       continue;
     }
     if (key === 'energy.mode' && value && !['always-on', 'gate', 'manual'].includes(value.toLowerCase())) {

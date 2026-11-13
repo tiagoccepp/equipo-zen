@@ -25,6 +25,7 @@
         <button type="button" role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings" aria-selected="false" tabindex="-1">Settings</button>
       </nav>
       <div class="top-right">
+        <div id="presence-hud-slot" class="integration-hud-slot" aria-label="Presence"></div>
         <button type="button" id="btn-palette" class="kbd-hint" title="Command bar (Ctrl+K)">Ctrl K</button>
         <div class="conn" id="conn" role="status">
           <span class="conn-dot" aria-hidden="true"></span>
@@ -97,6 +98,14 @@
         </section>
 
         <aside class="context" aria-label="Presence">
+          <section id="presence-brief-slot" class="integration-brief-slot" aria-label="Briefing"></section>
+          <section id="jabs-slot" class="integration-jabs-slot" aria-label="JABS pulse">
+            <div class="jabs-pulse-slot"></div>
+            <div class="jabs-brief-slot"></div>
+            <div class="jabs-nudges-slot"></div>
+            <div class="jabs-actions-slot"></div>
+          </section>
+
           <section class="stage">
             <div class="orbs" id="orbs" aria-hidden="true">
               <canvas id="orb-canvas"></canvas>
@@ -116,20 +125,27 @@
               <div class="kv-row"><dt>Mode</dt><dd id="ctx-mode">chat</dd></div>
             </dl>
           </div>
+
+          <div class="context-block" id="stage-block">
+            <div class="rail-head"><span>3D Stage</span><button type="button" id="btn-open-stage" class="text-btn">Open</button></div>
+            <div id="project-scene-mount" class="scene-integration-root" hidden></div>
+            <p id="project-scene-empty" class="scene-integration-empty">No scene loaded. Open to view the project stage.</p>
+          </div>
         </aside>
       </section>
 
       <section id="view-projects" class="view view-projects" role="tabpanel" aria-labelledby="tab-projects" aria-label="Projects" tabindex="0" hidden>
         <div class="projects-head">
           <div>
-            <h2 class="view-title">Projects</h2>
-            <p class="view-lead">Start a project when work needs a dedicated team. Home stays personal with Pablo.</p>
+            <h2 class="view-title">Projects & Mission Control</h2>
+            <p class="view-lead">Each project has its own team. Open a project office to see agents working in real time.</p>
           </div>
           <div class="project-new project-new-inline">
             <input id="projects-title" type="text" maxlength="120" placeholder="New project name…" aria-label="New project name" />
             <button id="projects-create" type="button" class="send send-compact">Create project</button>
           </div>
         </div>
+        <div id="projects-mc" class="projects-mc" aria-label="Mission Control"></div>
         <div id="projects-grid" class="projects-grid" aria-live="polite"></div>
       </section>
 
