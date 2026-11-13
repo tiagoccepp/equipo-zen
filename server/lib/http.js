@@ -28,6 +28,7 @@ import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
 import { esCarpetaIgnorada, projectDir, renderWorkSection, WORKSPACE_ROOT } from './workforce.js';
+import { mountSceneRoutes } from './scene-mount.js';
 
 // Índice de archivos de un proyecto para el navegador integrado del cliente.
 // Síncrono a propósito: son unas pocas decenas de entradas por proyecto.
@@ -1357,6 +1358,13 @@ export function createApp({ store }) {
       res.status(500).json({ error: String(error?.message || error).slice(0, 300) });
     }
   });
+
+  // Generative 3D scene API (additive, in-memory store)
+  try {
+    mountSceneRoutes(app);
+  } catch (err) {
+    console.error('[scene] mount failed:', err?.message || err);
+  }
 
   const distDir = path.join(rootDir, 'dist');
   const distIndex = path.join(distDir, 'index.html');

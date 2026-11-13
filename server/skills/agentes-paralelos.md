@@ -1,7 +1,7 @@
 ---
 name: agentes-paralelos
-description: Paralelizar con subagentes: un agente por dominio independiente.
-keywords: paralelo, subagente, subagentes, delegar, concurrente, dispatch, múltiples fallos, repartir, en paralelo
+description: Parallelize with subagents: one agent per independent domain.
+keywords: parallel, subagent, subagents, delegate, concurrent, dispatch, multiple failures, assign, in parallel
 scope: chat, role:orquestador, role:backend, role:tester
 ---
 
@@ -25,4 +25,4 @@ When you have multiple unrelated failures (different test files, different subsy
 - Need to understand full system state
 - Agents would interfere with each other
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/dispatching-parallel-agents/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/dispatching-parallel-agents/SKILL.md — License: MIT.*

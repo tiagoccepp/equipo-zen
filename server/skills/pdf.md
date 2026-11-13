@@ -1,7 +1,7 @@
 ---
 name: pdf
-description: Trabajar con PDFs: leer, extraer, unir, dividir, crear.
-keywords: pdf, documento pdf, extraer texto, unir pdf, merge pdf, dividir pdf, leer pdf, pypdf, formulario pdf
+description: Work with PDFs: read, extract, merge, split, create.
+keywords: pdf, pdf document, extract text, merge pdf, split pdf, read pdf, pypdf, pdf form
 scope: chat, role:data, role:backend, role:copy
 ---
 
@@ -24,4 +24,4 @@ for page in reader.pages:
     text += page.extract_text()
 ```
 
-*Fuente: extracto verbatim de https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md — Licencia: Apache-2.0.*
+*Source: verbatim excerpt from https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md — License: Apache-2.0.*

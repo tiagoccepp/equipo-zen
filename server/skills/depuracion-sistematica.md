@@ -1,7 +1,7 @@
 ---
 name: depuracion-sistematica
-description: Debuggear con método: causa raíz antes de arreglar nada.
-keywords: debug, debugging, bug, error, fallo, falla, no funciona, root cause, causa raiz, traza, stack trace, investigar, test failure
+description: Debug methodically: find the root cause before fixing anything.
+keywords: debug, debugging, bug, error, failure, not working, root cause, trace, stack trace, investigate, test failure
 scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 

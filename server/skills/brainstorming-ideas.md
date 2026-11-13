@@ -1,7 +1,7 @@
 ---
 name: brainstorming-ideas
-description: Aclarar qué se quiere antes de construir: preguntas primero.
-keywords: brainstorming, idea, ideas, qué querés, aclarar, descubrir, requerimiento, alcance, decidir enfoque, feature nueva
+description: Clarify what is wanted before building: questions first.
+keywords: brainstorming, idea, ideas, clarify, discover, requirement, scope, decide approach, new feature
 scope: chat, role:diseno, role:copy, role:marketing, role:backend, role:frontend
 ---
 
@@ -23,4 +23,4 @@ Before you start implementing, you must, in order:
 3. Get their approval of that doc.
 4. Invoke the superpowers:writing-plans skill.
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/brainstorming/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/brainstorming/SKILL.md — License: MIT.*

@@ -1,7 +1,7 @@
 ---
 name: recibir-revision
-description: Recibir review con rigor técnico: verificar antes de implementar.
-keywords: feedback, review recibido, crítica código, implementar sugerencia, pushback, responder review, devolución código
+description: Receive review with technical rigor: verify before implementing.
+keywords: feedback, review received, code critique, implement suggestion, pushback, respond to review, code feedback
 scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 
@@ -37,4 +37,4 @@ WHEN receiving code review feedback:
 - Push back with technical reasoning if wrong
 - Just start working (actions > words)
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/receiving-code-review/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/receiving-code-review/SKILL.md — License: MIT.*

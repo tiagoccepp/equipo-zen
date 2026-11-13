@@ -1,12 +1,12 @@
 ---
 name: copy-ventas
-description: Escribir textos que venden: titulares, beneficios, llamados a la acción.
-keywords: copy, titular, titulares, venta, ventas, vender, persuasivo, cta, llamado a la acción, beneficio, landing texto, headline
+description: Write copy that sells: headlines, benefits, calls to action.
+keywords: copy, headline, headlines, sale, sales, sell, persuasive, cta, call to action, benefit, landing copy
 scope: chat, role:copy, role:marketing, role:ventas
 ---
 
-Cuando el turno pide textos para vender (landing, anuncio, pitch):
-1. Un mensaje por pantalla: titular = beneficio concreto en ≤10 palabras, sin humo ni superlativos vacíos.
-2. Beneficio antes que característica: primero qué gana el lector, después cómo funciona.
-3. Un solo llamado a la acción visible por sección, con verbo ("Pedí presupuesto", no "Click aquí").
-4. Objeciones: anticipá la duda más obvia del lector y respondela en una línea.
+When the turn asks for copy that sells (landing page, ad, pitch):
+1. One message per screen: headline = concrete benefit in ≤10 words, no fluff or empty superlatives.
+2. Benefit before feature: first what the reader gains, then how it works.
+3. A single visible call to action per section, with a verb ("Request a quote", not "Click here").
+4. Objections: anticipate the reader's most obvious doubt and answer it in one line.

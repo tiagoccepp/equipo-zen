@@ -1,7 +1,7 @@
 ---
 name: xlsx
-description: Planillas Excel: crear, editar, fórmulas, pandas, openpyxl.
-keywords: excel, xlsx, planilla, spreadsheet, hoja de cálculo, csv, openpyxl, pandas, fórmula, xlsm
+description: Excel spreadsheets: create, edit, formulas, pandas, openpyxl.
+keywords: excel, xlsx, spreadsheet, worksheet, csv, openpyxl, pandas, formula, xlsm
 scope: chat, role:data, role:backend
 ---
 

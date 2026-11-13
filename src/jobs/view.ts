@@ -3,6 +3,8 @@
 // it only receives { fetchJson } and the container element.
 
 import './jobs.css';
+import { listRenderKey } from '../lib/dom-batch.ts';
+import { canPollElement } from '../lib/polling.ts';
 
 export type JobsFetch = (path: string, init?: RequestInit) => Promise<unknown>;
 
@@ -103,6 +105,7 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
   let jobs: JobSummary[] = [];
   let selectedId: string | null = null;
   let busy = false;
+  let lastListKey = '';
 
   el.classList.add('jobs');
   el.innerHTML = `
@@ -137,8 +140,11 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
     errorEl.hidden = true;
   }
 
-  function renderList(): void {
+  function renderList(force = false): void {
     if (dead) return;
+    const key = listRenderKey(jobs.map((j) => [j.id, j.slug, j.estado, j.actualizadoEn, j.rondas, j.tests, j.objetivo, selectedId]));
+    if (!force && key === lastListKey) return;
+    lastListKey = key;
     if (jobs.length === 0) {
       listEl.innerHTML = '<li class="jobs-none">No jobs yet. When the team gets to work, they show up here.</li>';
       return;
@@ -220,6 +226,8 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
 
   async function loadList(): Promise<void> {
     if (dead || busy) return;
+    // If the view is temporarily detached/hidden, avoid useless fetch churn.
+    if (!canPollElement(el) && jobs.length > 0) return;
     busy = true;
     clearError();
     refreshBtn.disabled = true;
@@ -240,7 +248,7 @@ export function mountJobs(el: HTMLElement, deps: MountJobsDeps): () => void {
   async function select(id: string, slug: string): Promise<void> {
     if (dead) return;
     selectedId = id;
-    renderList();
+    renderList(true);
     detailEl.innerHTML = '<p class="jobs-muted">Loading detail…</p>';
     clearError();
     try {

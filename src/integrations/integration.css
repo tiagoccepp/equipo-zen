@@ -1,0 +1,30 @@
+/* Optional additive hooks for stage/presence/jabs integration.
+   Safe to include after app.css; does not redefine critical app IDs. */
+
+.scene-integration-root {
+  position: relative;
+  min-height: 360px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.scene-integration-empty {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  color: var(--text-muted, #94a3b8);
+  font: 500 14px/1.4 var(--font-sans, system-ui, sans-serif);
+}
+
+.integration-hud-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.integration-brief-slot,
+.integration-jabs-slot {
+  display: grid;
+  gap: 12px;
+}

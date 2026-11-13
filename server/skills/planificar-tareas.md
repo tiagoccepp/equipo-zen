@@ -1,7 +1,7 @@
 ---
 name: planificar-tareas
-description: Escribir planes de implementación en tareas chicas testeables.
-keywords: plan, planificar, implementación, tareas, descomponer, plan de trabajo, spec, diseño técnico, bite-sized
+description: Write implementation plans as small, testable tasks.
+keywords: plan, planning, implementation, tasks, decompose, work plan, spec, technical design, bite-sized
 scope: chat, role:orquestador, role:backend, role:frontend, role:data
 ---
 
@@ -28,4 +28,4 @@ independently testable deliverable.
 - "Run the tests and make sure they pass" - step
 - "Commit" - step
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/writing-plans/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/writing-plans/SKILL.md — License: MIT.*

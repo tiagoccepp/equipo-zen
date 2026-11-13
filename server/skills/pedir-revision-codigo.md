@@ -1,7 +1,7 @@
 ---
 name: pedir-revision-codigo
-description: Pedir revisión de código a tiempo: cuándo y cómo despachar un revisor.
-keywords: code review, revisión código, revisar, revisor, merge, pull request, feedback código, antes de mergear
+description: Request code review on time: when and how to dispatch a reviewer.
+keywords: code review, review code, reviewer, merge, pull request, code feedback, before merge
 scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 
@@ -28,4 +28,4 @@ Dispatch a code reviewer subagent to catch issues before they cascade. The revie
 - Note Minor issues for later
 - Push back if reviewer is wrong (with reasoning)
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/requesting-code-review/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/requesting-code-review/SKILL.md — License: MIT.*

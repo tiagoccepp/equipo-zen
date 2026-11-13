@@ -5,13 +5,12 @@
 
 import type { MissionLiveHooks } from './types.ts';
 import {
-  fetchAudio,
   fetchAudioDevices,
   fetchConnectivity,
   fetchLatency,
   fetchLive,
   fetchLocalDevices,
-  fetchSala,
+  fetchSalaAudioBundle,
   fetchSidecars,
   fetchWork
 } from './api.ts';
@@ -24,6 +23,8 @@ import {
   renderSidecars,
   renderTareas
 } from './cards.ts';
+import { replaceInnerHtmlIfChanged } from '../lib/dom-batch.ts';
+import { canPollElement, payloadSignature } from '../lib/polling.ts';
 
 export interface MissionControlHandle {
   destroy: () => void;
@@ -36,6 +37,7 @@ export interface MissionControlOptions extends MissionLiveHooks {
 }
 
 const DEFAULT_INTERVAL_MS = 5000;
+const CONNECTIVITY_EVERY_N_REFRESHES = 6; // ~30s by default, decouples slow probe from hot path
 
 export function mountMissionControl(container: HTMLElement, opts: MissionControlOptions = {}): MissionControlHandle {
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -49,36 +51,72 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
 
   let alive = true;
   let refreshing = false;
+  let lastHtml = '';
+  let lastSignature = '';
+  let refreshCount = 0;
+  let lastConnectivity: Awaited<ReturnType<typeof fetchConnectivity>> = null;
 
   async function refresh(): Promise<void> {
-    if (!alive || refreshing) {
+    if (!alive || refreshing || !canPollElement(container)) {
       return;
     }
     refreshing = true;
     try {
+      refreshCount += 1;
+      const shouldRefreshConnectivity = refreshCount === 1 || refreshCount % CONNECTIVITY_EVERY_N_REFRESHES === 0;
+      const connPromise = shouldRefreshConnectivity ? fetchConnectivity() : Promise.resolve(lastConnectivity);
+
       // Each card fetches in isolation: Promise.all with getters that never throw.
-      const [live, work, sidecars, latency, audio, devices, audioRt, sala, conn] = await Promise.all([
+      const [live, work, sidecars, latency, salaAudio, devices, audioRt, conn] = await Promise.all([
         fetchLive(),
         fetchWork(),
         fetchSidecars(),
         fetchLatency(),
-        fetchAudio(),
+        fetchSalaAudioBundle(),
         fetchLocalDevices(),
         fetchAudioDevices(),
-        fetchSala(),
-        fetchConnectivity()
+        connPromise
       ]);
       if (!alive) {
         return;
       }
-      container.innerHTML =
-        renderConnectivityBadge(conn) +
+      if (shouldRefreshConnectivity) {
+        lastConnectivity = conn;
+      }
+      const effectiveConn = conn ?? lastConnectivity;
+      const audio = salaAudio.audio;
+      const sala = salaAudio.sala;
+
+      const signature = payloadSignature({
+        live,
+        work,
+        sidecars,
+        latency,
+        sala,
+        audio,
+        devices,
+        audioRt,
+        effectiveConn,
+        speakers: (() => { try { return hooks.getLiveSpeakers?.() || []; } catch { return []; } })(),
+        voiceOn: (() => { try { return hooks.getVoiceActive?.() ?? null; } catch { return null; } })()
+      });
+      if (signature === lastSignature) {
+        return;
+      }
+
+      const html =
+        renderConnectivityBadge(effectiveConn) +
         renderEquipo(live, work, hooks) +
         renderTareas(work) +
         renderSidecars(sidecars) +
         renderLatencia(latency) +
         renderAudio(audio, devices, audioRt) +
         renderSala(sala);
+      const res = replaceInnerHtmlIfChanged(container, html, lastHtml);
+      if (res.changed) {
+        lastHtml = html;
+        lastSignature = signature;
+      }
     } finally {
       refreshing = false;
     }
@@ -86,8 +124,8 @@ export function mountMissionControl(container: HTMLElement, opts: MissionControl
 
   void refresh();
   const timer = setInterval(() => {
-    // Background pause: saves 9 fetches/5s per hidden tab.
-    if (!document.hidden) {
+    // Background/mounted pause: saves fetches when hidden or view detached.
+    if (canPollElement(container)) {
       void refresh();
     }
   }, intervalMs);

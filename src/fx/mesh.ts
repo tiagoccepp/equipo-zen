@@ -40,6 +40,7 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
   let lastAt = 0;
   let clock = 0;
   let level = 0;
+  let disposed = false;
   const reduced = typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -66,8 +67,24 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
     ctx.fillRect(0, 0, w, h);
   }
 
+  function stopLoop() {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+  }
+
+  function startLoop() {
+    if (disposed || reduced || raf) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    lastAt = performance.now();
+    raf = requestAnimationFrame(tick);
+  }
+
   function tick(now: number) {
     raf = 0;
+    if (disposed || reduced) return;
+    if (typeof document !== 'undefined' && document.hidden) {
+      return;
+    }
     const dt = Math.min(0.05, Math.max(0, (now - lastAt) / 1000));
     lastAt = now;
     clock += dt;
@@ -75,7 +92,18 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
     const step = Math.min(1, (target > level ? 8 : 3) * dt);
     level += (target - level) * step;
     paint();
-    raf = requestAnimationFrame(tick);
+    if (!disposed && !(typeof document !== 'undefined' && document.hidden)) {
+      raf = requestAnimationFrame(tick);
+    }
+  }
+
+  function onVisibility() {
+    if (disposed || reduced) return;
+    if (typeof document !== 'undefined' && document.hidden) {
+      stopLoop();
+    } else {
+      startLoop();
+    }
   }
 
   function resize(cssWidth: number, cssHeight: number) {
@@ -87,25 +115,29 @@ export function mountMesh(canvas: HTMLCanvasElement, options: MeshOptions): Mesh
     canvas.style.width = `${w}px`;
     canvas.style.height = `${h}px`;
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (reduced) paint();
-    else if (!raf) {
-      lastAt = performance.now();
-      raf = requestAnimationFrame(tick);
+    if (reduced) {
+      paint();
+    } else {
+      startLoop();
     }
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibility);
   }
 
   // First frame as soon as it mounts (main calls resize with the real size).
   if (reduced) paint();
-  else {
-    lastAt = typeof performance !== 'undefined' ? performance.now() : 0;
-    raf = requestAnimationFrame(tick);
-  }
+  else startLoop();
 
   return {
     resize,
     dispose: () => {
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
+      disposed = true;
+      stopLoop();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
     }
   };
 }

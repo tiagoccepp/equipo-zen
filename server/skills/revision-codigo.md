@@ -1,12 +1,12 @@
 ---
 name: revision-codigo
-description: Revisar código como un compañero exigente: bugs, bordes, simplicidad.
-keywords: revisar, revisión, codigo, código, bug, refactor, tests, test, calidad, pull request, deuda técnica
+description: Review code like a demanding teammate: bugs, edge cases, simplicity.
+keywords: review, code review, bug, refactor, tests, test, quality, pull request, technical debt
 scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 
-Cuando el turno pide revisar código (propio o ajeno):
-1. Leé el código de verdad antes de opinar: entrada, salida y bordes (vacío, error, nulo).
-2. Reportá por severidad: primero lo que rompe, después lo que confunde, al final el gusto.
-3. Cada observación trae propuesta concreta (líneas o snippet); objetar sin alternativa se descarta.
-4. Si algo no se puede verificar sin correrlo, decí cómo probarlo en una línea en vez de adivinar.
+When the turn asks to review code (your own or someone else's):
+1. Read the actual code before giving an opinion: inputs, outputs, and edge cases (empty, error, null).
+2. Report by severity: first what breaks, then what confuses, finally stylistic preferences.
+3. Every observation includes a concrete proposal (lines or snippet); objecting without an alternative is discarded.
+4. If something cannot be verified without running it, say how to test it in one line instead of guessing.

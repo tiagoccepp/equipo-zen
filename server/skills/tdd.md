@@ -1,7 +1,7 @@
 ---
 name: tdd
-description: TDD: test que falla primero, código mínimo después.
-keywords: tdd, test driven, test que falla, red green, refactor, failing test, escribir test, test primero, watch it fail
+description: TDD: failing test first, minimal code after.
+keywords: tdd, test driven, failing test, red green, refactor, write test, test first, watch it fail
 scope: chat, role:backend, role:frontend, role:tester, role:data
 ---
 
@@ -44,4 +44,4 @@ Confirm:
 - Failure message is expected
 - Fails because feature missing (not typos)
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/test-driven-development/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/test-driven-development/SKILL.md — License: MIT.*

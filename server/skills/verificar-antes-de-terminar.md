@@ -1,7 +1,7 @@
 ---
 name: verificar-antes-de-terminar
-description: Evidencia antes de cantar victoria: verificar en fresco antes de afirmar.
-keywords: verificar, verificación, evidencia, sin verificar, cantar victoria, funciona, pasar tests, pushear, commitear, afirmar, done, terminado
+description: Evidence before claiming victory: verify freshly before asserting.
+keywords: verify, verification, evidence, unverified, claim victory, works, pass tests, push, commit, assert, done, finished
 scope: all
 ---
 
@@ -41,4 +41,4 @@ Skip any step = lying, not verifying
 - Tired and wanting work over
 - **ANY wording implying success without having run verification**
 
-*Fuente: extracto verbatim de https://github.com/obra/superpowers/blob/main/skills/verification-before-completion/SKILL.md — Licencia: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/verification-before-completion/SKILL.md — License: MIT.*

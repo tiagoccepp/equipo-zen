@@ -6,4 +6,4 @@ QUALITY FLOOR (you will be reviewed against this):
 - Animations 120-260 ms, respecting reduced-motion preference.
 - States resolved: empty, loading, and error. Nothing left half-done.
 - REAL and specific content: no lorem ipsum, "Service 1", or TODO.
-- All user-facing content in Spanish (target audience), without English-style Title Case ("Nuestro equipo", not "Nuestro Equipo").
+- All user-facing content in the project's target language, without English-style Title Case.

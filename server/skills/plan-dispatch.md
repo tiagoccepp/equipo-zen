@@ -1,13 +1,13 @@
 ---
 name: plan-dispatch
-description: Planificar laburo de equipo: fases, dependencias, done-criteria, dispatch, re-plan.
-keywords: plan, planificar, fase, dispatch, delegar, repartir, replanificar, dependencia, done, criterio, tracking, orquestador
+description: Plan team work: phases, dependencies, done criteria, dispatch, re-plan.
+keywords: plan, phase, dispatch, delegate, assign, replan, dependency, done, criteria, tracking, orchestrator
 scope: role:orquestador
 ---
 
-Cuando el turno pide dirigir laburo (plan, reparto, seguimiento):
-1. Plan antes que dispatch: fases numeradas, dependencias, dueño por fase, done-criteria medible por fase.
-2. Research pre-hecho: antes de pedir laburo, buscá qué ya existe (open source, libs, diseños) y anexá qué se usa y por qué.
-3. Dispatch = tarea + done-criteria + con quién coordinar. El especialista puede rechazar 1 vez con motivo: se atiende con re-plan, no se ignora.
-4. Si falta un rol, pedilo al Spawner (rol + por qué + capabilities); nunca inventes un especialista por tu cuenta.
-5. Ante bloqueo: re-planificás (rodear, repartir distinto, recortar alcance). El bloqueo se reporta con evidencia.
+When the turn asks to direct work (plan, assignment, follow-up):
+1. Plan before dispatch: numbered phases, dependencies, owner per phase, measurable done criteria per phase.
+2. Pre-done research: before requesting work, look up what already exists (open source, libs, designs) and include what to use and why.
+3. Dispatch = task + done criteria + who to coordinate with. A specialist may reject once with a reason: handle it with re-planning, do not ignore it.
+4. If a role is missing, ask the Spawner for it (role + why + capabilities); never invent a specialist on your own.
+5. On a blocker: re-plan (work around it, redistribute, or reduce scope). Report the blocker with evidence.

@@ -43,9 +43,19 @@ interface CompanyRow {
   name: string;
 }
 
+let cachedWorkCompany: CompanyRow | null = null;
+
+export function resetMissionApiCaches(): void {
+  cachedWorkCompany = null;
+}
+
 export async function fetchWork(): Promise<CompanyWork | null> {
-  const list = await getJson<{ companies: CompanyRow[] }>('/api/companies');
-  const company = list && Array.isArray(list.companies) ? pickCompany(list.companies) : null;
+  let company = cachedWorkCompany;
+  if (!company) {
+    const list = await getJson<{ companies: CompanyRow[] }>('/api/companies');
+    company = list && Array.isArray(list.companies) ? pickCompany(list.companies) : null;
+    cachedWorkCompany = company;
+  }
   if (!company) {
     return null;
   }
@@ -66,8 +76,11 @@ export async function fetchWork(): Promise<CompanyWork | null> {
     }>;
   }>(`/api/companies/${encodeURIComponent(company.id)}/work`);
   if (!work || !work.company || !Array.isArray(work.goals)) {
+    // Company may have been removed/renamed; clear cache so next refresh can recover.
+    cachedWorkCompany = null;
     return null;
   }
+  cachedWorkCompany = { id: work.company.id, name: work.company.name };
   const goals: MissionGoal[] = work.goals.map((g) => ({
     id: g.id,
     title: g.title,
@@ -130,8 +143,42 @@ interface SettingsStatusWire {
   stt?: { localHealthy?: boolean };
 }
 
+async function fetchPublicSettings(): Promise<PublicSettingsWire | null> {
+  return getJson<PublicSettingsWire>('/api/settings');
+}
+
+/** Fetch sala+audio using a single /api/settings request for this refresh. */
+export async function fetchSalaAudioBundle(): Promise<{ sala: SalaSettings | null; audio: AudioSettings | null }> {
+  const [settings, status] = await Promise.all([
+    fetchPublicSettings(),
+    getJson<SettingsStatusWire>('/api/settings/status')
+  ]);
+  const salaRaw = settings?.settings?.sala;
+  const sala: SalaSettings | null = salaRaw
+    ? {
+        v1: salaRaw.v1 === true,
+        v2: salaRaw.v2 === true,
+        groupchat: salaRaw.groupchat === true,
+        timeoutMs: typeof salaRaw.timeoutMs === 'number' ? salaRaw.timeoutMs : 0,
+        agentTimeoutMs: typeof salaRaw.agentTimeoutMs === 'number' ? salaRaw.agentTimeoutMs : 0,
+        sop: typeof salaRaw.sop === 'string' ? salaRaw.sop : ''
+      }
+    : null;
+  const ttsEngine = settings?.settings?.tts?.engine;
+  const sttProvider = settings?.settings?.stt?.provider;
+  const audio: AudioSettings | null = !ttsEngine && !sttProvider
+    ? null
+    : {
+        ttsEngine: ttsEngine || '—',
+        sttProvider: sttProvider || '—',
+        ttsHealthy: typeof status?.tts?.healthy === 'boolean' ? status.tts.healthy : null,
+        sttHealthy: typeof status?.stt?.localHealthy === 'boolean' ? status.stt.localHealthy : null
+      };
+  return { sala, audio };
+}
+
 export async function fetchSala(): Promise<SalaSettings | null> {
-  const data = await getJson<PublicSettingsWire>('/api/settings');
+  const data = await fetchPublicSettings();
   const sala = data?.settings?.sala;
   if (!sala) {
     return null;
@@ -148,7 +195,7 @@ export async function fetchSala(): Promise<SalaSettings | null> {
 
 export async function fetchAudio(): Promise<AudioSettings | null> {
   const [settings, status] = await Promise.all([
-    getJson<PublicSettingsWire>('/api/settings'),
+    fetchPublicSettings(),
     getJson<SettingsStatusWire>('/api/settings/status')
   ]);
   const ttsEngine = settings?.settings?.tts?.engine;
