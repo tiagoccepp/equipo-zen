@@ -155,7 +155,40 @@ export const MAX_CONTEXTUAL_FOLLOWUPS = 1;
 export const AUDIO_MIME_TYPE = 'audio/pcm;rate=16000';
 export const TELEMETRY_MAX_EVENTS = 800;
 export const TELEMETRY_TEXT_LIMIT = 4000;
-export const DB_PATH = process.env.DB_PATH || path.join(rootDir, 'server', 'data', 'meetings.db');
+/**
+ * Writable data dir. In a packaged install the app dir is root-owned, so
+ * anything written there fails. Prefer DATA_DIR, then app-local if writable,
+ * then the per-user data dir.
+ */
+function resolveDataDir(defaultDir) {
+  const fromEnv = process.env.DATA_DIR;
+  if (fromEnv && String(fromEnv).trim()) return path.resolve(String(fromEnv).trim());
+  const fs = process.getBuiltinModule('node:fs');
+  const os = process.getBuiltinModule('node:os');
+  try {
+    fs.mkdirSync(defaultDir, { recursive: true });
+    fs.accessSync(defaultDir, fs.constants.W_OK);
+    return defaultDir;
+  } catch {
+    const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const dir = path.join(base, 'j-a-b-s', 'data');
+    fs.mkdirSync(dir, { recursive: true });
+    // Migración: conservar settings/historial de instalaciones previas que
+    // escribían dentro del directorio de instalación (root-owned en .deb).
+    try {
+      for (const name of ['meetings.db', 'meetings.db-wal', 'meetings.db-shm']) {
+        const src = path.join(defaultDir, name);
+        const dst = path.join(dir, name);
+        if (fs.existsSync(src) && !fs.existsSync(dst)) fs.copyFileSync(src, dst);
+      }
+    } catch {
+      /* migración best-effort: si falla, arrancamos con DB nueva */
+    }
+    return dir;
+  }
+}
+
+export const DB_PATH = process.env.DB_PATH || path.join(resolveDataDir(path.join(rootDir, 'server', 'data')), 'meetings.db');
 
 // ── Auto-aprendizaje: kill-switches ('0' desactiva) ─────────────────────
 export const LEARNING_ENABLED = process.env.LEARNING_ENABLED !== '0';

@@ -41,7 +41,30 @@ import { telemetry } from './telemetry.js';
 // TODO lo que la empresa produce vive acá dentro y en ningún otro lado:
 // workspace/<empresa>/<proyecto>/… Es el único punto de escritura del
 // sistema y está aislado del resto del repo.
-export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(rootDir, 'workspace'));
+/**
+ * Resolve the workspace root to a WRITABLE directory.
+ * In a packaged install the app dir is root-owned (/usr/lib/...), so writing
+ * there fails with EACCES and the sidecar dies on startup. Prefer the env var,
+ * then the app-local workspace if writable, then the per-user data dir.
+ */
+function resolveWorkspaceRoot(defaultRoot) {
+  const fromEnv = process.env.WORKSPACE_ROOT;
+  if (fromEnv && String(fromEnv).trim()) return path.resolve(String(fromEnv).trim());
+  const fs = process.getBuiltinModule('node:fs');
+  const os = process.getBuiltinModule('node:os');
+  try {
+    fs.mkdirSync(defaultRoot, { recursive: true });
+    fs.accessSync(defaultRoot, fs.constants.W_OK);
+    return defaultRoot;
+  } catch {
+    const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const fallback = path.join(base, 'j-a-b-s', 'workspace');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
+
+export const WORKSPACE_ROOT = resolveWorkspaceRoot(path.join(rootDir, 'workspace'));
 
 const TICK_MS = Number(process.env.WORKFORCE_TICK_MS || 5000);
 const MAX_CONCURRENT = Number(process.env.WORKFORCE_MAX_CONCURRENT || 4);
