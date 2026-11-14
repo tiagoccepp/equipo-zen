@@ -1,6 +1,7 @@
-import type { OfficeAgent, OfficeWorld } from './mapping.ts';
+import type { OfficeWorld } from './mapping.ts';
+import type { OfficeAgent } from './mapping.ts';
 
-interface SimAgent extends OfficeAgent {
+export interface SimAgent extends OfficeAgent {
   x: number;
   y: number;
   vx: number;
@@ -22,15 +23,23 @@ export class OfficeSim {
         seen.add(a.id);
         const prev = this.agents.get(a.id);
         if (prev) {
-          Object.assign(prev, a);
-          prev.targetX = a.deskX + 8;
-          prev.targetY = a.deskY - 8;
+          prev.name = a.name;
+          prev.title = a.title;
+          prev.color = a.color;
+          prev.projectId = a.projectId;
+          prev.state = a.state;
+          prev.label = a.label;
+          prev.deskX = a.deskX;
+          prev.deskY = a.deskY;
+          prev.currentTask = a.currentTask;
+          prev.targetX = a.deskX + 10;
+          prev.targetY = a.deskY - 6;
         } else {
           this.agents.set(a.id, {
             ...a,
-            x: a.deskX + 8, y: a.deskY - 8,
+            x: a.deskX + 10, y: a.deskY - 6,
             vx: 0, vy: 0,
-            targetX: a.deskX + 8, targetY: a.deskY - 8,
+            targetX: a.deskX + 10, targetY: a.deskY - 6,
             phase: Math.random() * Math.PI * 2,
             wanderT: Math.random() * 2
           });
@@ -43,7 +52,16 @@ export class OfficeSim {
   updateTransient(world: OfficeWorld) {
     for (const room of world.rooms) for (const a of room.agents) {
       const s = this.agents.get(a.id);
-      if (s) { s.state = a.state; s.label = a.label; s.color = a.color; }
+      if (s) {
+        s.state = a.state;
+        s.label = a.label;
+        s.color = a.color;
+        s.title = a.title;
+        s.name = a.name;
+        s.currentTask = a.currentTask;
+        s.deskX = a.deskX;
+        s.deskY = a.deskY;
+      }
     }
   }
 
@@ -51,21 +69,24 @@ export class OfficeSim {
 
   tick(dt: number) {
     for (const a of this.agents.values()) {
-      a.phase += dt * (a.state === 'working' ? 6 : a.state === 'speaking' ? 8 : 2);
+      const animSpeed = a.state === 'working' ? 7 : a.state === 'speaking' ? 9 : a.state === 'blocked' ? 3 : a.state === 'offline' ? 1 : 2;
+      a.phase += dt * animSpeed;
       a.wanderT -= dt;
-      if (a.state === 'idle' && a.wanderT <= 0) {
-        a.wanderT = 1.5 + Math.random() * 2.5;
-        a.targetX = a.deskX + 8 + (Math.random() - 0.5) * 18;
-        a.targetY = a.deskY - 8 + (Math.random() - 0.5) * 10;
-      } else if (a.state !== 'idle') {
-        a.targetX = a.deskX + 8;
-        a.targetY = a.deskY - 8;
+      if ((a.state === 'idle' || a.state === 'offline') && a.wanderT <= 0) {
+        a.wanderT = 1.8 + Math.random() * 3;
+        const spread = a.state === 'offline' ? 6 : 16;
+        a.targetX = a.deskX + 10 + (Math.random() - 0.5) * spread;
+        a.targetY = a.deskY - 6 + (Math.random() - 0.5) * (spread * 0.6);
+      } else if (a.state === 'working' || a.state === 'speaking' || a.state === 'blocked') {
+        // working/speaking stay near desk/monitor; subtle fidget
+        a.targetX = a.deskX + 10 + (a.state === 'working' ? Math.sin(a.phase * 0.7) * 2 : 0);
+        a.targetY = a.deskY - 6;
       }
       const dx = a.targetX - a.x;
       const dy = a.targetY - a.y;
       const dist = Math.hypot(dx, dy);
-      const speed = a.state === 'idle' ? 18 : 28;
-      if (dist > 1) {
+      const speed = a.state === 'working' || a.state === 'speaking' ? 24 : a.state === 'blocked' ? 10 : a.state === 'offline' ? 8 : 16;
+      if (dist > 0.6) {
         a.vx = (dx / dist) * speed;
         a.vy = (dy / dist) * speed;
         a.x += a.vx * dt;
@@ -78,5 +99,3 @@ export class OfficeSim {
 
   getAgents(): SimAgent[] { return [...this.agents.values()]; }
 }
-
-export type { SimAgent };

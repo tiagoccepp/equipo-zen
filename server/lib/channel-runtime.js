@@ -165,9 +165,20 @@ export async function handleChannelInbound(channel, parsed, { fetchFn = fetch, r
   if (!channel || !parsed) return null;
   const key = dedupeKey(channel.id || channel.kind, parsed);
   const fresh = markSeen(key);
+  if (!fresh) {
+    return {
+      at: new Date().toISOString(),
+      channel: channel.id || channel.kind,
+      ...parsed,
+      allowed: false,
+      duplicate: true,
+      via: null,
+      blockedReason: 'duplicate'
+    };
+  }
   const entry = acceptInbound(channel, parsed);
-  entry.duplicate = !fresh;
-  if (!fresh || !entry.allowed) return entry;
+  entry.duplicate = false;
+  if (!entry.allowed) return entry;
   if (respond && !channel.autoRespond) {
     void dispatchInboundReply(entry, config || channel, { fetchFn });
   }

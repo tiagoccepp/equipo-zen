@@ -162,21 +162,25 @@ if (!getAudioFollowDefault()) {
 attachMeetingServer(server, keyRing, store);
 const workforce = new Workforce(store, keyRing, {
   onEvent: (companyId, payload) => {
-    broadcastToCompany(companyId, payload);
     void (async () => {
       try {
         const bg = await import('./lib/background.js');
         const promo = bg.promotableWorkEvent(payload);
         if (!promo) {
+          broadcastToCompany(companyId, payload);
           return;
         }
+        // Promotable completions are surfaced as background chat turns;
+        // avoid also broadcasting the raw work_event to prevent duplicate UI messages.
         const ms = await import('./lib/meeting-session.js');
         for (const session of ms.sessionsForCompany(companyId)) {
           try {
             await session.promoteBackgroundResult(promo);
           } catch {}
         }
-      } catch {}
+      } catch {
+        broadcastToCompany(companyId, payload);
+      }
     })();
   }
 });

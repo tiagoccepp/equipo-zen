@@ -80,7 +80,9 @@ export function getLlmKeys(providerId = getLlmProvider()) {
 
 // E-14: modelos por proveedor (llm.models = CSV custom SOLO para el
 // activo; el resto usa su lista curada). "Todos sus modelos" = curados +
-// custom pegable.
+// custom pegable. Con custom activo, la selección (llm.model) ordena la
+// lista efectiva para que el modelo elegido quede primero y el resto siga
+// como cadena de repuesto dentro del mismo proveedor.
 export function getLlmModelsFor(providerId) {
   const provider = LLM_PROVIDERS[providerId];
   if (!provider) {
@@ -90,10 +92,15 @@ export function getLlmModelsFor(providerId) {
     const custom = String(dbValue('llm.models') || '').split(',')
       .map((m) => m.trim()).filter(Boolean);
     if (custom.length > 0) {
-      return uniqueModelList(custom);
+      const list = uniqueModelList(custom);
+      const chosen = String(dbValue('llm.model') || '').trim();
+      if (chosen && list.includes(chosen)) {
+        return [chosen, ...list.filter((m) => m !== chosen)];
+      }
+      return list;
     }
   }
-  const chosen = dbValue('llm.model');
+  const chosen = String(dbValue('llm.model') || '').trim();
   const valido = chosen && provider.models.includes(chosen) ? chosen : provider.defaultModel;
   return uniqueModelList([valido, ...provider.models]);
 }
@@ -590,9 +597,12 @@ function mask(value) {
 
 // Vista segura para GET /api/settings: nunca devuelve secretos completos.
 export function publicSettings() {
+  const activeProvider = getLlmProvider();
+  const customModels = String(dbValue('llm.models') || '');
+  const effectiveModels = getLlmModels();
   return {
     llm: {
-      provider: getLlmProvider(),
+      provider: activeProvider,
       providerOptions: Object.values(LLM_PROVIDERS).map(({ id, label }) => ({ id, label })),
       // La clave de cada proveedor se guarda por separado: cambiar de uno a
       // otro y volver no obliga a pegarla de nuevo.
@@ -604,9 +614,15 @@ export function publicSettings() {
       opencodeKeyMasked: mask(getLlmKeys('opencode')[0] || ''),
       groqKeySet: getLlmKeys('groq').length > 0,
       groqKeyMasked: mask(getLlmKeys('groq')[0] || ''),
-      model: getLlmModels()[0],
-      modelOptions: LLM_MODEL_OPTIONS[getLlmProvider()] || MINIMAX_MODEL_OPTIONS,
-      customModels: dbValue('llm.models') || '',
+      model: effectiveModels[0] || (LLM_PROVIDERS[activeProvider]?.defaultModel || ''),
+      // Opciones seleccionables del proveedor activo: custom activos (si hay)
+      // + catálogo curado, para que la UI y la validación hablen el mismo idioma.
+      modelOptions: customModels.trim()
+        ? uniqueModelList([...effectiveModels, ...(LLM_MODEL_OPTIONS[activeProvider] || [])])
+        : (LLM_MODEL_OPTIONS[activeProvider] || MINIMAX_MODEL_OPTIONS),
+      customModels,
+      strong: String(dbValue('llm.strong') || ''),
+      fast: String(dbValue('llm.fast') || ''),
       failover: dbValue('llm.failover') || '',
       failoverResolved: getFailoverOrder()
     },
@@ -690,16 +706,32 @@ export function publicSettings() {
 // override (se vuelve al valor de entorno/default).
 export function applySettings(patch) {
   const applied = [];
-  for (const [key, raw] of Object.entries(patch || {})) {
+  const input = patch && typeof patch === 'object' ? patch : {};
+  const providerInPatch = input['llm.provider'] !== undefined ? String(input['llm.provider'] ?? '').trim() : null;
+  const activeProviderAfter = (providerInPatch && LLM_PROVIDERS[providerInPatch]) ? providerInPatch : getLlmProvider();
+  const customModelsInPatch = input['llm.models'] !== undefined
+    ? uniqueModelList(String(input['llm.models'] ?? '').split(',').map((m) => m.trim()).filter(Boolean))
+    : null;
+  const effectiveCustomModels = customModelsInPatch !== null
+    ? customModelsInPatch
+    : (activeProviderAfter === getLlmProvider()
+      ? uniqueModelList(String(dbValue('llm.models') || '').split(',').map((m) => m.trim()).filter(Boolean))
+      : []);
+
+  for (const [key, raw] of Object.entries(input)) {
     if (!EDITABLE_KEYS.has(key)) {
       continue;
     }
-    const value = String(raw ?? '').trim();
-    // El modelo se valida contra CUALQUIER proveedor conocido: el patch puede
-    // traer proveedor y modelo juntos, y el orden de las claves no debe decidir
-    // si el modelo entra o se descarta.
-    if (key === 'llm.model' && value && !Object.values(LLM_MODEL_OPTIONS).flat().includes(value)) {
-      continue;
+    let value = String(raw ?? '').trim();
+    // El modelo se acepta si pertenece al catálogo curado de algún proveedor
+    // o a la lista custom efectiva del proveedor activo (permite pegar IDs
+    // libres y seleccionarlos sin depender del orden de las claves del patch).
+    if (key === 'llm.model' && value) {
+      const inCurated = Object.values(LLM_MODEL_OPTIONS).flat().includes(value);
+      const inCustom = effectiveCustomModels.includes(value);
+      if (!inCurated && !inCustom) {
+        continue;
+      }
     }
     if (key === 'llm.provider' && value && !LLM_PROVIDERS[value]) {
       continue;
@@ -707,13 +739,20 @@ export function applySettings(patch) {
     // E-14: failover = CSV de proveedores conocidos (se filtran rarezas);
     // models = CSV no vacío (nombres libres, el proveedor valida).
     if (key === 'llm.failover' && value) {
-      const clean = value.split(',').map((p) => p.trim().toLowerCase()).filter((p) => LLM_PROVIDERS[p]);
+      const clean = [...new Set(value.split(',').map((p) => p.trim().toLowerCase()).filter((p) => LLM_PROVIDERS[p]))];
       if (clean.length === 0) {
         continue;
       }
+      value = clean.join(',');
     }
-    if (key === 'llm.models' && value && value.split(',').map((m) => m.trim()).filter(Boolean).length === 0) {
-      continue;
+    if (key === 'llm.models') {
+      if (value) {
+        const clean = uniqueModelList(value.split(',').map((m) => m.trim()).filter(Boolean));
+        if (clean.length === 0) {
+          continue;
+        }
+        value = clean.join(',');
+      }
     }
     // E-15: modes tito-only|allowlist; enabled/autoRespond booleanos.
     if ((key === 'channels.telegram.mode' || key === 'channels.whatsapp.mode') && value && !['tito-only', 'allowlist'].includes(value.toLowerCase())) {
@@ -725,8 +764,12 @@ export function applySettings(patch) {
     if (key === 'stt.provider' && value && !STT_PROVIDERS.includes(value)) {
       continue;
     }
-    if (key === 'stt.order' && value && parseSttOrder(value).length === 0) {
-      continue;
+    if (key === 'stt.order' && value) {
+      const clean = parseSttOrder(value);
+      if (clean.length === 0) {
+        continue;
+      }
+      value = clean.join(',');
     }
     if (key === 'stt.whisperModel' && value && !WHISPER_MODEL_OPTIONS.includes(value)) {
       continue;
@@ -734,8 +777,12 @@ export function applySettings(patch) {
     if (key === 'tts.engine' && value && !TTS_ENGINE_OPTIONS.includes(value)) {
       continue;
     }
-    if (key === 'tts.order' && value && parseTtsOrder(value).length === 0) {
-      continue;
+    if (key === 'tts.order' && value) {
+      const clean = parseTtsOrder(value);
+      if (clean.length === 0) {
+        continue;
+      }
+      value = clean.join(',');
     }
     if (key === 'tts.speed' && value) {
       const n = Number(value);
@@ -827,6 +874,29 @@ export function applySettings(patch) {
       store.logChange('user', 'setting', key, 'update', { value });
     } else {
       store.logChange('user', 'setting', key, 'update', { value: mask(value) });
+    }
+  }
+
+  // Coherencia LLM: el modelo efectivo debe pertenecer al proveedor activo.
+  // - Si hay custom models para el activo, llm.model debe estar en esa lista.
+  // - Si no hay custom models, llm.model debe ser un modelo curado del proveedor.
+  // Esto mantiene hot-swap limpio al cambiar provider/model/models en un solo patch.
+  if (applied.some((key) => ['llm.provider', 'llm.model', 'llm.models'].includes(key))) {
+    const provider = getLlmProvider();
+    const providerCfg = LLM_PROVIDERS[provider];
+    if (providerCfg) {
+      const custom = uniqueModelList(String(dbValue('llm.models') || '').split(',').map((m) => m.trim()).filter(Boolean));
+      const chosen = String(dbValue('llm.model') || '').trim();
+      let nextModel = null;
+      if (custom.length > 0) {
+        nextModel = custom.includes(chosen) ? chosen : custom[0];
+      } else {
+        nextModel = providerCfg.models.includes(chosen) ? chosen : providerCfg.defaultModel;
+      }
+      if (nextModel && nextModel !== chosen) {
+        store.setSetting('llm.model', nextModel);
+        if (!applied.includes('llm.model')) applied.push('llm.model');
+      }
     }
   }
 

@@ -64,6 +64,24 @@ test('e15: poll Telegram — acepta Tito, bloquea resto, offset avanza', async (
   assert.equal(channelInbox().length, 2, 'inbox registra todo');
 });
 
+test('e15: inbound duplicado no re-notifica ni re-encola', async () => {
+  const fetchFn = async (url) => {
+    if (String(url).includes('getUpdates')) {
+      return { ok: true, json: async () => ({ ok: true, result: [{ update_id: 20, message: { chat: { id: 111 }, from: { id: 111 }, text: 'dup' } }] }) };
+    }
+    return { ok: true, json: async () => ({ ok: true, result: {} }) };
+  };
+  const seen = [];
+  onChannelInbound((e) => seen.push(e));
+  const offsetRef = {};
+  await pollTelegramOnce({ fetchFn, config: TG, offsetRef });
+  await pollTelegramOnce({ fetchFn, config: TG, offsetRef });
+  assert.equal(seen.length, 1, 'subscriber solo una vez');
+  assert.equal(channelInbox().length, 1, 'inbox no duplica');
+  const accepted = await pollTelegramOnce({ fetchFn, config: TG, offsetRef });
+  assert.equal(accepted[0].duplicate, true, 'reentrega marcada duplicada');
+});
+
 test('e15: echo auto-responde + send con gate', async () => {
   const posts = [];
   const fetchFn = async (url, init) => {
