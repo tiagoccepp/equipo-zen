@@ -1400,10 +1400,14 @@ export function createApp({ store }) {
       if (!ring || (typeof ring.hasKeys === 'function' && !ring.hasKeys())) {
         return res.status(503).json({ error: 'proveedor no configurado' });
       }
-      const result = await runRoundtableWithChat({
+      const maxTurns = Math.min(Math.max(Number(body.maxTurns) || 3, 2), 6);
+      const perTurn = Math.min(Math.max(Number(body.timeoutMs) || 10000, 3000), 20000);
+      const deadline = perTurn * maxTurns + 4000;
+      const work = runRoundtableWithChat({
         topic,
         agents: agents.slice(0, 5),
-        maxTurns: Math.min(Math.max(Number(body.maxTurns) || 6, 2), 12),
+        maxTurns,
+        timeoutMs: perTurn,
         callChat: async ({ system, user }) =>
           completeChat(ring, {
             scope: 'mesa',
@@ -1415,6 +1419,13 @@ export function createApp({ store }) {
             ]
           })
       });
+      const result = await Promise.race([
+        work,
+        new Promise((resolve) => { const t = setTimeout(() => resolve(null), deadline); if (t.unref) t.unref(); })
+      ]);
+      if (!result) {
+        return res.status(504).json({ error: 'la mesa excedió el tiempo disponible', timeoutMs: perTurn, maxTurns });
+      }
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: String(err?.message || err) });
