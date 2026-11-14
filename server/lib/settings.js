@@ -48,6 +48,12 @@ export function initSettings(storeInstance, keyRingInstance) {
   keyRing.setKeys(getMinimaxKeys());
 }
 
+// El ring vive acá porque las claves se recargan al cambiar settings; las
+// rutas que necesitan hablar con el LLM lo piden por acá.
+export function getKeyRing() {
+  return keyRing;
+}
+
 export function dbValue(key) {
   return store?.getSetting(key) ?? null;
 }

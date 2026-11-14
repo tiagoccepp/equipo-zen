@@ -37,4 +37,4 @@ WHEN receiving code review feedback:
 - Push back with technical reasoning if wrong
 - Just start working (actions > words)
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/receiving-code-review/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/receiving-code-review/SKILL.md — Licencia: MIT.*

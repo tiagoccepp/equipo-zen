@@ -28,4 +28,4 @@ independently testable deliverable.
 - "Run the tests and make sure they pass" - step
 - "Commit" - step
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/writing-plans/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/writing-plans/SKILL.md — Licencia: MIT.*

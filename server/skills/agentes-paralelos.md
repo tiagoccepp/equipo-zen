@@ -25,4 +25,4 @@ When you have multiple unrelated failures (different test files, different subsy
 - Need to understand full system state
 - Agents would interfere with each other
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/dispatching-parallel-agents/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/dispatching-parallel-agents/SKILL.md — Licencia: MIT.*

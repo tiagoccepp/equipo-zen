@@ -24,4 +24,4 @@ for page in reader.pages:
     text += page.extract_text()
 ```
 
-*Source: verbatim excerpt from https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md — License: Apache-2.0.*
+*Source: verbatim excerpt from https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md — Licencia: Apache-2.0.*

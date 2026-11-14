@@ -28,4 +28,4 @@ Dispatch a code reviewer subagent to catch issues before they cascade. The revie
 - Note Minor issues for later
 - Push back if reviewer is wrong (with reasoning)
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/requesting-code-review/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/requesting-code-review/SKILL.md — Licencia: MIT.*

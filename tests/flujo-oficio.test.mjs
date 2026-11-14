@@ -140,14 +140,14 @@ test('roles.md mentions the crafts that really exist in the templates', () => {
   // Renata may be called something else tomorrow.
   const clases = [
     { oficio: 'quien coordina', esta: (e) => e.role === 'ceo', menciones: ['ceo', 'coordinates'] },
-    { oficio: 'quien afina perfiles', esta: (e) => e.role === 'contratista', menciones: ['contractor', 'refines profiles', 'adjusts team profiles'] },
-    { oficio: 'quien diseña', esta: (e) => /disen|arte/.test(normalizar(e.title)), menciones: ['designs'] },
+    { oficio: 'quien afina perfiles', esta: (e) => /contratista|contractor|talent/.test(normalizar(e.role) + ' ' + normalizar(e.title)), menciones: ['contractor', 'refines profiles', 'adjusts team profiles'] },
+    { oficio: 'quien diseña', esta: (e) => /disen|arte|design|art/.test(normalizar(e.title)), menciones: ['designs'] },
     {
       oficio: 'quien construye',
-      esta: (e) => /desarrollad|arquitect|plataforma/.test(normalizar(e.title)),
+      esta: (e) => /desarrollad|arquitect|plataforma|develop|engineer|architect|platform/.test(normalizar(e.title)),
       menciones: ['builds', 'dev']
     },
-    { oficio: 'quien prueba', esta: (e) => /\bqa\b|calidad/.test(normalizar(e.title)), menciones: ['qa', 'tests'] }
+    { oficio: 'quien prueba', esta: (e) => /\bqa\b|calidad|quality|testing|test/.test(normalizar(e.title)), menciones: ['qa', 'tests'] }
   ];
   const empleados = companyTemplates.templates.flatMap((t) => t.employees);
   const roles = normalizar(renderRoles());

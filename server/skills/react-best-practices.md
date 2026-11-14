@@ -27,4 +27,4 @@ Reference these guidelines when:
 | 7 | JavaScript Performance | LOW-MEDIUM | `js-` |
 | 8 | Advanced Patterns | LOW | `advanced-` |
 
-*Source: verbatim excerpt from https://github.com/vercel-labs/agent-skills/blob/main/skills/vercel-react-best-practices/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/vercel-labs/agent-skills/blob/main/skills/vercel-react-best-practices/SKILL.md — Licencia: MIT.*

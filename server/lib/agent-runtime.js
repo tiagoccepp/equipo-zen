@@ -5,6 +5,7 @@ import { completeChat, streamChat, withTimeout } from './llm.js';
 import { synthesize } from './supertonic.js';
 import { synthesizePiper } from './piper.js';
 import { synthesizeEdgeMp3 } from './edge-tts.js';
+import { expressionInstructions, normalizeForTranscript } from './expressive.js';
 import { synthesizeDeepgram } from './deepgram.js';
 import { cleanAgentText, createMermaidSpeechFilter, shapeSpeechText, createPartsParser, createTagFilter, getShortError, isSilenceResponse, normalize, stripForeignScript, stripPrivateBlocks, stripProgressBlocks, stripSpeechLeaks, stripTaskTags } from './text.js';
 import { GESTOS_A, GESTOS_B, parseGesto } from './gestos.js';
@@ -587,7 +588,7 @@ export class LiveAgentRuntime {
       maybeEmitGesto(sentence);
       sentence = parseGesto(sentence).cleanText.replace(/\[\[[^\]]*\]\]/g, '');
       // QW-08: voz-primero — el TTS siempre recibe prosa (links/código/listas moldeados).
-      const spoken = stripSpeechLeaks(shapeSpeechText(sentence)).trim();
+      const spoken = stripSpeechLeaks(shapeSpeechText(normalizeForTranscript(sentence))).trim();
       if (!spoken || signal?.aborted) {
         return null;
       }
@@ -785,7 +786,7 @@ export class LiveAgentRuntime {
     // habla y su resumen llega anexado al user. Con gate false, loader caído,
     // tools deshabilitadas o deadline, phase.userContent es idéntico al de
     // hoy y el stream de abajo no cambia ni un byte.
-    const systemContent = buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {});
+    const systemContent = `${buildSystemInstruction(this.agent, this.meetingSession?.promptContext?.(this.agent.id) || {})}${expressionInstructions({ language: this.agent?.language || 'es-UY', compact: true })}`;
     const phase = await maybeRunToolsPhase({
       turn,
       system: systemContent,

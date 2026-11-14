@@ -1,7 +1,7 @@
 ---
 name: verificar-antes-de-terminar
 description: Evidence before claiming victory: verify freshly before asserting.
-keywords: verify, verification, evidence, unverified, claim victory, works, pass tests, push, commit, assert, done, finished
+keywords: verify, verification, evidence, unverified, claim victory, works, pass tests, push, commit, assert, done, finished, evidencia, afirmar, verificar
 scope: all
 ---
 
@@ -41,4 +41,4 @@ Skip any step = lying, not verifying
 - Tired and wanting work over
 - **ANY wording implying success without having run verification**
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/verification-before-completion/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/verification-before-completion/SKILL.md — Licencia: MIT.*

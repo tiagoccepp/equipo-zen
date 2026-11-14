@@ -1,7 +1,7 @@
 ---
 name: depuracion-sistematica
 description: Debug methodically: find the root cause before fixing anything.
-keywords: debug, debugging, bug, error, failure, not working, root cause, trace, stack trace, investigate, test failure
+keywords: debug, debugging, bug, error, failure, not working, root cause, trace, stack trace, investigate, test failure, causa raíz, bug en producción, investigá el error, falla, error, investigar
 scope: chat, role:backend, role:frontend, role:tester, role:data, role:devops
 ---
 
@@ -29,4 +29,4 @@ Use for ANY technical issue:
 - Build failures
 - Integration issues
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/systematic-debugging/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/systematic-debugging/SKILL.md — Licencia: MIT.*

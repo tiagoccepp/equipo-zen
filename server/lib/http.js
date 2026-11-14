@@ -1384,6 +1384,43 @@ export function createApp({ store }) {
     console.error('[scene] mount failed:', err?.message || err);
   }
 
+  // Mesa redonda entre agentes (equivalente al WorkerBus de Pipecat): una
+  // discusión visible entre roles que termina en una conclusión.
+  app.post('/api/roundtable', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const topic = String(body.topic || '').trim();
+      const agents = Array.isArray(body.agents) ? body.agents : [];
+      if (!topic || agents.length < 2) {
+        return res.status(400).json({ error: 'topic y al menos 2 agentes son requeridos' });
+      }
+      const { runRoundtableWithChat } = await import('./roundtable-runner.js');
+      const { completeChat } = await import('./llm.js');
+      const ring = (await import('./settings.js')).getKeyRing();
+      if (!ring || (typeof ring.hasKeys === 'function' && !ring.hasKeys())) {
+        return res.status(503).json({ error: 'proveedor no configurado' });
+      }
+      const result = await runRoundtableWithChat({
+        topic,
+        agents: agents.slice(0, 5),
+        maxTurns: Math.min(Math.max(Number(body.maxTurns) || 6, 2), 12),
+        callChat: async ({ system, user }) =>
+          completeChat(ring, {
+            scope: 'mesa',
+            maxTokens: 300,
+            temperature: 0.7,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user }
+            ]
+          })
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: String(err?.message || err) });
+    }
+  });
+
   const distDir = path.join(rootDir, 'dist');
   const distIndex = path.join(distDir, 'index.html');
   if (existsSync(distIndex)) {

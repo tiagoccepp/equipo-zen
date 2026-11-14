@@ -23,4 +23,4 @@ Before you start implementing, you must, in order:
 3. Get their approval of that doc.
 4. Invoke the superpowers:writing-plans skill.
 
-*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/brainstorming/SKILL.md — License: MIT.*
+*Source: verbatim excerpt from https://github.com/obra/superpowers/blob/main/skills/brainstorming/SKILL.md — Licencia: MIT.*
