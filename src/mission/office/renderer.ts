@@ -119,21 +119,34 @@ export class OfficeRenderer {
     const dim = !!this.focus && !focused;
     ctx.globalAlpha = dim ? 0.28 : 1;
 
+    // focused-room ambient glow so "opening a project" feels alive and clearly active
+    if (focused) {
+      const pulse = 0.08 + (Math.sin(t * 2.4) + 1) * 0.03;
+      ctx.fillStyle = `rgba(120,170,255,${pulse.toFixed(3)})`;
+      ctx.fillRect(room.x - 6, room.y - 6, room.w + 12, room.h + 12);
+    }
+
     // outer shadow
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(room.x + 4, room.y + 5, room.w, room.h);
 
     // wall
-    ctx.fillStyle = '#26262d';
+    ctx.fillStyle = focused ? '#2a2d35' : '#26262d';
     ctx.fillRect(room.x, room.y, room.w, room.h);
     // floor
-    ctx.fillStyle = '#2b2b33';
+    ctx.fillStyle = focused ? '#303541' : '#2b2b33';
     ctx.fillRect(room.x + 4, room.y + 26, room.w - 8, room.h - 30);
     for (let gy = room.y + 28; gy < room.y + room.h - 8; gy += 8) {
       for (let gx = room.x + 6; gx < room.x + room.w - 8; gx += 8) {
         ctx.fillStyle = ((gx + gy) / 8) % 2 === 0 ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.04)';
         ctx.fillRect(gx, gy, 8, 8);
       }
+    }
+    // subtle "work in progress" light sweep on focused/live rooms
+    if (focused || room.live) {
+      const sweep = ((t * 26) % (room.w - 20));
+      ctx.fillStyle = focused ? 'rgba(140,200,255,0.06)' : 'rgba(74,222,128,0.045)';
+      ctx.fillRect(room.x + 8 + sweep, room.y + 28, 18, room.h - 36);
     }
 
     // border
@@ -153,22 +166,32 @@ export class OfficeRenderer {
 
     // status tags on header
     if (room.live) {
-      drawTag(ctx, room.x + room.w - 66, room.y + 7, 'LIVE', '#173322', '#4ade80');
+      const p = Math.floor((Math.sin(t * 4) + 1) * 40);
+      drawTag(ctx, room.x + room.w - 66, room.y + 7, 'LIVE', `rgb(${23 + p / 6},${51 + p / 4},${34 + p / 8})`, '#4ade80');
     } else {
       drawTag(ctx, room.x + room.w - 66, room.y + 7, 'OPEN', '#2a2a33', '#9aa0aa');
     }
+    if (focused) drawTag(ctx, room.x + room.w - 118, room.y + 7, 'TEAM', '#243246', '#9ec5ff');
 
-    // door
+    // door (opens a bit when focused to feel like entering the project)
     ctx.fillStyle = '#1f1f25';
     ctx.fillRect(room.x + room.w / 2 - 10, room.y + room.h - 14, 20, 10);
     ctx.fillStyle = focused ? '#8fb3ff' : '#666675';
     ctx.fillRect(room.x + room.w / 2 + 4, room.y + room.h - 10, 3, 3);
+    if (focused) {
+      ctx.fillStyle = 'rgba(158,197,255,0.22)';
+      ctx.fillRect(room.x + room.w / 2 - 12, room.y + room.h - 18, 24, 4);
+    }
 
-    // plant/decoration
+    // decorations: plant + little coffee mug for pixel charm
     ctx.fillStyle = '#3a4a38';
     ctx.fillRect(room.x + 8, room.y + room.h - 22, 8, 8);
     ctx.fillStyle = '#5f8a58';
     ctx.fillRect(room.x + 9, room.y + room.h - 28, 6, 7);
+    ctx.fillStyle = '#8f7a60';
+    ctx.fillRect(room.x + 20, room.y + room.h - 18, 4, 4);
+    ctx.fillStyle = '#c9b08a';
+    ctx.fillRect(room.x + 21, room.y + room.h - 20, 2, 2);
 
     // desks and monitors per agent slot
     const perRow = 3;
@@ -193,12 +216,26 @@ export class OfficeRenderer {
       ctx.fillRect(dx + 36, dy - 2, 12, 9);
       if (agent?.state === 'working' || agent?.state === 'speaking') {
         ctx.fillStyle = 'rgba(255,255,255,0.45)';
-        const blink = Math.floor((t * (agent.state === 'speaking' ? 8 : 4) + i) % 3);
-        for (let l = 0; l < 2; l++) ctx.fillRect(dx + 37, dy + l * 3, 4 + ((blink + l) % 2) * 3, 1);
+        const blink = Math.floor((t * (agent.state === 'speaking' ? 8 : 4) + i) % 4);
+        for (let l = 0; l < 2; l++) ctx.fillRect(dx + 37, dy + l * 3, 3 + ((blink + l) % 3) * 2, 1);
+      } else if (agent?.state === 'blocked') {
+        ctx.fillStyle = 'rgba(251,113,133,0.7)';
+        ctx.fillRect(dx + 38, dy + 1, 8, 1);
+        ctx.fillRect(dx + 41, dy - 1, 2, 5);
       }
-      // keyboard
+      // keyboard + mouse
       ctx.fillStyle = '#20242b';
       ctx.fillRect(dx + 12, dy + 6, 18, 4);
+      ctx.fillRect(dx + 32, dy + 7, 3, 3);
+    }
+
+    // activity indicator: quick read on whether this team is currently working
+    const workingN = room.agents.filter((a) => a.state === 'working' || a.state === 'speaking').length;
+    const blockedN = room.agents.filter((a) => a.state === 'blocked').length;
+    if (workingN > 0 || blockedN > 0) {
+      const pulse = Math.floor((t * 3) % 2) === 0 ? 1 : 0;
+      if (workingN > 0) { ctx.fillStyle = '#4ade80'; ctx.fillRect(room.x + room.w - 14, room.y + room.h - 20 + pulse, 3, 3); }
+      if (blockedN > 0) { ctx.fillStyle = '#fb7185'; ctx.fillRect(room.x + room.w - 9, room.y + room.h - 20 + (1 - pulse), 3, 3); }
     }
 
     // room footer mini stats
@@ -214,66 +251,154 @@ export class OfficeRenderer {
   private drawAgent(ctx: CanvasRenderingContext2D, a: SimAgent, t: number) {
     const roomFocused = this.focus === a.projectId;
     const dim = !!this.focus && !roomFocused;
-    ctx.globalAlpha = dim ? 0.18 : (a.state === 'offline' ? 0.55 : 1);
+    const spawnK = a.spawnAge < 0.35 ? easeOutBack(Math.max(0, a.spawnAge / 0.35)) : 1;
+    const leavingK = a.leaving > 0 ? Math.max(0, 1 - a.leaving / 0.45) : 1;
+    ctx.globalAlpha = (dim ? 0.18 : (a.state === 'offline' ? 0.55 : 1)) * leavingK;
+    const moving = Math.hypot(a.vx, a.vy) > 3.5;
+    const step = Math.sin(a.phase * 1.4) * (moving ? 2 : 0);
     const bob = a.state === 'idle' ? Math.sin(a.phase) * 1.3 : a.state === 'working' ? Math.abs(Math.sin(a.phase * 0.8)) * 1.0 : a.state === 'speaking' ? Math.sin(a.phase) * 1.8 : a.state === 'blocked' ? Math.sin(a.phase * 0.5) * 0.5 : Math.sin(a.phase * 0.4) * 0.4;
+    const react = a.focusReact > 0 ? Math.sin(a.focusReact * 10) * 1.2 : 0;
     const x = Math.round(a.x);
-    const y = Math.round(a.y + bob);
+    const y = Math.round(a.y + bob - react - (1 - spawnK) * 6);
+
+    // spawn sparkle / pop-in ring
+    if (a.spawnAge < 0.5) {
+      ctx.strokeStyle = `rgba(200,230,255,${(1 - a.spawnAge / 0.5).toFixed(2)})`;
+      ctx.strokeRect(x - 6, y - 12, 12, 22);
+    }
+    // focus aura when opening a project room with an active team
+    if (roomFocused && this.focus && (a.state === 'working' || a.state === 'speaking' || a.state === 'blocked')) {
+      ctx.fillStyle = a.state === 'blocked' ? 'rgba(251,113,133,0.12)' : a.state === 'speaking' ? 'rgba(74,222,128,0.12)' : 'rgba(120,170,255,0.12)';
+      ctx.fillRect(x - 9, y - 14, 18, 28);
+    }
 
     // shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillStyle = `rgba(0,0,0,${(0.25 * spawnK).toFixed(3)})`;
     ctx.fillRect(x - 5, y + 9, 10, 2);
 
-    // legs
+    // legs (animate when moving for a "person walking around" feel)
     ctx.fillStyle = '#252833';
-    ctx.fillRect(x - 4, y + 4, 3, 5);
-    ctx.fillRect(x + 1, y + 4, 3, 5);
+    const lLeg = moving ? Math.round(step) : 0;
+    const rLeg = moving ? -Math.round(step) : 0;
+    ctx.fillRect(x - 4, y + 4 + (lLeg > 0 ? 0 : 0), 3, 5 - Math.abs(lLeg) * 0.5);
+    ctx.fillRect(x + 1, y + 4, 3, 5 - Math.abs(rLeg) * 0.5);
+    if (moving) {
+      ctx.fillRect(x - 4, y + 6, 3, 1 + Math.max(0, lLeg));
+      ctx.fillRect(x + 1, y + 6, 3, 1 + Math.max(0, -lLeg));
+    }
+
     // torso
     ctx.fillStyle = a.color || '#7491ff';
     ctx.fillRect(x - 5, y - 3, 10, 8);
-    // arms
+    // arms / gestures (more human: typing rhythm, speaking gestures, idle fidgets)
     if (a.state === 'working') {
-      const arm = Math.floor((t * 6 + a.phase) % 2) === 0 ? -1 : 0;
-      ctx.fillRect(x - 7, y - 1 + arm, 2, 5);
-      ctx.fillRect(x + 5, y - 1 - arm, 2, 5);
+      const tap = Math.floor((t * 7 + a.phase) % 4);
+      const lArm = (tap === 0 || tap === 2) ? -1 : 0;
+      const rArm = (tap === 1 || tap === 3) ? -1 : 0;
+      ctx.fillRect(x - 7, y - 1 + lArm, 2, 5);
+      ctx.fillRect(x + 5, y - 1 + rArm, 2, 5);
     } else if (a.state === 'speaking') {
-      ctx.fillRect(x - 7, y - 3, 2, 4);
-      ctx.fillRect(x + 5, y - 4, 2, 5);
+      // gesticulate while talking
+      const g = Math.sin(t * 6 + a.phase);
+      const g2 = Math.sin(t * 4.2 + a.phase * 0.7);
+      ctx.fillRect(x - 7, y - 4 + Math.round(g * 1.5), 2, 5);
+      ctx.fillRect(x + 5, y - 5 + Math.round(g2 * 2), 2, 5);
+    } else if (a.state === 'blocked') {
+      // arms crossed / thinking pose, occasional head-scratch
+      const thinkF = Math.floor((t * 0.9 + a.phase) % 6);
+      if (thinkF === 4) {
+        ctx.fillRect(x - 7, y - 6, 2, 4);
+        ctx.fillRect(x + 5, y - 1, 2, 5);
+      } else {
+        ctx.fillRect(x - 6, y - 1, 4, 2);
+        ctx.fillRect(x + 2, y - 1, 4, 2);
+        ctx.fillRect(x - 7, y + 1, 2, 3);
+        ctx.fillRect(x + 5, y + 1, 2, 3);
+      }
+    } else if (a.state === 'idle') {
+      // subtle idle gestures (scratch head / stretch / wave / shift)
+      const f = Math.floor((t * 0.8 + a.phase) % 12);
+      if (f === 3) { ctx.fillRect(x - 7, y - 6, 2, 4); ctx.fillRect(x + 5, y - 1, 2, 5); }
+      else if (f === 7) { ctx.fillRect(x - 7, y - 1, 2, 5); ctx.fillRect(x + 5, y - 5, 2, 4); }
+      else if (f === 10) { ctx.fillRect(x - 7, y - 5, 2, 5); ctx.fillRect(x + 5, y - 5, 2, 5); } // stretch
+      else { ctx.fillRect(x - 7, y - 1, 2, 5); ctx.fillRect(x + 5, y - 1, 2, 5); }
     } else {
       ctx.fillRect(x - 7, y - 1, 2, 5);
       ctx.fillRect(x + 5, y - 1, 2, 5);
     }
-    // head
+
+    // head (slight nod/look for aliveness)
+    const look = a.state === 'working' ? Math.round(Math.sin(t * 1.5 + a.phase) * 0.6) : a.state === 'speaking' ? Math.round(Math.sin(t * 2.2 + a.phase) * 0.8) : (a.state === 'idle' ? Math.round(Math.sin(t * 0.6 + a.phase) * 0.5) : 0);
+    const nod = a.state === 'speaking' ? Math.round(Math.abs(Math.sin(t * 5 + a.phase)) * 0.8) : (a.state === 'idle' ? Math.round(Math.sin(t * 0.9 + a.phase) * 0.4) : 0);
     ctx.fillStyle = a.state === 'offline' ? '#cdbda6' : '#f2d6b3';
-    ctx.fillRect(x - 4, y - 11, 8, 8);
+    ctx.fillRect(x - 4 + look, y - 11 + nod, 8, 8);
     // hair/hat tint
     ctx.fillStyle = shade(a.color || '#7491ff', -20);
-    ctx.fillRect(x - 4, y - 11, 8, 2);
-    // eyes
+    ctx.fillRect(x - 4 + look, y - 11 + nod, 8, 2);
+    // eyes (blink occasionally)
     ctx.fillStyle = a.state === 'offline' ? '#555' : '#1d1f24';
-    ctx.fillRect(x - 2, y - 8, 2, 2);
-    ctx.fillRect(x + 1, y - 8, 2, 2);
+    const blink = Math.floor((t * 0.7 + a.phase * 0.3) % 8) === 0;
+    if (blink) {
+      ctx.fillRect(x - 2 + look, y - 7 + nod, 2, 1);
+      ctx.fillRect(x + 1 + look, y - 7 + nod, 2, 1);
+    } else {
+      ctx.fillRect(x - 2 + look, y - 8 + nod, 2, 2);
+      ctx.fillRect(x + 1 + look, y - 8 + nod, 2, 2);
+    }
+    // mouth (speaking / expression)
+    if (a.state === 'speaking') {
+      const talk = Math.floor((t * 10 + a.phase) % 3);
+      ctx.fillStyle = '#b07a63';
+      ctx.fillRect(x - 1 + look, y - 5 + nod, 3, talk === 1 ? 2 : 1);
+    } else if (a.state === 'working') {
+      ctx.fillStyle = '#d0b29a';
+      ctx.fillRect(x + look, y - 5 + nod, 2, 1);
+    } else if (a.state === 'blocked') {
+      ctx.fillStyle = '#c49b86';
+      ctx.fillRect(x - 1 + look, y - 5 + nod, 3, 1);
+    }
 
-    // state indicator
+    // state indicator / accessories
     if (a.state === 'working') {
+      // tiny laptop glow badge
       ctx.fillStyle = '#8fb3ff';
       ctx.fillRect(x + 7, y - 5, 5, 4);
       ctx.fillStyle = '#dff0ff';
       ctx.fillRect(x + 8, y - 4, 3, 2);
+      // floating "typing" pixel spark when focused for extra life
+      if (roomFocused && Math.floor((t * 6 + a.phase) % 3) === 0) {
+        ctx.fillStyle = 'rgba(180,220,255,0.7)';
+        ctx.fillRect(x + 11, y - 8 - Math.floor((t * 4 + a.phase) % 2), 2, 2);
+      }
     } else if (a.state === 'blocked') {
+      // exclamation + animated thinking dots
       ctx.fillStyle = '#fb7185';
       ctx.fillRect(x - 1, y - 18, 2, 5);
       ctx.fillRect(x - 1, y - 12, 2, 2);
+      const dots = 1 + Math.floor((t * 2.5 + a.phase) % 3);
+      ctx.fillStyle = '#ffc0ca';
+      for (let i = 0; i < dots; i++) ctx.fillRect(x + 4 + i * 3, y - 16 - (i % 2), 2, 2);
     } else if (a.state === 'speaking') {
+      // sound waves
       ctx.strokeStyle = '#4ade80';
       ctx.lineWidth = 1;
-      const r = 3.5 + (Math.sin(t * 9 + a.phase) + 1) * 1.2;
-      ctx.strokeRect(x + 7, y - 14, r + 1, r + 1);
-      ctx.strokeRect(x + 9, y - 12, Math.max(1, r - 3), Math.max(1, r - 3));
+      const r = 3 + (Math.sin(t * 9 + a.phase) + 1) * 1.4;
+      ctx.strokeRect(x + 7, y - 14, r + 2, r + 2);
+      ctx.strokeRect(x + 9, y - 12, Math.max(1, r - 2), Math.max(1, r - 2));
+      if (Math.floor((t * 5 + a.phase) % 2) === 0) ctx.strokeRect(x + 11, y - 10, 2, 2);
     } else if (a.state === 'offline') {
       ctx.fillStyle = '#777';
       ctx.fillRect(x + 7, y - 14, 5, 5);
       ctx.fillStyle = '#1a1a1f';
       ctx.fillRect(x + 8, y - 13, 3, 3);
+      ctx.fillStyle = '#999';
+      ctx.fillRect(x + 9, y - 12, 1, 1);
+    } else if (a.state === 'idle' && roomFocused) {
+      // tiny "ready" sparkle so focused idle teammates still feel present
+      if (Math.floor((t * 1.5 + a.phase) % 6) === 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.fillRect(x + 8, y - 13, 2, 2);
+      }
     }
 
     // name label
@@ -293,7 +418,7 @@ export class OfficeRenderer {
       const msg = trunc(a.label, roomFocused ? 30 : 22);
       const mw = ctx.measureText(msg).width;
       const bx = Math.round(x - mw / 2 - 5);
-      const by = Math.round(y - 30);
+      const by = Math.round(y - 30 - (a.spawnAge < 0.35 ? (1 - spawnK) * 4 : 0));
       const bg = a.state === 'blocked' ? '#3a2024' : a.state === 'speaking' ? '#183126' : '#24303a';
       const border = a.state === 'blocked' ? '#fb7185' : a.state === 'speaking' ? '#4ade80' : a.state === 'working' ? '#8fb3ff' : '#666';
       roundRect(ctx, bx, by, mw + 10, 14, 3);
@@ -349,4 +474,10 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+function easeOutBack(t: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 }

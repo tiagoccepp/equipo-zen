@@ -81,9 +81,10 @@ export function mountOffice(container: HTMLElement, opts: MountOfficeOptions = {
       </button>`;
     }).join('');
     panel.innerHTML = `<div class="mc-office-panel-head"><strong>Project Office</strong></div>
-      <p class="mc-dim">${count ? `${count} project${count === 1 ? '' : 's'}${liveCount ? ` · ${liveCount} live meeting${liveCount === 1 ? '' : 's'}` : ''}. Open a room to watch that team working.` : 'No projects loaded yet.'}</p>
+      <p class="mc-dim">${count ? `${count} project${count === 1 ? '' : 's'}${liveCount ? ` · ${liveCount} live meeting${liveCount === 1 ? '' : 's'}` : ''}. Open a room to see that team working live.` : 'No projects loaded yet.'}</p>
       ${rooms ? `<div class="mc-office-project-list">${rooms}</div>` : `<p class="mc-dim">When projects/companies are available, each one appears as its own office room with its team.</p>`}
-      <div class="mc-office-footnote">States update from live meetings, speakers, and task activity.</div>`;
+      <div class="mc-office-footnote">States update from live meetings, speakers, and task activity. Click a project to watch its people work.</div>`;
+    if (!focused) hint.textContent = 'Click a project office to open it and watch the team';
     hint.hidden = false;
     panel.querySelectorAll<HTMLElement>('[data-project-id]').forEach((el) => {
       el.addEventListener('click', () => focusProject(el.getAttribute('data-project-id')));
@@ -137,7 +138,8 @@ export function mountOffice(container: HTMLElement, opts: MountOfficeOptions = {
         <h4>Activity feed</h4>
         ${feed ? `<ul class="mc-office-feed">${feed}</ul>` : '<p class="mc-dim">No task activity reported yet. Agents are standing by.</p>'}
       </section>`;
-    hint.hidden = true;
+    hint.textContent = `Watching ${room.name} · click room again or press Esc to return`;
+    hint.hidden = false;
     panel.querySelector('.mc-office-back')?.addEventListener('click', () => focusProject(null));
   }
 
@@ -148,11 +150,25 @@ export function mountOffice(container: HTMLElement, opts: MountOfficeOptions = {
   }
 
   function focusProject(id?: string | null) {
-    focused = id ?? null;
+    const next = id ?? null;
+    focused = next;
     renderer.setFocus(focused);
     sim.setFocus(focused);
     renderPanel();
     opts.onSelectProject?.(focused);
+    // "entering/opening" feel: briefly highlight the active project room/panel
+    container.classList.remove('mc-office-focus-flash');
+    if (focused) {
+      void container.offsetWidth; // reflow to retrigger animation
+      container.classList.add('mc-office-focus-flash');
+      const world = buildWorld(lastWorks, lastLive, getSpeakers());
+      const room = findRoom(world, focused);
+      hint.textContent = room ? `Watching ${room.name} — ${room.stats.active} active, ${room.stats.blocked} blocked` : 'Watching project team';
+      hint.hidden = false;
+    } else {
+      hint.textContent = 'Click a project office to open it and watch the team';
+      hint.hidden = false;
+    }
   }
 
   function getSpeakers(): string[] {

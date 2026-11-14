@@ -1340,18 +1340,36 @@ export function createApp({ store }) {
   app.post('/api/mcp/reconnect', async (req, res) => {
     try {
       const mcp = await import('./manos-mcp.js');
-      mcp.readMcpConfig();
+      const config = mcp.readMcpConfig();
       await mcp.shutdown();
       const tools = await mcp.getMcpTools();
       const names = (tools || []).map((t) => String(t?.name || t));
-      setMcpStatusSnapshot({ alive: true, tools: names });
+      // Snapshot por server (getMcpStatus espera {alive:{[srv]:bool}, tools:{[srv]:string[]}}).
+      const sorted = [...config].sort((a, b) => b.name.length - a.name.length);
+      const alive = {};
+      const toolsByServer = {};
+      for (const entry of config) {
+        alive[entry.name] = false;
+        toolsByServer[entry.name] = [];
+      }
+      for (const name of names) {
+        for (const entry of sorted) {
+          const prefix = `mcp_${entry.name}_`;
+          if (name.startsWith(prefix)) {
+            alive[entry.name] = true;
+            toolsByServer[entry.name].push(name);
+            break;
+          }
+        }
+      }
+      setMcpStatusSnapshot({ alive, tools: toolsByServer });
       // El runtime también cachea tools MCP: Invalidar para que el próximo
       // turno relea. Best-effort: si manos no expone reload, el turno igual
       // funciona (loadMcpTools es idempotente por diseño).
       res.json({ status: getMcpStatus(), reconnected: names.length });
     } catch (error) {
       try {
-        setMcpStatusSnapshot({ alive: false, tools: [] });
+        setMcpStatusSnapshot({ alive: {}, tools: {} });
       } catch {
         // Snapshot caído: el status igual se intenta devolver.
       }

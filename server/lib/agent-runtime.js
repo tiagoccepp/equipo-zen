@@ -142,8 +142,30 @@ export async function maybeRunToolsPhase({ turn, system, userContent, keyRing, e
     // Best-effort: si falla, el turno sigue y el manager muestra gap honesto.
     try {
       const st = await import('./mcp-status.js');
-      const tools = typeof manos.listTools === 'function' ? manos.listTools().filter((t) => String(t.name || t).startsWith('mcp_')) : [];
-      st.setMcpStatusSnapshot({ alive: true, tools: tools.map((t) => String(t.name || t)) });
+      const { readMcpConfig } = await import('./manos-mcp.js');
+      const mcpTools = typeof manos.listTools === 'function'
+        ? manos.listTools().filter((t) => String(t.name || t).startsWith('mcp_'))
+        : [];
+      const config = readMcpConfig();
+      const sorted = [...config].sort((a, b) => b.name.length - a.name.length);
+      const alive = {};
+      const toolsByServer = {};
+      for (const entry of config) {
+        alive[entry.name] = false;
+        toolsByServer[entry.name] = [];
+      }
+      for (const t of mcpTools) {
+        const name = String(t.name || t);
+        for (const entry of sorted) {
+          const prefix = `mcp_${entry.name}_`;
+          if (name.startsWith(prefix)) {
+            alive[entry.name] = true;
+            toolsByServer[entry.name].push(name);
+            break;
+          }
+        }
+      }
+      st.setMcpStatusSnapshot({ alive, tools: toolsByServer });
     } catch {
       // Snapshot caído: el manager lo informa, el turno no se entera.
     }

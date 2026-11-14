@@ -62,31 +62,31 @@ test('fluency: endAudio emits turn telemetry (audio_turn_stt)', async () => {
   assert.equal(typeof events.at(-1).payload.secs, 'number');
 });
 
-test('fluency: endpointing constants (slow/grace trimmed 09/11)', () => {
+test('fluency: endpointing constants (conservative latency trim 13/11)', () => {
   assert.equal(MIC_NORMAL.minSpeechMs, 250); // discard: hears short syllables
   assert.equal(CONFIRM_SPEECH_MS, 600); // confirmation: coughing does not interrupt
   assert.equal(END_SILENCE_SLOW_MS, 900);
-  assert.equal(GRACE_BASE_MS, 1000);
-  assert.equal(END_SILENCE_BASE_MS, 800);
-  assert.equal(END_SILENCE_FAST_MS, 575);
-  assert.equal(GRACE_FAST_MS, 600);
+  assert.equal(GRACE_BASE_MS, 850);
+  assert.equal(END_SILENCE_BASE_MS, 720);
+  assert.equal(END_SILENCE_FAST_MS, 520);
+  assert.equal(GRACE_FAST_MS, 500);
 });
 
 test('fluency: computeEndpointing short turn → slow (do not cut)', () => {
   const d = computeEndpointing({ speechMs: 400, hintEnd: '', floor: 0.01, maxRms: 0.09, recentBarge: false });
-  assert.deepEqual(d, { endSilenceMs: 900, graceMs: 1000 });
+  assert.deepEqual(d, { endSilenceMs: 900, graceMs: 850 });
 });
 
 test('fluency: computeEndpointing long turn + complete sentence + clear → fast', () => {
   const d = computeEndpointing({ speechMs: 3000, hintEnd: 'contame más.', floor: 0.01, maxRms: 0.09, recentBarge: false });
-  assert.deepEqual(d, { endSilenceMs: 575, graceMs: 600 });
+  assert.deepEqual(d, { endSilenceMs: 520, graceMs: 500 });
 });
 
 test('fluency: computeEndpointing doubt (functional / barge / noise) → slow', () => {
   const base = { speechMs: 3000, hintEnd: 'contame', floor: 0.01, maxRms: 0.09, recentBarge: false };
-  assert.deepEqual(computeEndpointing({ ...base, hintEnd: 'pasame el' }).endSilenceMs, 900); // funcional
-  assert.deepEqual(computeEndpointing({ ...base, recentBarge: true }).endSilenceMs, 900); // cutoffs
-  assert.deepEqual(computeEndpointing({ ...base, floor: 0.035 }).endSilenceMs, 900); // piso alto
+  assert.deepEqual(computeEndpointing({ ...base, hintEnd: 'pasame el' }), { endSilenceMs: 900, graceMs: 850 }); // funcional
+  assert.deepEqual(computeEndpointing({ ...base, recentBarge: true }), { endSilenceMs: 900, graceMs: 850 }); // cutoffs
+  assert.deepEqual(computeEndpointing({ ...base, floor: 0.035 }), { endSilenceMs: 900, graceMs: 850 }); // piso alto
   assert.ok(endsFunctional('pasame el'));
   assert.ok(isTerminalHint('gracias'));
   assert.ok(isTerminalHint('sí'));

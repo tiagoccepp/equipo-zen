@@ -20,6 +20,11 @@
   overflow: hidden;
   min-height: 420px;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 10px 30px rgba(0,0,0,0.25);
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+}
+.mc-office-focus-flash .mc-office-canvas-wrap {
+  border-color: rgba(158,197,255,0.45);
+  box-shadow: inset 0 0 0 1px rgba(158,197,255,0.12), 0 0 0 2px rgba(158,197,255,0.08), 0 14px 34px rgba(0,0,0,0.3);
 }
 
 .mc-office-canvas {
@@ -47,6 +52,12 @@
   padding: 3px 8px;
   border-radius: 8px;
   pointer-events: none;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.mc-office-focus-flash .mc-office-hint {
+  color: #dff0ff;
+  border-color: rgba(158,197,255,0.28);
+  background: rgba(34,46,66,0.9);
 }
 
 .mc-office-legend {
@@ -98,6 +109,11 @@
   max-height: 520px;
   overflow: auto;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.mc-office-focus-flash .mc-office-panel {
+  border-color: rgba(158,197,255,0.28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px rgba(158,197,255,0.06);
 }
 
 .mc-office-panel-head {

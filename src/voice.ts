@@ -183,20 +183,22 @@ export class VoiceOut {
       if (ctx.state === 'suspended') {
         void ctx.resume().catch(() => {});
       }
-      const t0 = ctx.currentTime + 0.02;
-      const notes: Array<[number, number]> = [[660, 0], [880, 0.14]];
+      // Start almost immediately for quick "I heard you / I'm working" feedback,
+      // while keeping tones short and soft (non-intrusive).
+      const t0 = ctx.currentTime + 0.01;
+      const notes: Array<[number, number]> = [[660, 0], [880, 0.12]];
       for (const [freq, offset] of notes) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
         osc.frequency.value = freq;
         gain.gain.setValueAtTime(0.0001, t0 + offset);
-        gain.gain.exponentialRampToValueAtTime(0.12, t0 + offset + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + offset + 0.22);
+        gain.gain.exponentialRampToValueAtTime(0.1, t0 + offset + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + offset + 0.18);
         osc.connect(gain);
         gain.connect(this.master as GainNode);
         osc.start(t0 + offset);
-        osc.stop(t0 + offset + 0.25);
+        osc.stop(t0 + offset + 0.2);
       }
     } catch {
       // No audio: silence, never an exception.
@@ -204,17 +206,16 @@ export class VoiceOut {
   }
 
   duck(): void {
-    // Gentle duck (0.5, not 0.2) and slow transitions: deep, fast ducking
-    // sounded like Pablo moving away from and back toward the mic
-    // every time the room noise touched the threshold.
+    // Gentle duck (0.5, not 0.2): quick enough to acknowledge barge-in, but
+    // smoothed to avoid pumping artifacts on noisy thresholds.
     if (this.master && this.context) {
-      this.master.gain.setTargetAtTime(0.5, this.context.currentTime, 0.08);
+      this.master.gain.setTargetAtTime(0.5, this.context.currentTime, 0.05);
     }
   }
 
   restoreGain(): void {
     if (this.master && this.context) {
-      this.master.gain.setTargetAtTime(1, this.context.currentTime, 0.2);
+      this.master.gain.setTargetAtTime(1, this.context.currentTime, 0.16);
     }
   }
 
@@ -281,21 +282,19 @@ export const CONFIRM_SPEECH_MS = 600;
 // ── Adaptive endpointing (§3a) ──────────────────────────────────────
 // Pure, testable decision: how much silence closes speech and how much
 // grace it waits afterwards, based on what has been heard this turn.
-// Base 800/1000 (historical endSilence; grace trimmed from 1200 on 09/11
-// after measuring VAD+grace wait was 85% of stop→transcript).
+// Base values were trimmed conservatively (13/11) to reduce dead air while
+// keeping slow-path protection for short/uncertain turns and grace reopening.
 // The threshold only moves when the signal is clear. When in doubt, don't cut.
 
-export const END_SILENCE_BASE_MS = 800;
-export const END_SILENCE_FAST_MS = 575;
-// Slow 1100→900 (09/11): grace with reopening already protects cutoffs,
-// and 900+1000=1900 ms of tolerated pause is still 3× the fluent pause
-// (<600 ms). Saves 200 ms on every short turn, which is the common case.
+export const END_SILENCE_BASE_MS = 720;
+export const END_SILENCE_FAST_MS = 520;
+// Slow remains conservative: protects short turns, functional tail words,
+// recent barge/interrupts and noisy floors.
 export const END_SILENCE_SLOW_MS = 900;
-// Grace 1200→1000 (09/11): same argument (measured: 85% of stop→transcript
-// was VAD+grace wait, not STT). app.ts consumes it via computeEndpointing;
-// its local GRACE_MS fallback was aligned to 1000 at ship time.
-export const GRACE_BASE_MS = 1000;
-export const GRACE_FAST_MS = 600;
+// Grace is consumed by app.ts via computeEndpointing; lowering base/fast
+// reduces perceived stop→response latency but still allows brief pauses.
+export const GRACE_BASE_MS = 850;
+export const GRACE_FAST_MS = 500;
 
 // Clear speech to shorten: RMS well above the floor and with a minimum level.
 const FAST_MIN_SNR = 3;
