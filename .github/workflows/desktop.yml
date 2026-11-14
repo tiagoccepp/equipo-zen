@@ -32,7 +32,7 @@ jobs:
             bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Deps del sistema (Linux)
@@ -47,7 +47,7 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.triple }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # Sin cache a propósito: este workflow publica instaladores y la caché
         # de setup-node abre cache-poisoning (zizmor). El costo lo domina Rust.
         with:
@@ -60,7 +60,7 @@ jobs:
       - name: Build + bundle
         shell: bash
         run: sh scripts/desktop/build.sh ${{ matrix.bundles }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: equipo-${{ matrix.triple }}
           path: src-tauri/target/release/bundle/
