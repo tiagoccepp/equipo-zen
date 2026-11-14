@@ -17,6 +17,20 @@ function normalizeText(text) {
   return normalizeForTranscript(String(text ?? '')).replace(/\s+/g, ' ').trim();
 }
 
+// Sin esto una mesa puede colgar el request para siempre: el proveedor tarda o no responde.
+// Cada turno tiene techo propio; al vencerlo el turno cuenta como error y la mesa sigue
+// (roundtable corta sola tras 2 errores consecutivos).
+function withTurnTimeout(promise, ms) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`turno excedió ${ms}ms`)), ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /**
  * Corre una mesa redonda usando un proveedor de chat inyectado.
  *
@@ -27,10 +41,11 @@ function normalizeText(text) {
  * @param {(args:{system:string,user:string,agent:object,turn:number}) => Promise<string|{text:string}>} opts.callChat
  * @returns {Promise<{topic:string, transcript:Array, stopped:object, errors:Array, chars:number, summary:string}>}
  */
-export async function runRoundtableWithChat({ topic, agents, maxTurns = 6, callChat }) {
+export async function runRoundtableWithChat({ topic, agents, maxTurns = 6, callChat, timeoutMs = 20000 }) {
   if (typeof callChat !== 'function') {
     throw new Error('callChat es requerido');
   }
+  const turnTimeoutMs = Math.min(Math.max(Number(timeoutMs) || 20000, 3000), 45000);
 
   const rt = createRoundtable({
     topic,
@@ -45,7 +60,7 @@ export async function runRoundtableWithChat({ topic, agents, maxTurns = 6, callC
       const system = buildAgentPrompt({ agent, role, topic: mesaTopic, transcript });
       const user = `Tema: ${mesaTopic}\nTurno ${turn}. Respondé solo con tu intervención.`;
 
-      const reply = await callChat({ system, user, agent, turn });
+      const reply = await withTurnTimeout(callChat({ system, user, agent, turn }), turnTimeoutMs);
       const raw = typeof reply === 'string' ? reply : reply?.text;
       const text = normalizeText(raw);
 
