@@ -21,6 +21,10 @@ const DEFAULT_EDGE_VOICE = 'en-US-AndrewNeural';
 const EDGE_TIMEOUT_MS = 20000;
 const MAX_EDGE_CHARS = 2000;
 
+function normalizeEdgeText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EDGE_CHARS);
+}
+
 // Supertonic M1-M5/F1-F5 → voz Edge equivalente por género, en el idioma
 // configurado (tts.language).
 export function mapVoiceToEdge(supertonicVoice) {
@@ -68,17 +72,23 @@ function edgeCtor() {
   return cachedCtor;
 }
 
-export async function* streamEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
+export async function* streamEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS, signal = null } = {}) {
   const Ctor = edgeCtor();
   if (!Ctor) {
     throw new Error('edge-tts not installed');
   }
-  const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EDGE_CHARS);
+  const clean = normalizeEdgeText(text);
   if (!clean) {
     throw new Error('empty text');
   }
+  if (signal?.aborted) {
+    throw new Error('aborted');
+  }
   const tts = new Ctor({ voice: mapVoiceToEdge(voice), lang: edgeTable().lang, timeout: timeoutMs });
   for await (const chunk of tts.streamAudio(clean)) {
+    if (signal?.aborted) {
+      throw new Error('aborted');
+    }
     if (Buffer.isBuffer(chunk) && chunk.length > 0) {
       yield chunk;
     }
@@ -86,9 +96,9 @@ export async function* streamEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIME
   }
 }
 
-export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
+export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS, signal = null } = {}) {
   const chunks = [];
-  for await (const chunk of streamEdgeMp3(text, { voice, timeoutMs })) {
+  for await (const chunk of streamEdgeMp3(text, { voice, timeoutMs, signal })) {
     chunks.push(chunk);
   }
   const audio = Buffer.concat(chunks);
@@ -96,4 +106,31 @@ export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_T
     throw new Error('Edge returned invalid audio');
   }
   return { data: audio.toString('base64'), mimeType: 'audio/mpeg' };
+}
+
+/**
+ * Progressive synthesis helper for callers that can stream MP3 chunks out as
+ * they arrive (reduces perceived latency vs full-buffer wait), while still
+ * validating final output shape.
+ */
+export async function synthesizeEdgeMp3Progressive(
+  text,
+  { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS, signal = null, onChunk = null } = {}
+) {
+  const chunks = [];
+  for await (const chunk of streamEdgeMp3(text, { voice, timeoutMs, signal })) {
+    chunks.push(chunk);
+    if (typeof onChunk === 'function') {
+      try {
+        await onChunk(chunk, Buffer.concat(chunks).length);
+      } catch {
+        // Observer callback must not break synthesis.
+      }
+    }
+  }
+  const audio = Buffer.concat(chunks);
+  if (!looksLikeMp3(audio)) {
+    throw new Error('Edge returned invalid audio');
+  }
+  return { data: audio.toString('base64'), mimeType: 'audio/mpeg', bytes: audio.length };
 }

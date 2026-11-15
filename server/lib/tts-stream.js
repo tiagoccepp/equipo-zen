@@ -4,17 +4,31 @@
 /**
  * Split text into speakable chunks/sentences for progressive TTS.
  * Conservative: prefers sentence boundaries, falls back to clause/length splits.
+ *
+ * Streaming/latency options (backward-compatible):
+ * - firstMaxChars: smaller cap for the first emitted chunk to reduce TTFA/TTFB.
+ * - maxChars/minChars: caps for subsequent chunks.
+ * - softBoundaries: when no hard punctuation appears soon, allow clause/newline cuts.
  */
 export function splitSentences(text, options = {}) {
-  const maxChars = Number.isFinite(options.maxChars) ? Math.max(24, Math.floor(options.maxChars)) : 220;
+  const baseMax = Number.isFinite(options.maxChars) ? Math.max(24, Math.floor(options.maxChars)) : 220;
+  const firstMaxChars = Number.isFinite(options.firstMaxChars)
+    ? Math.max(16, Math.min(baseMax, Math.floor(options.firstMaxChars)))
+    : baseMax;
   const minChars = Number.isFinite(options.minChars) ? Math.max(1, Math.floor(options.minChars)) : 2;
   const keepWhitespace = options.keepWhitespace === true;
+  const softBoundaries = options.softBoundaries !== false;
 
   const input = String(text || '');
-  const normalized = input.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim();
+  // Normalize line breaks/spaces but preserve paragraph-ish breaks as soft boundaries.
+  const normalized = input
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .trim();
   if (!normalized) return [];
 
-  // Primary split: sentence-ending punctuation followed by space/newline/end.
+  // Primary split: sentence-ending punctuation followed by boundary/end.
   // Keep punctuation attached to the sentence.
   const rough = [];
   let buf = '';
@@ -22,15 +36,17 @@ export function splitSentences(text, options = {}) {
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i];
     buf += ch;
-    const isEndPunct = ch === '.' || ch === '!' || ch === '?' || ch === '…' || ch === '\n';
-    if (!isEndPunct) continue;
+    const isSentenceEnd = ch === '.' || ch === '!' || ch === '?' || ch === '…';
+    const isSoftBreak = ch === '\n';
+    if (!isSentenceEnd && !(softBoundaries && isSoftBreak)) continue;
 
-    // Avoid splitting obvious abbreviations/initials/decimals.
-    if (ch === '.' && !shouldSplitAtDot(buf, chars, i)) continue;
+    if (isSentenceEnd && ch === '.' && !shouldSplitAtDot(buf, chars, i)) continue;
 
     const next = chars[i + 1];
-    if (next && !/\s|\n/.test(next)) continue;
-    rough.push(buf);
+    if (next && !/\s|\n|[)\]"'»”’]/.test(next)) continue;
+
+    // Avoid tiny orphan punctuation-only-ish fragments.
+    if (String(buf).trim().length > 0) rough.push(buf);
     buf = '';
   }
   if (buf) rough.push(buf);
@@ -40,13 +56,22 @@ export function splitSentences(text, options = {}) {
     .filter((s) => String(s).trim().length > 0);
 
   // Merge tiny/orphan fragments and split oversized chunks.
-  const merged = mergeSmall(cleaned, minChars, maxChars);
+  // For the first chunk, prefer a faster boundary when text is long and unpunctuated.
+  const merged = mergeSmall(cleaned, minChars, baseMax);
   const out = [];
-  for (const chunk of merged) {
-    if (chunk.length <= maxChars) {
+  for (let idx = 0; idx < merged.length; idx += 1) {
+    const chunk = merged[idx];
+    const cap = idx === 0 ? firstMaxChars : baseMax;
+    if (chunk.length <= cap) {
       out.push(chunk.trim());
-    } else {
-      out.push(...splitLongChunk(chunk, maxChars).map((s) => s.trim()).filter(Boolean));
+      continue;
+    }
+    const parts = splitLongChunk(chunk, cap).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) {
+      // If first chunk was aggressively capped, keep remainder at base cap.
+      out.push(parts[0]);
+      const rest = parts.slice(1).join(' ').trim();
+      if (rest) out.push(...splitLongChunk(rest, baseMax).map((s) => s.trim()).filter(Boolean));
     }
   }
   return out.filter(Boolean);
@@ -122,21 +147,23 @@ function splitLongChunk(text, maxChars) {
   if (!s) return [];
   if (s.length <= maxChars) return [s];
 
-  // Prefer clause boundaries, then spaces.
-  const boundaries = [', ', '; ', ': ', ' — ', ' – ', ' - '];
+  // Prefer sentence/clause boundaries, then natural pauses, then spaces.
+  const boundaries = ['\n', '. ', '! ', '? ', '… ', ', ', '; ', ': ', ' — ', ' – ', ' - ', ') ', '] '];
   const out = [];
   let rest = s;
   while (rest.length > maxChars) {
     let cut = -1;
     for (const b of boundaries) {
       const idx = rest.lastIndexOf(b, maxChars);
-      if (idx > Math.floor(maxChars * 0.45)) {
-        cut = Math.max(cut, idx + b.length - 1); // include punctuation char
+      if (idx > Math.floor(maxChars * 0.4)) {
+        // include boundary punctuation/char, exclude trailing space where possible
+        const candidate = b === '\n' ? idx : idx + b.trimEnd().length;
+        cut = Math.max(cut, candidate);
       }
     }
     if (cut < 0) {
       const space = rest.lastIndexOf(' ', maxChars);
-      cut = space > Math.floor(maxChars * 0.45) ? space : maxChars;
+      cut = space > Math.floor(maxChars * 0.4) ? space : maxChars;
     }
     const piece = rest.slice(0, cut).trim();
     if (piece) out.push(piece);
@@ -145,6 +172,75 @@ function splitLongChunk(text, maxChars) {
   }
   if (rest) out.push(rest);
   return out;
+}
+
+/**
+ * Streaming helper: extract completed speakable chunks from a mutable/growing
+ * text buffer while preserving an unfinished tail.
+ *
+ * Returns { chunks, remainder }.
+ * - flush=true: also emits the final remainder (if non-empty) as a chunk.
+ * - Uses conservative splitting so callers can feed incremental LLM text safely.
+ */
+export function extractSpeakableChunks(text, options = {}) {
+  const flush = options.flush === true;
+  const input = String(text || '');
+  if (!input.trim()) return { chunks: [], remainder: '' };
+
+  // If caller wants final flush, split whole buffer as complete text.
+  if (flush) {
+    return { chunks: splitSentences(input, options), remainder: '' };
+  }
+
+  // Find a safe boundary near the end: prefer completed sentence punctuation
+  // followed by whitespace/newline; otherwise keep all text as remainder to
+  // avoid cutting words mid-stream. This favors correctness over eagerness.
+  const normalized = input.replace(/\r\n?/g, '\n');
+  let cut = -1;
+  const re = /[.!?…](?:["')\]]*)?(?=\s|\n|$)/g;
+  let m;
+  while ((m = re.exec(normalized)) !== null) {
+    const end = m.index + m[0].length;
+    // Keep only boundaries that are actually followed by separation or at end-of-buffer
+    // and have some content before them.
+    if (end <= 0) continue;
+    const after = normalized[end] || '';
+    if (after && !/\s|\n/.test(after)) continue;
+    // Verify dot is sentence-ending in this context.
+    if (normalized[m.index] === '.') {
+      const beforeBuf = normalized.slice(0, end);
+      const chars = Array.from(normalized);
+      if (!shouldSplitAtDot(beforeBuf, chars, m.index)) continue;
+    }
+    cut = end;
+  }
+
+  // Optional soft fallback for very long buffers with no punctuation: emit a
+  // clause/space-bounded prefix to keep TTFB low, retain tail.
+  if (cut < 0) {
+    const softMax = Number.isFinite(options.streamingSoftMaxChars)
+      ? Math.max(48, Math.floor(options.streamingSoftMaxChars))
+      : Math.max(80, Math.min(180, Number(options.maxChars) || 220));
+    if (normalized.length >= softMax) {
+      const probe = normalized.slice(0, softMax + 40);
+      const soft = splitLongChunk(probe, softMax);
+      if (soft.length > 0 && soft[0].length >= Math.floor(softMax * 0.5)) {
+        const head = soft[0];
+        const headIdx = normalized.indexOf(head);
+        if (headIdx === 0) {
+          return {
+            chunks: splitSentences(head, options),
+            remainder: normalized.slice(head.length).replace(/^\s+/, '')
+          };
+        }
+      }
+    }
+    return { chunks: [], remainder: input };
+  }
+
+  const head = normalized.slice(0, cut);
+  const tail = normalized.slice(cut).replace(/^\s+/, '');
+  return { chunks: splitSentences(head, options), remainder: tail };
 }
 
 /**

@@ -175,12 +175,16 @@ export class VoiceOut {
   }
 
   private emitSpeakingStart(turnId?: VoiceOutTurnId): void {
+    // Keep turn identity current for chunk/stop reporting, but only emit the
+    // start transition once per audible speaking span.
+    if (turnId !== undefined) {
+      this.currentTurnId = turnId;
+    }
     if (this.speaking) return;
     this.speaking = true;
-    this.currentTurnId = turnId;
     this.lastStopReason = 'drained';
     try {
-      this.onSpeakingStart?.({ turnId });
+      this.onSpeakingStart?.({ turnId: this.currentTurnId });
     } catch {
       // Hook must not break playback.
     }
@@ -199,12 +203,16 @@ export class VoiceOut {
   }
 
   private maybeEmitStopIfIdle(): void {
-    if (this.active.size === 0 && this.pendingCount === 0 && this.speaking) {
+    // Reliable stop/drain: only when there is no active audible source and no
+    // pending decode/schedule work left in the playback chain.
+    if (this.active.size !== 0 || this.pendingCount !== 0) return;
+    if (this.speaking) {
       const reason = this.lastStopReason || 'drained';
       this.lastStopReason = 'drained';
       this.emitSpeakingStop(reason);
-      this.onDrained?.();
     }
+    // Drain callback is meaningful when playback reached idle.
+    this.onDrained?.();
   }
 
   private isTurnCancelled(turnId?: VoiceOutTurnId): boolean {
@@ -215,8 +223,16 @@ export class VoiceOut {
   cancelTurn(turnId: VoiceOutTurnId): void {
     if (turnId === undefined || turnId === null) return;
     this.cancelledTurns.add(String(turnId));
-    // If current playback belongs to this turn, stop active audio now.
-    if (this.currentTurnId !== undefined && String(this.currentTurnId) === String(turnId)) {
+    // If current playback belongs to this turn (or turn is unknown while
+    // speaking), stop active audio now. Pending chunks for that turn are
+    // dropped in the playback chain by turn-cancellation checks.
+    if (this.currentTurnId === undefined) {
+      if (this.speaking || this.active.size > 0) {
+        this.flush(String(turnId));
+      }
+      return;
+    }
+    if (String(this.currentTurnId) === String(turnId)) {
       this.flush(String(turnId));
     }
   }
@@ -263,7 +279,7 @@ export class VoiceOut {
       }
     }
 
-    const wasSpeaking = this.speaking;
+    const wasSpeaking = this.speaking || this.active.size > 0;
     const reason = isTargeted ? 'cancelled' : 'flush';
     this.lastStopReason = reason;
     for (const source of this.active) {
@@ -280,11 +296,13 @@ export class VoiceOut {
       this.nextStart = this.context.currentTime;
     }
     if (!isTargeted) {
+      // Global interruption/barge-in: queued/decoding work from prior epoch is
+      // stale and chain finally handlers will reconcile pendingCount. Keep turn
+      // bookkeeping clean so speaking state cannot leak.
       this.cancelledTurns.clear();
-      this.pendingCount = 0;
       this.currentTurnId = undefined;
     }
-    if (wasSpeaking) {
+    if (wasSpeaking || this.speaking) {
       this.emitSpeakingStop(reason);
     }
   }

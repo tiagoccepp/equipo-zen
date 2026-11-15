@@ -81,6 +81,12 @@ function isActive(st: string): boolean { return /^(in_progress|doing|active|runn
 function isBlocked(st: string, reason?: string | null): boolean { return /^(blocked|failed|error|stuck)$/i.test(st) || !!(reason && String(reason).trim()); }
 function isPending(st: string): boolean { return /^(pending|todo|queued|new|open|waiting)$/i.test(st); }
 
+function liveScore(m: { lastActiveAt?: string | null; status?: string; turnCount?: number }): number {
+  const t = m.lastActiveAt ? new Date(m.lastActiveAt).getTime() : 0;
+  const statusBoost = /^(active|live|running|speaking)$/i.test(asText(m.status)) ? 1e12 : 0;
+  return (Number.isFinite(t) ? t : 0) + statusBoost + (m.turnCount || 0);
+}
+
 export function buildWorld(works: CompanyWork[], live: MissionLive | null, speakers: string[]): OfficeWorld {
   const speakerSet = new Set(asArray<string>(speakers).filter(Boolean));
   const liveByCompany = new Map<string, { lastActiveAt?: string | null; status?: string; turnCount?: number }>();
@@ -88,11 +94,13 @@ export function buildWorld(works: CompanyWork[], live: MissionLive | null, speak
     if (!m || typeof m !== 'object') continue;
     const cid = asText((m as any).companyId);
     if (!cid) continue;
-    liveByCompany.set(cid, {
+    const prev = liveByCompany.get(cid);
+    const next = {
       lastActiveAt: (m as any).lastActiveAt ?? null,
       status: asText((m as any).status || ''),
       turnCount: typeof (m as any).turnCount === 'number' ? (m as any).turnCount : 0
-    });
+    };
+    if (!prev || liveScore(next) >= liveScore(prev)) liveByCompany.set(cid, next);
   }
   const ordered = asArray<CompanyWork>(works)
     .filter((w) => w && (w as any).company && asText((w as any).company.id))
@@ -147,6 +155,7 @@ export function buildWorld(works: CompanyWork[], live: MissionLive | null, speak
         if (!aid) continue;
         const b = isBlocked(st, reason);
         const w = isActive(st);
+        // prefer explicit blockers; otherwise keep active task per agent
         if (b) byAgent.set(aid, { label: truncate(reason || act.text || 'Blocked', 42), state: 'blocked', task: act.text });
         else if (w) byAgent.set(aid, { label: truncate(act.text || 'Working', 42), state: 'working', task: act.text });
       }
@@ -193,18 +202,19 @@ export function buildWorld(works: CompanyWork[], live: MissionLive | null, speak
       };
     });
 
+    const nowGoal = goals.find((g: any) => isActive(normStatus(g?.status)) || isPending(normStatus(g?.status))) || goals.find((g: any) => !isDone(normStatus(g?.status))) || goals[0];
     return {
       id: asText(work.company.id),
       name: asText(work.company.name || 'Project'),
       x, y, w: ROOM_W, h,
       agents,
-      goal: truncate(asText(goals.find((g: any) => !isDone(normStatus(g?.status)))?.title || goals[0]?.title || 'No goal set'), 54),
-      taskSummary: `${tasks.length} tasks · ${active} active · ${blocked} blocked`,
+      goal: truncate(asText(nowGoal?.title || 'No goal set'), 54),
+      taskSummary: `${tasks.length} tasks · ${active} active · ${blocked} blocked · ${done} done`,
       live: isLive,
       meetingStatus: liveInfo?.status || null,
       lastActiveAt: liveInfo?.lastActiveAt || null,
       turnCount: liveInfo?.turnCount || 0,
-      activities: activities.slice(0, 12),
+      activities: activities.slice(0, 14),
       stats: { total: tasks.length, active, blocked, done, pending }
     };
   });
