@@ -51,6 +51,7 @@ import { listPending, resolveApproval } from './permissions.js';
 import { maybeResolvePlan, planStepsText } from './plan-mode.js';
 import { mergeTastes, renderTastesSection as renderTastes } from './tastes.js';
 import { CancellableTurnQueue, SpeakerGate, sentenceAudioPlan } from './turn-pipeline.js';
+import { createQuickPathState, isQuickPathEnabled, shouldPreempt } from './quick-path.js';
 import { spawnAgent } from './spawner.js';
 
 const MAX_SESSION_AGENTS = 8;
@@ -210,6 +211,11 @@ export class MeetingSession {
     // en UN solo turno antes de rutear (el agente espera a que termines la idea).
     this.pendingUser = null;
     this.pendingClose = null;
+    // T5: preemptive/quick generation path (feature-flagged, default off).
+    // Speculative turns start early when end-of-turn looks likely, but all
+    // outbound output is buffered until commit; new user input discards safely.
+    this.quickPath = createQuickPathState();
+    this.quickPath.enabled = isQuickPathEnabled(process.env);
     // Con alguien conectado, el trabajo de fondo cede la clave.
     registerSession();
     this.sessionCounted = true;
@@ -457,6 +463,8 @@ export class MeetingSession {
         clearTimeout(this.pendingUser.timer);
         this.pendingUser = null;
       }
+      // T5: speculative buffered turn must never leak on interrupt.
+      this.discardSpeculativeTurn(message.reason === 'barge_in' ? 'barge_in' : 'superseded');
       this.turnQueue.interrupt(message.reason === 'barge_in' ? 'barge_in' : 'superseded');
       this.gate.flush();
       this.send({ type: 'agent_interrupted', turnId: speakingTurnId || undefined, agentId: speakingAgentId || undefined });
@@ -579,6 +587,7 @@ export class MeetingSession {
     if (message.type === 'reset') {
       // "Reiniciar reunión" = cerrar la reunión actual (queda en el
       // historial, reanudable solo por lista) y abrir una nueva.
+      this.discardSpeculativeTurn('reset');
       if (this.pendingUser) {
         clearTimeout(this.pendingUser.timer);
         this.pendingUser = null;
@@ -1178,6 +1187,13 @@ export class MeetingSession {
 
   enqueueUserTurn(text, source, clientTurnId = null) {
     const fragmentId = clientTurnId || nanoid(8);
+
+    // T5: if a speculative turn is in-flight (early start), more user input
+    // means the end-of-turn guess was wrong → discard speculative result cleanly.
+    if (this.quickPath?.enabled && this.quickPath.speculative?.active && !this.quickPath.speculative.active.committed) {
+      this.discardSpeculativeTurn('user_continued');
+    }
+
     // Cada fragmento se muestra al instante en el chat…
     this.memory.add('user', 'You', text, null, fragmentId);
     // Los turnos de voz ya pintan su burbuja (YOU·VOICE) vía
@@ -1210,12 +1226,39 @@ export class MeetingSession {
       : MeetingSession.seemsUnfinished(combined)
         ? USER_TURN_SETTLE_EXTENDED_MS
         : USER_TURN_SETTLE_MS;
+
+    // T5 quick path (default off): if turn looks complete, start speculative
+    // generation early but buffer all output until commit. Commit timer uses the
+    // normal settle window from this fragment; new input discards.
+    const qp = this.quickPath;
+    const canSpeculate = qp?.enabled
+      && !qp.speculative?.active
+      && !MeetingSession.seemsUnfinished(combined)
+      && shouldPreempt(combined);
+    if (canSpeculate) {
+      const specTurnId = nanoid(8);
+      qp.speculative.start(specTurnId);
+      qp.pendingSpeculative = { turnId: specTurnId, text: combined, source: this.pendingUser.source };
+      this.logTelemetry('quick_path_speculative_start', { turnId: specTurnId, source: this.pendingUser.source, chars: combined.length }, specTurnId);
+      // Flush now as speculative (no normal timer) and arm commit confirmation.
+      const snapshot = { texts: this.pendingUser.texts.slice(), source: this.pendingUser.source };
+      this.pendingUser = null;
+      qp.pendingSpeculative.commitTimer = setTimeout(() => {
+        // End-of-turn confirmed with no further input → commit buffered output.
+        this.flushSpeculativeBuffered(specTurnId);
+      }, settleMs);
+      this.flushPendingUserSnapshot(snapshot, { speculative: true, turnId: specTurnId });
+      return;
+    }
+
     this.pendingUser.timer = setTimeout(() => this.flushPendingUser(), settleMs);
   }
 
   // M-05: steer — salta la agregación, interrumpe y va al frente.
   steerUserTurn(text, source, clientTurnId = null) {
     const turnId = clientTurnId || nanoid(8);
+    // T5: steering replaces any speculative preempted turn.
+    this.discardSpeculativeTurn('steered');
     if (this.pendingUser) {
       clearTimeout(this.pendingUser.timer);
       this.pendingUser = null;
@@ -1241,13 +1284,26 @@ export class MeetingSession {
     if (!this.pendingUser) {
       return;
     }
-    const { texts, source } = this.pendingUser;
+    const snapshot = { texts: this.pendingUser.texts, source: this.pendingUser.source };
     this.pendingUser = null;
+    this.flushPendingUserSnapshot(snapshot);
+  }
+
+  flushPendingUserSnapshot(snapshot, opts = {}) {
+    const texts = Array.isArray(snapshot?.texts) ? snapshot.texts : [];
+    const source = snapshot?.source || 'text';
     const text = texts.join('\n');
-    if (texts.length > 1) {
-      this.logTelemetry('user_turns_aggregated', { fragments: texts.length, chars: text.length });
+    if (!text.trim()) {
+      // Nothing to route; drop speculative placeholder if any.
+      if (opts.speculative && opts.turnId) {
+        try { this.quickPath?.speculative?.discard(opts.turnId, 'empty'); } catch {}
+      }
+      return;
     }
-    this.routeCombinedTurn(text, source);
+    if (texts.length > 1) {
+      this.logTelemetry('user_turns_aggregated', { fragments: texts.length, chars: text.length }, opts.turnId || null);
+    }
+    this.routeCombinedTurn(text, source, opts);
   }
 
   // A-07: promocion mid-flight - resultado de fondo a mensaje de agente
@@ -1372,7 +1428,9 @@ export class MeetingSession {
     }
   }
 
-  routeCombinedTurn(text, source) {
+  routeCombinedTurn(text, source, opts = {}) {
+    const speculative = opts?.speculative === true;
+    const forcedTurnId = opts?.turnId ? String(opts.turnId) : null;
     // E-12: veto por voz antes que nada (revierte auto-aplicación).
     const veto = this.maybeVetoClaim(text);
     if (veto.vetoed) {
@@ -1381,6 +1439,7 @@ export class MeetingSession {
     // F-04: aprobar pendientes por voz ("dale") — re-ejecuta el original.
     const appr = this.maybeApprovePending(text);
     if (appr.rerouted) {
+      if (speculative && forcedTurnId) this.discardSpeculativeTurn('rerouted');
       return;
     }
     if (appr.granted) {
@@ -1404,13 +1463,18 @@ export class MeetingSession {
       meetingId: this.meeting?.id,
       companyId: this.company?.id,
       via: source,
-      texto: text
+      texto: text,
+      speculative: speculative || undefined
     });
-    const turnId = nanoid(8);
+    const turnId = forcedTurnId || nanoid(8);
     const accepted = this.turnQueue.push(
       turnId,
       (signal) => this.processUserTurn(turnId, text, signal, source),
       (error) => {
+        // Speculative turns: if discarded/aborted by new input, never leak errors.
+        if (speculative && this.quickPath?.speculative?.get(turnId)?.discarded) {
+          return;
+        }
         this.send({
           type: 'error',
           turnId,
@@ -1425,6 +1489,7 @@ export class MeetingSession {
       }
     );
     if (!accepted) {
+      if (speculative && forcedTurnId) this.discardSpeculativeTurn('queue_full');
       this.send({
         type: 'error',
         turnId,
@@ -1767,6 +1832,23 @@ export class MeetingSession {
         ...(response.latency ? { latency: response.latency } : {}),
         keyStatus: this.keyRing.snapshot()
       });
+      // T6: registro unificado de latencia por turno (p50/latest medibles).
+      try {
+        if (response.latency) {
+          recordTurnLatency({
+            turnId,
+            agentId: agent.id,
+            agentName: agent.name,
+            source,
+            backend: response.backend,
+            interrupted: Boolean(response.interrupted),
+            usedMock: Boolean(response.usedMock),
+            spoke: Boolean(response.text?.trim()),
+            at: Date.now(),
+            latency: response.latency
+          });
+        }
+      } catch { /* observabilidad nunca rompe el turno */ }
       // E-27: acumular tokens del turno (usage QW-05/M-12).
       try {
         const u = response.usage || null;
@@ -1782,7 +1864,8 @@ export class MeetingSession {
         text: response.text,
         usedMock: response.usedMock,
         backend: response.backend,
-        spoke: Boolean(response.text?.trim())
+        spoke: Boolean(response.text?.trim()),
+        ...(response.latency ? { latency: response.latency } : {})
       }, turnId);
       if (response.interrupted) {
         return;
@@ -2614,10 +2697,81 @@ export class MeetingSession {
   }
 
   send(payload) {
+    // T5: speculative turns buffer all outbound events until commit.
+    // If discarded, payload is dropped (never leaks to user).
+    try {
+      const qp = this.quickPath;
+      const turnId = payload && payload.turnId ? String(payload.turnId) : null;
+      if (qp?.enabled && turnId) {
+        if (qp.discardedTurnId && qp.discardedTurnId === turnId) {
+          return;
+        }
+        if (qp.speculative?.shouldBuffer(turnId)) {
+          qp.speculative.buffer(turnId, payload);
+          return;
+        }
+        const spec = qp.speculative?.active;
+        if (spec && spec.turnId === turnId && spec.discarded) {
+          return;
+        }
+      }
+    } catch {
+      // Fall through to normal send on guard failure.
+    }
     if (this.socket.readyState === this.socket.OPEN) {
       this.socket.send(JSON.stringify(payload));
       this.logServerMessage(payload);
     }
+  }
+
+  flushSpeculativeBuffered(turnId) {
+    const qp = this.quickPath;
+    if (!qp?.enabled) return;
+    if (qp.discardedTurnId === turnId) return;
+    const buffered = qp.speculative.commit(turnId);
+    if (qp.pendingSpeculative?.turnId === turnId) {
+      if (qp.pendingSpeculative.commitTimer) clearTimeout(qp.pendingSpeculative.commitTimer);
+      qp.pendingSpeculative = null;
+    }
+    for (const payload of buffered) {
+      if (this.socket.readyState === this.socket.OPEN) {
+        this.socket.send(JSON.stringify(payload));
+        this.logServerMessage(payload);
+      }
+    }
+  }
+
+  discardSpeculativeTurn(reason = 'user_continued') {
+    const qp = this.quickPath;
+    if (!qp?.enabled) return false;
+    const active = qp.speculative?.active;
+    if (!active || active.committed || active.discarded) return false;
+    const turnId = active.turnId;
+    // Mark discarded before any cleanup emits, so nothing for this turn leaks.
+    qp.discardedTurnId = turnId;
+    qp.speculative.discard(turnId, reason);
+    if (qp.pendingSpeculative?.turnId === turnId) {
+      if (qp.pendingSpeculative.commitTimer) clearTimeout(qp.pendingSpeculative.commitTimer);
+      qp.pendingSpeculative = null;
+    }
+    // Abort the in-flight speculative turn job so it stops generating.
+    try {
+      if (this.turnQueue?.current?.id === turnId) {
+        this.turnQueue.current.controller.abort();
+      }
+    } catch {
+      // best-effort
+    }
+    // If audio gate is owned by the discarded speculative turn, drop it silently.
+    try {
+      if (this.gate?.owner?.turnId === turnId) {
+        this.gate.flush();
+      }
+    } catch {
+      // best-effort
+    }
+    this.logTelemetry('quick_path_discarded', { turnId, reason }, turnId);
+    return true;
   }
 
   close() {

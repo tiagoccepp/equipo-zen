@@ -336,3 +336,106 @@ export async function maybeClassifyAddressing({ text, context = {}, deps = {} } 
     return null;
   }
 }
+
+// ── T2: turn detection / adaptive interruption helpers ───────────────────
+// Pure helpers usable by the voice pipeline to distinguish short
+// backchannels from real interruptions and to reason about turn completion.
+// Lightweight and conservative (avoid cutting user off).
+
+const BACKCHANNEL_TOKENS = new Set([
+  'si', 'sí', 'aja', 'ajá', 'aha', 'mhm', 'mm', 'mmm', 'dale', 'ok', 'okay',
+  'claro', 'entiendo', 'ya', 'veo', 'bien', 'perfecto', 'exacto', 'bueno',
+  'genial', 'joya', 'ta', 'está', 'esta', 'uh', 'uhm', 'sipi', 'listo',
+  'yes', 'yeah', 'yep', 'yup', 'right', 'got', 'it', 'i', 'see', 'uh-huh',
+  'uh', 'huh', 'mm-hmm', 'mm', 'hmm', 'sure', 'alright', 'all', 'cool', 'nice'
+]);
+
+const BARGE_COMMANDS = [
+  'pará', 'para', 'basta', 'callate', 'cállate', 'esperá', 'espera', 'momento',
+  'no no', 'cortala', 'cortá', 'stop', 'wait', 'hold on', 'shut up', 'quiet',
+  'hang on', 'listen', 'escuchame', 'escuchá', 'dejame hablar'
+];
+
+const TRAILING_CONNECTORS = new Set([
+  'y', 'e', 'o', 'u', 'pero', 'porque', 'que', 'como', 'si', 'cuando', 'aunque',
+  'entonces', 'ademas', 'además', 'tambien', 'también', 'para', 'por', 'con', 'sin',
+  'de', 'del', 'al', 'a', 'en', 'la', 'el', 'los', 'las', 'un', 'una', 'mi', 'tu',
+  'and', 'or', 'but', 'because', 'so', 'if', 'when', 'while', 'then', 'also', 'for',
+  'with', 'without', 'to', 'of', 'in', 'on', 'at', 'the', 'a', 'an', 'my', 'your'
+]);
+
+function normTurnText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[¡!¿?.,;:()"'«»\u2014\u2013-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function isBackchannelUtterance(text) {
+  const clean = normTurnText(text);
+  if (!clean) return false;
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length === 0) return false;
+  if (words.length <= 4 && words.every((w) => BACKCHANNEL_TOKENS.has(w))) return true;
+  if (clean === 'ya veo' || clean === 'esta bien' || clean === 'de acuerdo' || clean === 'got it' || clean === 'i see' || clean === 'all right') return true;
+  return false;
+}
+
+export function classifyUserInterruption(text, { agentSpeaking = false } = {}) {
+  const raw = String(text || '').trim();
+  const clean = normTurnText(raw);
+  if (!clean) {
+    return { isBackchannel: false, likelyComplete: false, interruptStrength: 0, shouldInterrupt: false, reason: 'empty' };
+  }
+  for (const b of BARGE_COMMANDS) {
+    if (clean === b || clean.startsWith(`${b} `) || clean.endsWith(` ${b}`) || clean.includes(` ${b} `)) {
+      return { isBackchannel: false, likelyComplete: true, interruptStrength: 1, shouldInterrupt: true, reason: 'barge-command' };
+    }
+  }
+  if (isBackchannelUtterance(clean)) {
+    return { isBackchannel: true, likelyComplete: false, interruptStrength: 0, shouldInterrupt: false, reason: 'backchannel' };
+  }
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length <= 2 && words.every((w) => w.length <= 2)) {
+    return { isBackchannel: false, likelyComplete: false, interruptStrength: 0.1, shouldInterrupt: false, reason: 'ambiguous-short' };
+  }
+  const strength = Math.min(1, 0.55 + Math.min(words.length, 8) * 0.05);
+  return {
+    isBackchannel: false,
+    likelyComplete: /[.!?…]$/.test(raw),
+    interruptStrength: strength,
+    shouldInterrupt: true,
+    reason: agentSpeaking ? 'substantive-during-agent' : 'substantive'
+  };
+}
+
+export function assessEndOfTurn({ text = '', hintEnd = '', silenceMs, endSilenceMs, speechMs } = {}) {
+  const raw = String(hintEnd || text || '').trim();
+  const clean = normTurnText(raw);
+  const words = clean ? clean.split(' ').filter(Boolean) : [];
+  const last = words[words.length - 1] || '';
+  const terminalPunctuation = /[.!?…]+["')\]]*$/.test(raw);
+  const trailingConnector = !!last && TRAILING_CONNECTORS.has(last);
+  const reasons = [];
+  if (terminalPunctuation) reasons.push('terminal-punctuation');
+  if (trailingConnector) reasons.push('trailing-connector');
+  const silenceSatisfied = Number.isFinite(Number(silenceMs)) && Number.isFinite(Number(endSilenceMs))
+    ? Number(silenceMs) >= Number(endSilenceMs)
+    : Number.isFinite(Number(silenceMs)) && Number(silenceMs) >= 700;
+  if (silenceSatisfied) reasons.push('silence-satisfied');
+  if (trailingConnector) {
+    return { likelyComplete: false, isBackchannel: isBackchannelUtterance(raw), interruptStrength: 0, trailingConnector, terminalPunctuation, confidence: 0.8, reasons };
+  }
+  if (terminalPunctuation) {
+    return { likelyComplete: true, isBackchannel: false, interruptStrength: 0, trailingConnector, terminalPunctuation, confidence: silenceSatisfied ? 0.95 : 0.8, reasons };
+  }
+  if (silenceSatisfied && words.length > 0 && words.length <= 6) {
+    reasons.push('short-utterance-silence');
+    return { likelyComplete: true, isBackchannel: isBackchannelUtterance(raw), interruptStrength: 0, trailingConnector, terminalPunctuation, confidence: 0.65, reasons };
+  }
+  reasons.push(silenceSatisfied ? 'long-utterance-needs-punctuation' : 'insufficient-evidence');
+  return { likelyComplete: false, isBackchannel: isBackchannelUtterance(raw), interruptStrength: 0, trailingConnector, terminalPunctuation, confidence: 0.55, reasons };
+}

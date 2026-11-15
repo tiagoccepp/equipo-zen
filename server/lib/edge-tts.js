@@ -68,7 +68,7 @@ function edgeCtor() {
   return cachedCtor;
 }
 
-export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
+export async function* streamEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
   const Ctor = edgeCtor();
   if (!Ctor) {
     throw new Error('edge-tts not installed');
@@ -78,12 +78,18 @@ export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_T
     throw new Error('empty text');
   }
   const tts = new Ctor({ voice: mapVoiceToEdge(voice), lang: edgeTable().lang, timeout: timeoutMs });
-  const chunks = [];
   for await (const chunk of tts.streamAudio(clean)) {
-    if (Buffer.isBuffer(chunk)) {
-      chunks.push(chunk);
+    if (Buffer.isBuffer(chunk) && chunk.length > 0) {
+      yield chunk;
     }
     // subLine (word boundaries): se ignoran, solo importa el audio.
+  }
+}
+
+export async function synthesizeEdgeMp3(text, { voice = 'M1', timeoutMs = EDGE_TIMEOUT_MS } = {}) {
+  const chunks = [];
+  for await (const chunk of streamEdgeMp3(text, { voice, timeoutMs })) {
+    chunks.push(chunk);
   }
   const audio = Buffer.concat(chunks);
   if (!looksLikeMp3(audio)) {

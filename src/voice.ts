@@ -13,11 +13,16 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+export type VoiceOutTurnId = string | number;
+
 export class VoiceOut {
   onDrained: (() => void) | null = null;
   // QW-07: fires when each chunk is scheduled (real audible start ≈ +20ms).
   // The tag travels opaque (the server tags sentences with sIdx/sText).
   onChunkStart: ((tag: unknown) => void) | null = null;
+  // Playback hooks aligned with actual audible playback transitions.
+  onSpeakingStart: ((info: { turnId?: VoiceOutTurnId }) => void) | null = null;
+  onSpeakingStop: ((info: { turnId?: VoiceOutTurnId; reason?: string }) => void) | null = null;
   levelAvailable = false;
 
   private context: AudioContext | null = null;
@@ -30,9 +35,16 @@ export class VoiceOut {
   // back-to-back MP3s decode in parallel and the shorter one gets scheduled
   // first (broken order + gaps). All decode+schedule goes through here.
   private playChain: Promise<void> = Promise.resolve();
-  // Anti-stale epoch: flush() (barge-in) advances it and whatever was already
+  // Anti-stale epoch: global flush() advances it and whatever was already
   // queued/decoding is dropped instead of playing late.
   private epoch = 0;
+  // Cancellation by turnId/generation: pending/scheduled work for cancelled
+  // turns is dropped; active sources for that turn are stopped on cancel.
+  private cancelledTurns = new Set<string>();
+  private currentTurnId: VoiceOutTurnId | undefined = undefined;
+  private speaking = false;
+  private pendingCount = 0;
+  private lastStopReason = 'drained';
 
   private ensure(): AudioContext {
     if (this.context && this.context.state !== 'closed') {
@@ -59,17 +71,30 @@ export class VoiceOut {
     }
   }
 
-  enqueuePcm(base64: string, sampleRate: number, tag: unknown = null): Promise<void> {
+  enqueuePcm(base64: string, sampleRate: number, tag: unknown = null, turnId?: VoiceOutTurnId): Promise<void> {
     const at = this.epoch;
+    const tid = turnId;
+    this.pendingCount += 1;
     this.playChain = this.playChain
       .then(() => {
-        if (at === this.epoch) return this.enqueuePcmNow(base64, sampleRate, at, tag);
+        if (at !== this.epoch || this.isTurnCancelled(tid)) return;
+        return this.enqueuePcmNow(base64, sampleRate, at, tag, tid);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        this.pendingCount = Math.max(0, this.pendingCount - 1);
+        this.maybeEmitStopIfIdle();
+      });
     return this.playChain;
   }
 
-  private async enqueuePcmNow(base64: string, sampleRate: number, at: number, tag: unknown = null): Promise<void> {
+  private async enqueuePcmNow(
+    base64: string,
+    sampleRate: number,
+    at: number,
+    tag: unknown = null,
+    turnId?: VoiceOutTurnId
+  ): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -81,21 +106,28 @@ export class VoiceOut {
     for (let i = 0; i < samples.length; i += 1) {
       channel[i] = Math.max(-1, Math.min(1, samples[i] / 32768));
     }
-    if (at !== this.epoch) return; // flush() in the middle: drop it.
-    this.schedule(buffer, tag);
+    if (at !== this.epoch || this.isTurnCancelled(turnId)) return;
+    this.schedule(buffer, tag, turnId);
   }
 
-  playMp3(base64: string, tag: unknown = null): Promise<void> {
+  playMp3(base64: string, tag: unknown = null, turnId?: VoiceOutTurnId): Promise<void> {
     const at = this.epoch;
+    const tid = turnId;
+    this.pendingCount += 1;
     this.playChain = this.playChain
       .then(() => {
-        if (at === this.epoch) return this.playMp3Now(base64, at, tag);
+        if (at !== this.epoch || this.isTurnCancelled(tid)) return;
+        return this.playMp3Now(base64, at, tag, tid);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        this.pendingCount = Math.max(0, this.pendingCount - 1);
+        this.maybeEmitStopIfIdle();
+      });
     return this.playChain;
   }
 
-  private async playMp3Now(base64: string, at: number, tag: unknown = null): Promise<void> {
+  private async playMp3Now(base64: string, at: number, tag: unknown = null, turnId?: VoiceOutTurnId): Promise<void> {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => {});
@@ -104,31 +136,88 @@ export class VoiceOut {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     const buffer = await ctx.decodeAudioData(copy.buffer);
-    if (at !== this.epoch) return; // flush() in the middle: drop it.
-    this.schedule(buffer, tag);
+    if (at !== this.epoch || this.isTurnCancelled(turnId)) return;
+    this.schedule(buffer, tag, turnId);
   }
 
-  private schedule(buffer: AudioBuffer, tag: unknown = null): void {
+  private schedule(buffer: AudioBuffer, tag: unknown = null, turnId?: VoiceOutTurnId): void {
+    if (this.isTurnCancelled(turnId)) return;
     const ctx = this.context as AudioContext;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.master as GainNode);
+    const wasIdle = this.active.size === 0 && !this.speaking;
     this.active.add(source);
     source.onended = () => {
       this.active.delete(source);
       if (this.active.size === 0) {
+        const reason = this.lastStopReason || 'drained';
+        this.lastStopReason = 'drained';
+        this.emitSpeakingStop(reason);
         this.onDrained?.();
       }
     };
     const startAt = Math.max(ctx.currentTime + 0.02, this.nextStart);
     source.start(startAt);
     this.nextStart = startAt + buffer.duration;
+    if (wasIdle) {
+      this.emitSpeakingStart(turnId);
+    } else if (turnId !== undefined && this.currentTurnId === undefined) {
+      this.currentTurnId = turnId;
+    }
     if (tag !== null && tag !== undefined) {
       try {
         this.onChunkStart?.(tag);
       } catch {
         // Text reveal must never break the audio.
       }
+    }
+  }
+
+  private emitSpeakingStart(turnId?: VoiceOutTurnId): void {
+    if (this.speaking) return;
+    this.speaking = true;
+    this.currentTurnId = turnId;
+    this.lastStopReason = 'drained';
+    try {
+      this.onSpeakingStart?.({ turnId });
+    } catch {
+      // Hook must not break playback.
+    }
+  }
+
+  private emitSpeakingStop(reason = 'drained'): void {
+    if (!this.speaking) return;
+    const turnId = this.currentTurnId;
+    this.speaking = false;
+    this.currentTurnId = undefined;
+    try {
+      this.onSpeakingStop?.({ turnId, reason });
+    } catch {
+      // Hook must not break playback.
+    }
+  }
+
+  private maybeEmitStopIfIdle(): void {
+    if (this.active.size === 0 && this.pendingCount === 0 && this.speaking) {
+      const reason = this.lastStopReason || 'drained';
+      this.lastStopReason = 'drained';
+      this.emitSpeakingStop(reason);
+      this.onDrained?.();
+    }
+  }
+
+  private isTurnCancelled(turnId?: VoiceOutTurnId): boolean {
+    if (turnId === undefined || turnId === null) return false;
+    return this.cancelledTurns.has(String(turnId));
+  }
+
+  cancelTurn(turnId: VoiceOutTurnId): void {
+    if (turnId === undefined || turnId === null) return;
+    this.cancelledTurns.add(String(turnId));
+    // If current playback belongs to this turn, stop active audio now.
+    if (this.currentTurnId !== undefined && String(this.currentTurnId) === String(turnId)) {
+      this.flush(String(turnId));
     }
   }
 
@@ -157,8 +246,26 @@ export class VoiceOut {
     return Math.min(1, Math.pow(rms / 0.09, 0.7));
   }
 
-  /** Cuts EVERYTHING without closing the context (barge-in). Does not fire onDrained. */
-  flush(): void {
+  /**
+   * Cuts playback. Without turnId: global flush/barge-in (drops queued work).
+   * With turnId: cancels that turn and stops current playback for it.
+   * Does not fire onDrained from source callbacks; emits speaking stop for
+   * actual interruption/cancel transitions.
+   */
+  flush(turnId?: VoiceOutTurnId): void {
+    const isTargeted = turnId !== undefined && turnId !== null;
+    if (isTargeted) {
+      this.cancelledTurns.add(String(turnId));
+      // Only interrupt active playback when it belongs to the cancelled turn
+      // (or turn is unknown). Pending work for that turn is dropped in chain.
+      if (this.currentTurnId !== undefined && String(this.currentTurnId) !== String(turnId)) {
+        return;
+      }
+    }
+
+    const wasSpeaking = this.speaking;
+    const reason = isTargeted ? 'cancelled' : 'flush';
+    this.lastStopReason = reason;
     for (const source of this.active) {
       source.onended = null;
       try {
@@ -171,6 +278,14 @@ export class VoiceOut {
     this.epoch += 1; // queued/decoding work goes stale and is dropped.
     if (this.context) {
       this.nextStart = this.context.currentTime;
+    }
+    if (!isTargeted) {
+      this.cancelledTurns.clear();
+      this.pendingCount = 0;
+      this.currentTurnId = undefined;
+    }
+    if (wasSpeaking) {
+      this.emitSpeakingStop(reason);
     }
   }
 

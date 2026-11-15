@@ -27,6 +27,7 @@ import { getSidecarStatus } from './sidecars.js';
 import { whisperHealthy } from './stt.js';
 import { isAvailable as ttsAvailable } from './supertonic.js';
 import { analyzeTelemetry, telemetry } from './telemetry.js';
+import { getRecentLatency, getLatencySummary } from './latency-report.js';
 import { esCarpetaIgnorada, projectDir, renderWorkSection, WORKSPACE_ROOT } from './workforce.js';
 import { mountSceneRoutes } from './scene-mount.js';
 
@@ -123,6 +124,14 @@ export function createApp({ store }) {
     telemetry.reset();
     telemetry.add({ type: 'telemetry_reset', payload: { reason: 'manual reset' } });
     res.status(204).end();
+  });
+
+  // T6: observabilidad de latencia por turno (STT/LLM/TTS TTFB y E2E, según disponibilidad).
+  app.get('/api/latency/recent', (req, res) => {
+    const limit = Number(req.query?.limit) || 20;
+    const summary = getLatencySummary({ limit });
+    const recent = getRecentLatency({ limit });
+    res.json({ ok: true, summary, recent });
   });
 
   app.get('/api/settings', (_req, res) => {

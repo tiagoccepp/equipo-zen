@@ -49,6 +49,9 @@ export type BargeInInput = {
   agentSpeaking: boolean;
   // Is the person already on their turn? Then barge-in already did its job.
   userSpeaking?: boolean;
+  // T2 adaptive hint: when transcript indicates a pure backchannel during agent
+  // speech, suppress hard interruption (keep ducking/accumulation conservative).
+  backchannelLikely?: boolean;
 };
 
 export type BargeInDecision = {
@@ -58,6 +61,9 @@ export type BargeInDecision = {
   interrupt: boolean;
   // False positive or the agent already finished: restore volume and clear.
   reset: boolean;
+  // T2 signals usable by voice pipeline.
+  isBackchannelSuppressed: boolean;
+  interruptStrength: number;
   // State to keep for the next frame (the function mutates nothing).
   state: BargeInState;
 };
@@ -93,7 +99,7 @@ export function idleBargeInState(): BargeInState {
   return { loudMs: 0, quietMs: 0, ducked: false, duckMs: 0 };
 }
 
-const IDLE: BargeInDecision['state'] = { loudMs: 0, quietMs: 0, ducked: false, duckMs: 0 };
+const IDLE: BargeInState = { loudMs: 0, quietMs: 0, ducked: false, duckMs: 0 };
 
 export function evaluateBargeIn(state: BargeInState, input: BargeInInput): BargeInDecision {
   const rms = Number.isFinite(input.rms) ? Math.max(0, input.rms) : 0;
@@ -107,9 +113,17 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
   // Without this, a half-filled counter survives the turn and the next
   // door slam interrupts the next agent right away.
   if (!input.agentSpeaking || input.userSpeaking) {
-    return { duck: false, interrupt: false, reset: state.ducked, state: { ...IDLE } };
+    return {
+      duck: false,
+      interrupt: false,
+      reset: state.ducked,
+      isBackchannelSuppressed: false,
+      interruptStrength: 0,
+      state: { ...IDLE }
+    };
   }
 
+  const backchannelLikely = !!input.backchannelLikely;
   // Duck entry with margin: noise sitting right at the threshold doesn't
   // duck (flicker), only 1.1× and up.
   if (rms >= startThreshold * BARGE_IN.duckMargin) {
@@ -118,15 +132,38 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
       : state.loudMs;
 
     if (loudMs >= BARGE_IN.confirmMs) {
+      // Confirmed acoustic barge-in. If semantic layer says this is a pure
+      // backchannel during agent speech, suppress hard interrupt/cancel but keep
+      // ducking (conservative, reversible).
+      if (backchannelLikely) {
+        return {
+          duck: true,
+          interrupt: false,
+          reset: false,
+          isBackchannelSuppressed: true,
+          interruptStrength: 0.15,
+          state: { loudMs, quietMs: 0, ducked: true, duckMs: state.duckMs + durationMs }
+        };
+      }
       // Confirmed: the caller cuts the audio, tells the server and
       // restores the volume, so state starts clean.
-      return { duck: false, interrupt: true, reset: false, state: { ...IDLE } };
+      return {
+        duck: false,
+        interrupt: true,
+        reset: false,
+        isBackchannelSuppressed: false,
+        interruptStrength: 1,
+        state: { ...IDLE }
+      };
     }
 
+    const progress = BARGE_IN.confirmMs > 0 ? Math.max(0, Math.min(1, loudMs / BARGE_IN.confirmMs)) : 0;
     return {
       duck: true,
       interrupt: false,
       reset: false,
+      isBackchannelSuppressed: false,
+      interruptStrength: progress * 0.7,
       state: { loudMs, quietMs: 0, ducked: true, duckMs: state.duckMs + durationMs }
     };
   }
@@ -134,7 +171,14 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
   // Silence with nothing pending: state is already clean, we don't dirty it
   // counting calm ms nobody cares about.
   if (!state.ducked && state.loudMs === 0) {
-    return { duck: false, interrupt: false, reset: false, state: { ...IDLE } };
+    return {
+      duck: false,
+      interrupt: false,
+      reset: false,
+      isBackchannelSuppressed: false,
+      interruptStrength: 0,
+      state: { ...IDLE }
+    };
   }
 
   const quietMs = state.quietMs + durationMs;
@@ -145,16 +189,53 @@ export function evaluateBargeIn(state: BargeInState, input: BargeInInput): Barge
       duck: false,
       interrupt: false,
       reset: state.ducked,
+      isBackchannelSuppressed: false,
+      interruptStrength: 0,
       state: { ...IDLE }
     };
   }
 
   // Short pause (or unfulfilled hold): stay ducked, keep the accumulation.
+  const progress = BARGE_IN.confirmMs > 0 ? Math.max(0, Math.min(1, state.loudMs / BARGE_IN.confirmMs)) : 0;
   return {
     duck: false,
     interrupt: false,
     reset: false,
+    isBackchannelSuppressed: false,
+    interruptStrength: progress * 0.5,
     state: { loudMs: state.loudMs, quietMs, ducked: state.ducked, duckMs }
+  };
+}
+
+export interface BargeInSignal {
+  isBackchannel: boolean;
+  likelyComplete: boolean;
+  interruptStrength: number;
+  shouldInterrupt: boolean;
+}
+
+export function classifyBargeInSignal(opts: {
+  acousticInterrupt?: boolean;
+  acousticStrength?: number;
+  transcript?: string;
+  isBackchannel?: boolean;
+} = {}): BargeInSignal {
+  const acousticInterrupt = !!opts.acousticInterrupt;
+  const acousticStrength = Number.isFinite(opts.acousticStrength)
+    ? Math.max(0, Math.min(1, Number(opts.acousticStrength)))
+    : (acousticInterrupt ? 1 : 0);
+  const transcript = String(opts.transcript || '').trim();
+  const isBackchannel = opts.isBackchannel === true;
+  // If we know it's a backchannel, never hard-interrupt; otherwise defer to acoustic/content.
+  if (isBackchannel) {
+    return { isBackchannel: true, likelyComplete: false, interruptStrength: 0, shouldInterrupt: false };
+  }
+  const shouldInterrupt = acousticInterrupt || acousticStrength >= 0.6;
+  return {
+    isBackchannel: false,
+    likelyComplete: transcript.length === 0 ? false : true,
+    interruptStrength: shouldInterrupt ? Math.max(acousticStrength, 0.6) : acousticStrength,
+    shouldInterrupt
   };
 }
 

@@ -17,10 +17,12 @@ import './fx/motion.css';
 import { mountMotion, setSpeakingGlow } from './fx/motion.ts';
 import { mountPalette } from './fx/palette.ts';
 import { mountMesh } from './fx/mesh.ts';
+import './lib/latency-view.js';
 import { isTauri, tinvoke } from './lib/tauri.ts';
 import { renderRichMessage } from './lib/mermaid-inline.ts';
 import { HeardTurn, type AudioTag } from './lib/heard-text.ts';
 import { activeWord, buildCues } from './lib/karaoke.ts';
+import { createBargeResumeBuffer } from './lib/barge-resume.ts';
 import { defaultFigureQueue, upsertFigure, type Figure } from './lib/figures-view.ts';
 import { loadMermaidReal } from './lib/mermaid-inline.ts';
 import { WorkingEarcon } from './lib/working-earcon.ts';
@@ -378,6 +380,10 @@ const workingEarcon = new WorkingEarcon(
 
 // ── Voz: salida + entrada continua ───────────────────────────────────
 const voiceOut = new VoiceOut();
+type AudioReplay = { kind: 'mp3' | 'pcm'; data: string; sampleRate?: number; tag: unknown; turnId?: string };
+const bargeResume = createBargeResumeBuffer<AudioReplay>();
+let bargeResumeSeq = 0;
+let lastBargeInterruptedTurnId: string | null = null;
 const browserSpeech = new BrowserSpeech();
 let voiceOn = true;
 let speakingAgent = '';
@@ -694,7 +700,7 @@ const liveMic = new LiveMic({
  voiceOut.restoreGain();
  speakingAgent = '';
  setSpeaking('');
- addMsg('system', '⏵ Cut in — listening.', 'sys');
+ addMsg('system', 'Cut in — listening.', 'sys');
  },
  onDuck: (ducked) => {
  if (ducked) {
@@ -1509,6 +1515,7 @@ async function renderProjectsView(): Promise<void> {
  grid.innerHTML = '<div class="projects-empty">Loading projects…</div>';
  if (!currentCompany) {
  grid.innerHTML = '<div class="projects-empty">No workspace yet. Open Settings to set up a company.</div>';
+ void mountRoundtablePanelIfNeeded();
  return;
  }
  const data = await apiJson<{ projects: Array<{ id: string; title: string; slug?: string; stack?: string; access_level?: string; status?: string }> }>(
@@ -1517,6 +1524,7 @@ async function renderProjectsView(): Promise<void> {
  const projects = data?.projects || [];
  if (!projects.length) {
  grid.innerHTML = '<div class="projects-empty">No projects yet. Create one to spin up a dedicated team for complex work.</div>';
+ void mountRoundtablePanelIfNeeded();
  return;
  }
  grid.innerHTML = '';
@@ -1542,6 +1550,7 @@ async function renderProjectsView(): Promise<void> {
  });
  grid.appendChild(card);
  }
+ void mountRoundtablePanelIfNeeded();
 }
 document.getElementById('projects-create')?.addEventListener('click', () => {
  void (async () => {
@@ -2577,3 +2586,21 @@ scheduleIntegrations();
  setStatus(`No backend: ${err instanceof Error ? err.message : 'error'}`);
  }
 })();
+
+// ── T4: Roundtable panel (isolated) ─────────────────────────────────
+let roundtablePanelMounted = false;
+function mountRoundtablePanelIfNeeded(): void {
+  if (roundtablePanelMounted) return;
+  const root = document.getElementById('roundtable-panel');
+  if (!root) return;
+  roundtablePanelMounted = true;
+  void import('./lib/roundtable-ui.ts')
+    .then(({ mountRoundtable }) => {
+      mountRoundtable(root, { getCompanyId: () => currentCompany });
+    })
+    .catch((err) => {
+      console.warn('[roundtable] mount failed:', err);
+      root.innerHTML = '<div class="projects-empty">Roundtable panel unavailable.</div>';
+      roundtablePanelMounted = false;
+    });
+}

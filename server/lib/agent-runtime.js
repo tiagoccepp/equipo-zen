@@ -13,6 +13,7 @@ import { sentenceAudioMs, sentenceAudioPlan } from './turn-pipeline.js';
 import { createNarrationGate } from './narration.js';
 import { renderInboxSection } from './agent-bus.js';
 import { effectiveCompactSummary, renderCompactSection } from './compaction.js';
+import { createTurnLatency as createTurnLatencyTracker } from './turn-latency.js';
 
 // ── Manos v1: fase tools (two-phase) ───────────────────────────────────
 //
@@ -354,28 +355,9 @@ const STATIC_PHRASES = new Set(
 // audible: anuncio estático, earcon-prep, primer chunk) vs primera
 // RESPUESTA ÚTIL (primera oración hablable con contenido). Puro: el turno
 // marca eventos, snapshot() devuelve {ttfsMs, ttfrMs} (null = no ocurrió).
+// T6: implementación unificada en server/lib/turn-latency.js (stages/e2e additivos).
 export function createTurnLatency(t0 = Date.now(), now = () => Date.now()) {
-  const start = Number(t0) || 0;
-  let soundAt = null;
-  let usefulAt = null;
-  return {
-    markSound() {
-      if (soundAt === null) {
-        soundAt = now();
-      }
-    },
-    markUseful() {
-      if (usefulAt === null) {
-        usefulAt = now();
-      }
-    },
-    snapshot() {
-      return {
-        ttfsMs: soundAt === null ? null : Math.max(0, soundAt - start),
-        ttfrMs: usefulAt === null ? null : Math.max(0, usefulAt - start)
-      };
-    }
-  };
+  return createTurnLatencyTracker(t0, now);
 }
 
 export function createSpeechPipeline({ synth, emitPrepared, signal = null, prefetch = SPEECH_PREFETCH_DEFAULT } = {}) {
@@ -656,6 +638,7 @@ export class LiveAgentRuntime {
       if (!firstAudioMarked) {
         firstAudioMarked = true;
         turnLatency.markSound();
+        try { turnLatency.markTtsFirstAudio?.(); } catch { /* best-effort */ }
         markTelemetry('agent_first_audio');
       }
       const partRate = Number(prepared.parts[0].mimeType?.match(/rate=(\d+)/)?.[1] || 44100);
@@ -823,6 +806,7 @@ export class LiveAgentRuntime {
       seq += 1;
       emit({ type: 'agent_transcript_delta', delta: phrase, seq });
       enqueueSentence(phrase);
+      turnLatency.markEnd();
       void speechPipeline.done().finally(() => {
         if (gateToken) {
           gate.finish(gateToken, signal?.aborted ? 'interrupted' : 'complete');
@@ -831,6 +815,14 @@ export class LiveAgentRuntime {
         }
       });
       return { ...emptyAgentResponse(), text: phrase, rawText: phrase, backend: 'stream', failureSpoken: kind, latency: turnLatency.snapshot() };
+    };
+    let llmFirstTokenMarked = false;
+    const onStreamDelta = (delta) => {
+      if (!llmFirstTokenMarked && delta) {
+        llmFirstTokenMarked = true;
+        try { turnLatency.markLlmFirstToken?.(); } catch { /* best-effort */ }
+      }
+      return handleDelta(delta);
     };
     try {
       result = await streamChat(this.keyRing, {
@@ -853,11 +845,12 @@ export class LiveAgentRuntime {
           { role: 'system', content: systemContent },
           { role: 'user', content: userContent }
         ]
-      }, handleDelta);
+      }, onStreamDelta);
     } catch (error) {
       if (signal?.aborted) {
         // El usuario interrumpió: no es una falla, no se muestra nada.
         emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+        turnLatency.markEnd();
         return { ...emptyAgentResponse(), backend: 'stream', interrupted: true, latency: turnLatency.snapshot() };
       }
       emit({
@@ -893,6 +886,7 @@ export class LiveAgentRuntime {
       }
       emit({ type: 'agent_silence', reason: `${this.name} declined to answer by protocol.` });
       emit({ type: 'agent_state', agentId: this.id, state: 'idle' });
+      turnLatency.markEnd();
       return { ...emptyAgentResponse(), rawText: cleanText, backend: 'stream', latency: turnLatency.snapshot() };
     }
 
@@ -911,6 +905,7 @@ export class LiveAgentRuntime {
     });
 
     // M-12: doble métrica en el resultado + evento para telemetría/UI.
+    turnLatency.markEnd();
     emit({ type: 'agent_turn_latency', turnId, agentId: this.id, latency: turnLatency.snapshot() });
     return {
       rawText: cleanText,
